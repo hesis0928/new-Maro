@@ -308,8 +308,47 @@ RViz2는 이 Windows 빌드에 포함되어 있지 않으므로(§12), 같은 DD
 ## 11. 향후 서브시스템과의 관계
 
 - **S3 (에디터 UI)**: 본 설계의 DG 데이터를 그대로 소비하는 순수 뷰로 구현한다. 상태를 복제하지 않는다.
-- **S4 (센서·합성 데이터)**: 기존 Track B(`ViewportStreamer`) 코드를 본 설계의 축·센서 노드 체계에 연결한다.
+- **S4 (센서·합성 데이터)**: 기존 Track B(`ViewportStreamer`) 코드를 본 설계의 축·센서 노드 체계에 연결한다. `maroLidar`가 여기 속하며 설계가 확정되어 있다 — §11.1 참조.
 - **S5 (파이프라인)**: 축 체인과 능력 노드 스택으로부터 URDF를 생성한다. 본 설계의 데이터 모델이 URDF 생성에 필요한 정보를 담고 있어야 한다.
+- **트러블슈팅 생태계**: 서브시스템 번호 밖의 횡단 관심사. 별도 스펙 `2026-08-14-maro-troubleshooting-ecosystem-design.md`에 확정되어 있다. 본 설계의 진단 호출(`MGlobal::display*`)이 그 `boad` 계층을 거치도록 전환된다.
+
+### 11.1 `maroLidar` 설계 (확정, S4)
+
+레이캐스팅으로 LiDAR 포인트 클라우드를 생성해 `sensor_msgs/PointCloud2`로 발행한다.
+
+**노드 어트리뷰트**
+
+| 이름 | 타입 | 의미 |
+|---|---|---|
+| `channels` | int | 수직 채널 수 (예: 16, 32, 64) |
+| `verticalFovTop` / `verticalFovBottom` | double (라디안) | 수직 시야각 |
+| `horizontalResolution` | double | 회전당 발사 레이 수 (예: 1024, 2048) |
+| `rpm` | double | 센서 회전 속도 |
+| `targetMeshes` | message array | 스캔 대상 메시. 씬 전체를 매번 검색하는 것은 무거우므로 대상만 연결한다 |
+
+**백그라운드에 가상 씬**
+
+ROS 2 런타임이 도는 곳 옆에 Embree `RTCScene`을 하나 둔다.
+
+**동기화 — 여기가 성능의 핵심이다**
+
+메인 스레드의 `MaroPump`가 `targetMeshes`에 연결된 메시의 `MFnMesh::getPoints()`(정점)와 `MFnMesh::getTriangles()`(인덱스)를 읽어 백그라운드 Embree Scene으로 넘겨 BVH를 갱신한다.
+
+**메시 전체를 매 프레임 넘기면 병목이 생긴다.** Transform만 변했는지, Vertex 자체가 변형(스키닝/블렌드셰이프)되었는지 구분해 **더티일 때만** 갱신해야 한다.
+
+**레이캐스팅**
+
+LiDAR 스펙(채널 수, 해상도)에 맞춰 360도 방사형 레이의 방향 벡터를 계산하고, `rtcIntersect1M`으로 일괄 충돌 검사한 뒤 히트 거리로 3D 좌표를 산출한다.
+
+**발행**
+
+`PointCloud2Modifier`를 쓰거나 `x`/`y`/`z`/`intensity`/`ring`(채널 번호) 필드를 수동 정의하고 `memcpy`로 밀어 넣어 병목을 최소화한다. 좌표는 `maro_transform`의 `mayaToRosPosition`으로 ROS 2 Z-up에 맞춘다.
+
+**스레드 배치 — 타협 불가**
+
+LiDAR 포인트 클라우드 생성은 CPU를 극도로 소모한다. 메인 스레드 펌프는 **"현재 메시의 변형 상태"만 캡처해 넘기는 역할에서 끝내고**, 레이캐스팅부터 ROS 2 발행까지 전 과정은 **절대로 메인 스레드를 블로킹하지 않도록 백그라운드에 격리**한다.
+
+**의존성**: Intel Embree. vcpkg에 포트는 있으나 미설치이며, 추가 시 TBB까지 함께 빌드된다.
 
 ## 12. 환경 실측 결과 (2026-08-13 확인)
 
