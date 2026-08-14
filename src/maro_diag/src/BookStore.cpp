@@ -85,10 +85,36 @@ bool BookStore::appendToSpill(const std::filesystem::path& spillPath,
         std::error_code ec;
         std::filesystem::create_directories(spillPath.parent_path(), ec);
 
+        // 이전 프로세스가 줄 쓰는 도중 죽었다면 파일이 개행 없이 끝나
+        // 있을 수 있다. 그 위에 그대로 append하면 남은 조각과 새 레코드가
+        // 하나의 파싱 불가능한 줄로 합쳐져 새 레코드까지 함께 사라진다 --
+        // 그러므로 파일이 비어 있지 않은데 마지막 바이트가 개행이 아니면
+        // 먼저 개행을 하나 써서 새 레코드가 항상 제 줄에서 시작하게 한다.
+        std::error_code sizeEc;
+        const auto existingSize = std::filesystem::file_size(spillPath, sizeEc);
+        if (!sizeEc && existingSize > 0) {
+            std::ifstream check(spillPath, std::ios::binary);
+            if (check) {
+                check.seekg(-1, std::ios::end);
+                char lastByte = '\0';
+                if (check.get(lastByte) && lastByte != '\n') {
+                    std::ofstream fixup(spillPath, std::ios::app | std::ios::binary);
+                    if (fixup) {
+                        fixup << '\n';
+                        fixup.flush();
+                    }
+                }
+            }
+        }
+
         std::ofstream ofs(spillPath, std::ios::app);
         if (!ofs) return false;
 
         ofs << entryToJson(errorHash, entry).dump() << '\n';
+        // 스트림 버퍼에만 앉아 있는 바이트는 디스크에 나간 게 아니다 --
+        // 명시적으로 flush하고, flush 이후의 스트림 상태를 돌려줘야 늦은
+        // 쓰기 실패가 이미 반환된 true를 뒤집지 못하는 일이 없다.
+        ofs.flush();
         return static_cast<bool>(ofs);
     } catch (...) {
         // book이 죽어도 진단은 죽지 않는다 (스펙 §3.6).

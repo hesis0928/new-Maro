@@ -87,6 +87,65 @@ TEST(BookStore, AppendToSpillIsReadableAfterReload) {
     EXPECT_EQ(out.context.nodeType, "maroAxis");
 }
 
+TEST(BookStore, AppendAfterTruncatedFragmentPreservesNewEntry) {
+    const auto dir = tempDirForTest();
+    const auto spill = dir / "spill.jsonl";
+
+    {
+        // Simulate a previous process that died mid-write: a partial JSON
+        // line with no trailing newline.
+        std::ofstream ofs(spill, std::ios::binary);
+        ofs << R"({"hash":"h5","analysis":"trunca)";
+    }
+
+    maro::BookEntry entry;
+    entry.analysis = "post-crash entry";
+    entry.context.nodeType = "maroAxis";
+    ASSERT_TRUE(maro::BookStore::appendToSpill(spill, "h6", entry));
+
+    const auto store = maro::BookStore::loadMerged(dir / "no_canonical.jsonl", spill);
+
+    // The old fragment never becomes a valid record -- it stays unparseable
+    // and is correctly skipped as corrupt.
+    maro::BookEntry unused;
+    EXPECT_FALSE(store.query("h5", unused));
+
+    // But the new entry, appended after the fragment, must survive intact --
+    // it must not be glued onto the fragment's tail and lost with it.
+    maro::BookEntry out;
+    ASSERT_TRUE(store.query("h6", out));
+    EXPECT_EQ(out.analysis, "post-crash entry");
+    EXPECT_EQ(out.context.nodeType, "maroAxis");
+}
+
+TEST(BookStore, WrongFieldTypeLineIsSkippedNotFatal) {
+    const auto dir = tempDirForTest();
+    const auto spill = dir / "spill.jsonl";
+
+    {
+        std::ofstream ofs(spill);
+        ofs << R"({"hash":"h7","analysis":"valid before","remedy":"","nodeType":"","attributeName":"","activeCommand":"","axisOrTarget":""})" << "\n";
+        // Syntactically valid JSON, but "analysis" is a number where a
+        // string is expected -- this raises nlohmann::json::type_error,
+        // a different exception type than the parse_error a malformed
+        // line raises. The corrupt-line handler must catch both.
+        ofs << R"({"hash":"h8","analysis":123,"remedy":"","nodeType":"","attributeName":"","activeCommand":"","axisOrTarget":""})" << "\n";
+        ofs << R"({"hash":"h9","analysis":"valid after","remedy":"","nodeType":"","attributeName":"","activeCommand":"","axisOrTarget":""})" << "\n";
+    }
+
+    maro::BookStore store;
+    ASSERT_NO_THROW(store = maro::BookStore::loadMerged(dir / "no_canonical.jsonl", spill));
+
+    maro::BookEntry out;
+    ASSERT_TRUE(store.query("h7", out));
+    EXPECT_EQ(out.analysis, "valid before");
+
+    EXPECT_FALSE(store.query("h8", out));
+
+    ASSERT_TRUE(store.query("h9", out));
+    EXPECT_EQ(out.analysis, "valid after");
+}
+
 TEST(BookStore, LatestAppendWinsForRepeatedHash) {
     const auto dir = tempDirForTest();
     const auto spill = dir / "spill.jsonl";
