@@ -68,7 +68,12 @@ MStatus MaroDiagEmitCommand::doIt(const MArgList& args) {
                 MGlobal::displayError("Maro: maroDiagEmit -severity error requires -siteTag.");
                 return MS::kFailure;
             }
-            BoadMaro::error(siteTag.asChar(), message);
+            // 이 커맨드 자체는 마커를 설치하지 않는다 (테스트 전용 도구이므로
+            // ScopedCommandContext를 두지 않는다) -- capture()는 그저 현재
+            // 살아 있는 커맨드 컨텍스트 스택을 있는 그대로 읽어 activeCommand를
+            // 채운다. 스택이 비어 있으면 capture("", "", "")는 이전 기본값
+            // DgContext{}와 바이트 단위로 동일한 결과를 낸다.
+            BoadMaro::error(siteTag.asChar(), message, onfix::capture("", "", ""));
         } else {
             MGlobal::displayError(MString("Maro: unknown severity '") + severity + "'.");
             return MS::kFailure;

@@ -43,9 +43,14 @@ assert activeCommand == "MaroBindAxisCommand", (
 assert axisOrTarget == "rejectAxis", f"expected axisOrTarget 'rejectAxis', got {axisOrTarget!r}"
 print("DG context values OK")
 
-# 커맨드 컨텍스트 스택이 doIt 반환 후 확실히 비었는지 -- maroDiagEmit은
-# 마커를 설치하지 않는 테스트 도구이므로, 그 에러의 activeCommand가 비어
-# 있어야 위 마커가 새지 않고 정확히 pop됐다는 뜻이다.
+# 커맨드 컨텍스트 스택이 doIt 반환 후 확실히 비었는지 확인한다.
+# maroDiagEmit(MaroDiagEmitCommand::doIt)은 스스로 ScopedCommandContext를
+# 설치하지 않는다 -- 그 error() 호출은 onfix::capture("", "", "")로 그때
+# 살아 있는 스택을 그대로 읽어 activeCommand를 채울 뿐이다. 즉 이 probe는
+# maroDiagEmit 자신의 컨텍스트가 아니라, 위에서 실행한 MaroBindAxisCommand의
+# 마커가 doIt 반환 시점에 확실히 pop됐는지를 그대로 드러낸다. 스택이 비어
+# 있으면 activeCommand는 빈 문자열이어야 한다 -- 위 마커가 샜다면(예: 소멸자가
+# no-op이 되면) 여기서 'MaroBindAxisCommand'가 그대로 보인다.
 cmds.maroDiagEmit(severity="error", message="probe", siteTag="Test.Probe")
 probe = cmds.maroDiagQuery(index=0)
 assert probe[5] == "", f"expected empty activeCommand after doIt returned, got {probe[5]!r}"
