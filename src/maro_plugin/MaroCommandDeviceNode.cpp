@@ -19,6 +19,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 
 #include "MaroAxisNode.h"
+#include "MaroDiag.h"
 
 namespace maro {
 
@@ -83,10 +84,12 @@ MaroCommandDeviceNode::~MaroCommandDeviceNode() {
     try {
         destroyMemoryPools();
     } catch (const std::exception& e) {
-        MGlobal::displayError(
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.destroyMemoryPools.Exception",
             MString("Maro: command device destroyMemoryPools failed: ") + e.what());
     } catch (...) {
-        MGlobal::displayError(
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.destroyMemoryPools.UnknownException",
             "Maro: command device destroyMemoryPools failed with unknown error.");
     }
 }
@@ -123,13 +126,22 @@ void MaroCommandDeviceNode::postConstructor() {
         // 명령 하나 = CommandRecord 하나. 여유 있게 64개 버퍼를 돌린다.
         const MStatus status = createMemoryPools(kPoolDepth, 1, sizeof(CommandRecord));
         if (!status) {
-            MGlobal::displayError("Maro: failed to create command device memory pools.");
+            // 노드 생성 1회당 최대 1회다 -- 매 프레임/매 평가 경로가 아니다.
+            // MPxNode 콜백이지 MPxCommand::doIt이 아니므로 마커는 설치하지
+            // 않고, activeCommand만 스택에서 읽어 채운다 (마침 이 노드를
+            // 만든 maroStartBridge가 살아 있으면 그 이름이 잡힌다).
+            maro::BoadMaro::error(
+                "MaroCommandDeviceNode.postConstructor.CreateMemoryPoolsFailed",
+                "Maro: failed to create command device memory pools.",
+                maro::onfix::capture("", "", ""));
         }
     } catch (const std::exception& e) {
-        MGlobal::displayError(
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.postConstructor.Exception",
             MString("Maro: command device postConstructor failed: ") + e.what());
     } catch (...) {
-        MGlobal::displayError(
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.postConstructor.UnknownException",
             "Maro: command device postConstructor failed with unknown error.");
     }
 }
@@ -171,6 +183,12 @@ void MaroCommandDeviceNode::applyToMatchingAxis(const std::string& jointName, do
     // 관련 크래시를 디버깅할 사람이 "여기는 메인 스레드니까 안전하다"고
     // 잘못 믿지 않게 남겨 둔다. DG를 만지는 유일한 지점이라는 점은 여전히
     // 맞다.
+    //
+    // Task 7 갱신: 이 노드의 compute()가 내던 진단은 이제 전부 boad를 거치고,
+    // boad는 메인 스레드가 아닐 때 Maya의 display* 에코 호출을 건너뛴다
+    // (MaroDiag.h 참고). 즉 "워커 스레드에서 Maya API를 부른다"는 위험 중
+    // 진단이 차지하던 몫은 사라졌다. 남은 몫 -- 아래 DG 플러그 읽기/쓰기 --
+    // 은 그대로다.
     for (MItDependencyNodes it(MFn::kPluginLocatorNode); !it.isDone(); it.next()) {
         MFnDependencyNode axisFn(it.thisNode());
         if (axisFn.typeId() != MaroAxisNode::id) continue;
@@ -298,10 +316,12 @@ void MaroCommandDeviceNode::threadShutdownHandler() {
     try {
         setDone(true);
     } catch (const std::exception& e) {
-        MGlobal::displayError(
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.threadShutdownHandler.Exception",
             MString("Maro: command device threadShutdownHandler failed: ") + e.what());
     } catch (...) {
-        MGlobal::displayError(
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.threadShutdownHandler.UnknownException",
             "Maro: command device threadShutdownHandler failed with unknown error.");
     }
 }
@@ -327,7 +347,10 @@ MStatus MaroCommandDeviceNode::compute(const MPlug& plug, MDataBlock& data) {
         // lastReported(N)에서 unsigned 뺄셈이 언더플로우한다.
         const std::uint64_t dropped = s_dropped.load();
         if (dropped != s_lastReportedDropped) {
-            MGlobal::displayWarning(
+            // 규칙 B: 이름만 바뀐다. 주변의 "상태 변화 시 1회만" 가드는
+            // 그대로다 -- 그리고 warn()은 book을 건드리지 않으므로 이
+            // compute() 경로에 파일 I/O가 새로 붙지 않는다.
+            maro::BoadMaro::warn(
                 MString("Maro: dropped ") +
                 static_cast<int>(dropped - s_lastReportedDropped) +
                 " oversized joint command name(s) (limit 63 chars).");
@@ -337,7 +360,7 @@ MStatus MaroCommandDeviceNode::compute(const MPlug& plug, MDataBlock& data) {
         // I4: 버퍼 풀(64슬롯)이 꽉 차 스레드가 버린 명령도 같은 방식으로 알린다.
         const std::uint64_t poolExhausted = s_poolExhausted.load();
         if (poolExhausted != s_lastReportedPoolExhausted) {
-            MGlobal::displayWarning(
+            maro::BoadMaro::warn(
                 MString("Maro: dropped ") +
                 static_cast<int>(poolExhausted - s_lastReportedPoolExhausted) +
                 " inbound command(s): the command buffer pool (64 slots) was "
@@ -351,10 +374,14 @@ MStatus MaroCommandDeviceNode::compute(const MPlug& plug, MDataBlock& data) {
         out.setClean();
         return MS::kSuccess;
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: command device compute failed: ") + e.what());
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.compute.Exception",
+            MString("Maro: command device compute failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: command device compute failed with unknown error.");
+        maro::BoadMaro::error(
+            "MaroCommandDeviceNode.compute.UnknownException",
+            "Maro: command device compute failed with unknown error.");
         return MS::kFailure;
     }
 }

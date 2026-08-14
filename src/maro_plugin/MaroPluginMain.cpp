@@ -7,6 +7,7 @@
 #include "MaroCommandDeviceNode.h"
 #include "MaroCommands.h"
 #include "MaroDeleteWatcher.h"
+#include "MaroDiag.h"
 #include "MaroDiagCommands.h"
 
 namespace {
@@ -15,6 +16,13 @@ constexpr char kVersion[] = "0.1.0";
 }  // namespace
 
 MStatus initializePlugin(MObject obj) {
+    // 무엇보다 먼저: 이 함수는 정의상 Maya 메인 스레드에서 돈다. boad가
+    // 워커 스레드(Parallel Evaluation Manager 아래의 compute())에서 온
+    // 진단을 알아보려면 여기서 기준 스레드를 붙잡아 둬야 한다
+    // (MaroDiag.h의 markMainThread() 주석 참고). 아래 등록 단계에서 진단이
+    // 나갈 수도 있으므로 제일 앞에 둔다.
+    maro::markMainThread();
+
     MFnPlugin plugin(obj, kVendor, kVersion, "Any");
 
     MStatus status = plugin.registerNode(
@@ -122,6 +130,14 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroDiagEmitFromThread",
+                                    maro::MaroDiagEmitFromThreadCommand::creator,
+                                    maro::MaroDiagEmitFromThreadCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagEmitFromThread");
+        return status;
+    }
+
     status = plugin.registerCommand("maroDiagCount", maro::MaroDiagCountCommand::creator);
     if (!status) {
         status.perror("Maro: failed to register maroDiagCount");
@@ -156,7 +172,7 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
-    MGlobal::displayInfo("Maro: plugin loaded.");
+    maro::BoadMaro::info("Maro: plugin loaded.");
     return MS::kSuccess;
 }
 
@@ -170,6 +186,7 @@ MStatus uninitializePlugin(MObject obj) {
     plugin.deregisterCommand("maroDiagAnalysisCount");
     plugin.deregisterCommand("maroDiagQuery");
     plugin.deregisterCommand("maroDiagCount");
+    plugin.deregisterCommand("maroDiagEmitFromThread");
     plugin.deregisterCommand("maroDiagEmit");
 
     plugin.deregisterCommand("maroBridgeStats");
@@ -190,6 +207,6 @@ MStatus uninitializePlugin(MObject obj) {
         status.perror("Maro: failed to deregister maroAxis");
     }
 
-    MGlobal::displayInfo("Maro: plugin unloaded.");
+    maro::BoadMaro::info("Maro: plugin unloaded.");
     return status;
 }

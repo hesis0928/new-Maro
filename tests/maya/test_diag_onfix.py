@@ -56,6 +56,40 @@ probe = cmds.maroDiagQuery(index=0)
 assert probe[5] == "", f"expected empty activeCommand after doIt returned, got {probe[5]!r}"
 print("stack unwound OK")
 
+# 서로 다른 실패는 서로 다른 사이트 태그를 가져야 한다.
+#
+# 왜 이 단언이 있는가: Task 7이 ~37곳의 검증 실패를 boad로 옮기면서 각 자리에
+# 고유한 사이트 태그를 붙였다. 그 태그들을 하나로 뭉뚱그려도(예: 전부
+# "MaroCommands.Failure") 컴파일되고, 모든 커맨드가 여전히 같은 MStatus를
+# 돌려주므로 이 스위트의 나머지는 전부 통과한다 -- 실측으로 확인했다.
+# 그런데 그 구현은 book이 "기지 에러 즉답"을 하는 순간 조용히 틀린 답을
+# 내놓는다: 두 번째 종류의 실패가 첫 번째 종류의 분석을 "과거 분석에서 즉답"
+# 딱지까지 붙여 확신에 차서 제시한다. 그래서 여기서 두 종류의 실패가 실제로
+# 다른 해시로 갈리는지 직접 확인한다.
+cycleA = cmds.createNode("maroAxis", name="cycleAxisA")
+cycleB = cmds.createNode("maroAxis", name="cycleAxisB")
+cmds.maroConnectAxis(cycleB, cycleA)
+try:
+    cmds.maroConnectAxis(cycleA, cycleB)
+    raise AssertionError("cycle should have been rejected")
+except RuntimeError:
+    pass
+
+cycleRec = cmds.maroDiagQuery(index=0)
+assert cycleRec[2] != errorHash, (
+    f"a cycle rejection and a non-transform binding rejection are different "
+    f"failures and must not share an error hash -- both hashed to "
+    f"{cycleRec[2]!r}, so book will serve one failure's analysis for the other"
+)
+assert "cycle" in cycleRec[1], (
+    f"the cycle rejection must show its own explanation, not another "
+    f"failure's, got {cycleRec[1]!r}"
+)
+assert cycleRec[5] == "MaroConnectAxisCommand", (
+    f"expected activeCommand 'MaroConnectAxisCommand', got {cycleRec[5]!r}"
+)
+print("distinct failures kept distinct site tags OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()

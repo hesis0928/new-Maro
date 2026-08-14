@@ -13,6 +13,7 @@
 
 #include "MaroAxisNode.h"
 #include "MaroCapabilityNodes.h"
+#include "MaroDiag.h"
 
 namespace maro {
 
@@ -80,7 +81,8 @@ void MaroDeleteWatcher::onNodeAdded(MObject& node, void* /*clientData*/) {
         }
     } catch (...) {
         // 콜백에서 예외가 새면 Maya가 죽는다.
-        MGlobal::displayError("Maro: failed to attach delete callback.");
+        maro::BoadMaro::error("MaroDeleteWatcher.onNodeAdded.UnknownException",
+                              "Maro: failed to attach delete callback.");
     }
 }
 
@@ -137,12 +139,13 @@ void MaroDeleteWatcher::onObjectAboutToDelete(MObject& node,
                 modifier.deleteNode(parentPath.node());
             }
 
-            MGlobal::displayInfo(
+            maro::BoadMaro::info(
                 MString("Maro: deleting axis '") + otherFn.name() +
                 "' because its bound object was deleted.");
         }
     } catch (...) {
-        MGlobal::displayError("Maro: cascade delete failed.");
+        maro::BoadMaro::error("MaroDeleteWatcher.onObjectAboutToDelete.UnknownException",
+                              "Maro: cascade delete failed.");
     }
 }
 
@@ -191,11 +194,12 @@ void MaroDeleteWatcher::onAxisAboutToDelete(MObject& node, MDGModifier& modifier
         }
 
         if (haveSet) {
-            MGlobal::displayInfo(
+            maro::BoadMaro::info(
                 "Maro: capability nodes moved to maroOrphanSet for reuse.");
         }
     } catch (...) {
-        MGlobal::displayError("Maro: orphan handling failed.");
+        maro::BoadMaro::error("MaroDeleteWatcher.onAxisAboutToDelete.UnknownException",
+                              "Maro: orphan handling failed.");
     }
 }
 

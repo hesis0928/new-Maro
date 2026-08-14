@@ -17,6 +17,7 @@
 #include <maya/MVector.h>
 
 #include "MaroAxisNode.h"
+#include "MaroDiag.h"
 #include "MaroRosRuntime.h"
 
 namespace maro {
@@ -85,9 +86,11 @@ void MaroPump::onTimer(float, float, void*) {
         if (s_runtime == nullptr) return;
         collectSamples(*s_runtime);
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: pump tick failed: ") + e.what());
+        maro::BoadMaro::error("MaroPump.onTimer.Exception",
+                              MString("Maro: pump tick failed: ") + e.what());
     } catch (...) {
-        MGlobal::displayError("Maro: pump tick failed with unknown error.");
+        maro::BoadMaro::error("MaroPump.onTimer.UnknownException",
+                              "Maro: pump tick failed with unknown error.");
     }
 }
 

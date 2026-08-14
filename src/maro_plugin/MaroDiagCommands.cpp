@@ -1,5 +1,9 @@
 #include "MaroDiagCommands.h"
 
+#include <atomic>
+#include <string>
+#include <thread>
+
 #include <maya/MArgDatabase.h>
 #include <maya/MArgList.h>
 #include <maya/MGlobal.h>
@@ -91,6 +95,98 @@ MStatus MaroDiagEmitCommand::doIt(const MArgList& args) {
         return MS::kFailure;
     } catch (...) {
         MGlobal::displayError("Maro: maroDiagEmit failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
+void* MaroDiagEmitFromThreadCommand::creator() {
+    return new MaroDiagEmitFromThreadCommand();
+}
+
+MSyntax MaroDiagEmitFromThreadCommand::newSyntax() {
+    MSyntax syntax;
+    syntax.addFlag(kSeverityFlag, kSeverityFlagLong, MSyntax::kString);
+    syntax.addFlag(kMessageFlag, kMessageFlagLong, MSyntax::kString);
+    syntax.addFlag(kSiteTagFlag, kSiteTagFlagLong, MSyntax::kString);
+    return syntax;
+}
+
+MStatus MaroDiagEmitFromThreadCommand::doIt(const MArgList& args) {
+    try {
+        MStatus status;
+        MArgDatabase argData(newSyntax(), args, &status);
+        if (!status) return status;
+
+        MString severity = "info";
+        MString message;
+        MString siteTag;
+        argData.getFlagArgument(kSeverityFlag, 0, severity);
+        argData.getFlagArgument(kMessageFlag, 0, message);
+        if (argData.isFlagSet(kSiteTagFlag)) {
+            argData.getFlagArgument(kSiteTagFlag, 0, siteTag);
+        }
+
+        if (severity != "info" && severity != "warn" && severity != "error") {
+            MGlobal::displayError(
+                MString("Maro: maroDiagEmitFromThread: unknown severity '") +
+                severity + "'.");
+            return MS::kFailure;
+        }
+        if (severity == "error" && siteTag.length() == 0) {
+            MGlobal::displayError(
+                "Maro: maroDiagEmitFromThread -severity error requires -siteTag.");
+            return MS::kFailure;
+        }
+
+        // MString을 스레드 경계 너머로 그대로 넘기지 않는다 -- devkit은
+        // MString의 스레드 간 공유 안전성을 보장하지 않는다. 워커가 쓸
+        // 내용은 std::string으로 복사해 두고, 워커 안에서 새 MString을 만든다.
+        const std::string severityUtf8(severity.asChar());
+        const std::string messageUtf8(message.asChar());
+        const std::string siteTagUtf8(siteTag.asChar());
+
+        // 워커가 스스로를 어떻게 판정했는지 되가져온다. join() 뒤에만 읽지만
+        // atomic으로 두어 "스레드 경계를 넘는 값"이라는 의도를 남긴다.
+        std::atomic<bool> sawNonMainThread{false};
+        std::atomic<bool> workerThrew{false};
+
+        // 진짜 std::thread다. 여기서 예외가 워커 밖으로 새면 std::terminate라
+        // 프로세스가 죽는다 -- 워커 본문 전체를 catch(...)로 감싼다.
+        std::thread worker([&] {
+            try {
+                sawNonMainThread.store(!isMainThread());
+                const MString workerMessage(messageUtf8.c_str());
+                if (severityUtf8 == "info") {
+                    BoadMaro::info(workerMessage);
+                } else if (severityUtf8 == "warn") {
+                    BoadMaro::warn(workerMessage);
+                } else {
+                    BoadMaro::error(siteTagUtf8, workerMessage,
+                                    onfix::capture("", "", ""));
+                }
+            } catch (...) {
+                workerThrew.store(true);
+            }
+        });
+        worker.join();
+
+        if (workerThrew.load()) {
+            MGlobal::displayError(
+                "Maro: maroDiagEmitFromThread: the worker thread threw while "
+                "emitting through boad.");
+            return MS::kFailure;
+        }
+
+        // 1이면 워커에서 isMainThread()가 false로 판정됐다는 뜻 -- 이 커맨드가
+        // 실제로 메인 스레드 밖에서 boad를 탔음을 테스트가 확인할 수 있다.
+        setResult(sawNonMainThread.load() ? 1 : 0);
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(
+            MString("Maro: maroDiagEmitFromThread failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError("Maro: maroDiagEmitFromThread failed with unknown error.");
         return MS::kFailure;
     }
 }

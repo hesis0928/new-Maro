@@ -94,17 +94,37 @@ if(MARO_BUILD_PLUGIN)
     # 의존 DLL 검색 경로에 항상 포함하므로, LoadLibrary가 아니라 직접 실행
     # (subprocess)되는 피어는 이 문제 자체를 겪지 않는다.
 
+    # 모든 Maya 테스트는 자기만의 book 디렉터리를 빌드 트리 안에 갖는다.
+    #
+    # 왜 필요한가: BoadMaro::error()는 book(지식 저장소)을 읽고 스필에 덧붙이는데,
+    # MARO_DIAG_BOOK_DIR이 없으면 기본 위치가 `internalVar -userAppDir` --
+    # 사용자의 진짜 Maya 환경설정 디렉터리다. Task 7이 MaroCommands.cpp의
+    # 검증 실패 ~45곳을 error()로 옮기면서, 거부 경로를 지나는 모든 기존
+    # 테스트(test_binding.py, test_robustness.py, test_delete_rules.py 등)가
+    # ctest를 돌릴 때마다 거기에 스필 항목을 쌓게 된다 -- 테스트 스위트가
+    # 건드릴 이유가 전혀 없는 디렉터리다. (실측: Task 4 시점에 이미
+    # test_binding.py가 남긴 항목이 사용자 prefs에 있었다.)
+    #
+    # ENVIRONMENT가 아니라 ENVIRONMENT_MODIFICATION을 쓰는 이유는 위 PATH와
+    # 같다: ENVIRONMENT는 세미콜론 구분 리스트라 Windows 경로가 섞이면
+    # 조각난다. set은 값 하나만 다루므로 안전하다. 또 ENVIRONMENT_MODIFICATION은
+    # 프로세스 환경을 세팅할 뿐이므로, 파이썬에서 os.environ으로 직접 덮어쓰는
+    # 테스트(diag_book/diag_remedy/diag_degraded/diag_degraded_remedy/diag_thread)는
+    # 그대로 자기 값을 쓴다 -- 그쪽 시나리오는 영향을 받지 않는다.
+    set(MARO_TEST_BOOK_ROOT "${CMAKE_CURRENT_BINARY_DIR}/diag_book")
+
     # 플러그인만 있으면 되는 테스트. robustness는 순수 DG 조작/평가만 하고
     # 브리지(rclcpp)를 켜지 않으므로 이 그룹에 속한다.
     foreach(maya_test load axis_node binding capability_stack delete_rules
                       robustness diag_boad diag_onfix diag_book diag_remedy
-                      diag_degraded diag_degraded_remedy)
+                      diag_degraded diag_degraded_remedy diag_thread)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
         set_tests_properties(maya_${maya_test} PROPERTIES
             ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
-            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_${maya_test}"
             TIMEOUT 240)
     endforeach()
 
@@ -116,7 +136,8 @@ if(MARO_BUILD_PLUGIN)
                      "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_bridge_pump.py")
     set_tests_properties(maya_bridge_pump PROPERTIES
         ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
-        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_bridge_pump"
         TIMEOUT 240
         RUN_SERIAL TRUE)
 
@@ -127,7 +148,8 @@ if(MARO_BUILD_PLUGIN)
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
         set_tests_properties(maya_${maya_test} PROPERTIES
             ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>;MARO_PEER_PATH=$<TARGET_FILE:maro_test_peer>"
-            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_${maya_test}"
             TIMEOUT 360)
         # 같은 DDS 도메인을 쓰므로 병렬 실행 시 서로 간섭한다.
         set_tests_properties(maya_${maya_test} PROPERTIES RUN_SERIAL TRUE)

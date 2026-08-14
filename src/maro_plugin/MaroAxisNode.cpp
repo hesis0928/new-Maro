@@ -18,6 +18,8 @@
 #include <maya/MMatrix.h>
 #include <maya/MPlug.h>
 
+#include "MaroDiag.h"
+
 namespace maro {
 
 MTypeId MaroAxisNode::id(0x00135100);
@@ -198,8 +200,11 @@ MStatus MaroAxisNode::compute(const MPlug& plug, MDataBlock& data) {
         }
 
         // NaN/inf를 Maya에 흘리지 않는다.
+        // 이 자리는 매 DG 평가마다 지나간다. warn()은 book을 건드리지 않으므로
+        // (파일 I/O가 없다) 여기 그대로 두어도 안전하다 -- error()로 바꾸면
+        // 평가마다 book 병합 로드 + 추가 기록이 붙는다. 바꾸지 않는다.
         if (!std::isfinite(value)) {
-            MGlobal::displayWarning(
+            maro::BoadMaro::warn(
                 "Maro: axis produced a non-finite value; holding zero.");
             value = 0.0;
         }
@@ -216,10 +221,12 @@ MStatus MaroAxisNode::compute(const MPlug& plug, MDataBlock& data) {
 
         return MS::kSuccess;
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroAxis compute failed: ") + e.what());
+        maro::BoadMaro::error("MaroAxisNode.compute.Exception",
+                              MString("Maro: maroAxis compute failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: maroAxis compute failed with unknown error.");
+        maro::BoadMaro::error("MaroAxisNode.compute.UnknownException",
+                              "Maro: maroAxis compute failed with unknown error.");
         return MS::kFailure;
     }
 }

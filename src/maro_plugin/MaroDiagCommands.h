@@ -42,6 +42,19 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
+// -severity <info|warn|error> -message <string> [-siteTag <string>]
+// maroDiagEmit과 같은 일을 하되, 반드시 새로 만든 std::thread 위에서 한 번
+// 발동시키고 조인한다 -- 즉 진짜 워커 스레드에서 boad로 들어간다. Maya 2026의
+// Parallel Evaluation Manager가 compute()를 워커에서 돌리는 상황을 테스트가
+// 결정적으로 재현할 수단이 달리 없어서 존재한다(평가 관리자에게 "지금 워커로
+// 돌려라"라고 시킬 방법이 없다). 테스트 전용 도구다.
+class MaroDiagEmitFromThreadCommand : public MPxCommand {
+public:
+    static void* creator();
+    static MSyntax newSyntax();
+    MStatus doIt(const MArgList& args) override;
+};
+
 // -hash <string> -remedy <string>. 위 세 커맨드와 달리 이건 테스트 전용
 // 도구가 아니다 -- 사용자가 스스로 고친 해법을 book에 등록하는 실제 진입점.
 class MaroDiagRegisterRemedyCommand : public MPxCommand {

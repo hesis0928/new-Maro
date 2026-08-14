@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
+#include <thread>
 #include <utility>
 
 #include <maya/MGlobal.h>
@@ -63,7 +64,31 @@ void warnBookUnwritableOnce(const std::filesystem::path& spillPath) {
                            "디렉터리 권한/경로를 확인하세요."));
 }
 
+// 메인 스레드 id. markMainThread()가 한 번 쓰고(메인 스레드), 그 뒤로는
+// 아무도 쓰지 않는다. g_mainThreadKnown의 release/acquire 쌍이 이 쓰기를
+// 나중에 생기는 워커 스레드들의 읽기보다 앞서게 만든다 -- 워커는 언제나
+// markMainThread() 이후에 생기므로 데이터 경합이 없다.
+std::thread::id g_mainThreadId;
+std::atomic<bool> g_mainThreadKnown{false};
+
 }  // namespace
+
+void markMainThread() {
+    g_mainThreadId = std::this_thread::get_id();
+    g_mainThreadKnown.store(true, std::memory_order_release);
+
+    // book 경로(정적 지연 초기화)를 여기서 미리 확정한다. bookPaths()는 MEL
+    // `internalVar -userAppDir`를 실행할 수 있는데, 그것도 메인 스레드 전용
+    // API다 -- 첫 error()가 워커 스레드(compute())에서 터질 때 이 초기화가
+    // 거기서 처음 돌면 display*만 막은 가드가 무의미해진다. 경로 계산일
+    // 뿐이라 파일은 하나도 건드리지 않는다.
+    (void)bookPaths();
+}
+
+bool isMainThread() {
+    if (!g_mainThreadKnown.load(std::memory_order_acquire)) return true;
+    return std::this_thread::get_id() == g_mainThreadId;
+}
 
 std::vector<DiagRecord>& BoadMaro::stream() {
     static std::vector<DiagRecord> s_stream;
@@ -79,7 +104,11 @@ void BoadMaro::info(const MString& message) {
     DiagRecord rec;
     rec.severity = DiagSeverity::Info;
     rec.message = message.asChar();
-    MGlobal::displayInfo(MString("[Maro-Info] ") + message);
+    // 워커 스레드에서는 화면 에코를 건너뛴다 -- 레코드는 그대로 남는다
+    // (MaroDiag.h의 스레드 안전성 주석 참고).
+    if (isMainThread()) {
+        MGlobal::displayInfo(MString("[Maro-Info] ") + message);
+    }
     std::lock_guard<std::mutex> lock(mutex());
     stream().push_back(std::move(rec));
 }
@@ -88,7 +117,9 @@ void BoadMaro::warn(const MString& message) {
     DiagRecord rec;
     rec.severity = DiagSeverity::Warn;
     rec.message = message.asChar();
-    MGlobal::displayWarning(MString("[Maro-Warn] ") + message);
+    if (isMainThread()) {
+        MGlobal::displayWarning(MString("[Maro-Warn] ") + message);
+    }
     std::lock_guard<std::mutex> lock(mutex());
     stream().push_back(std::move(rec));
 }
@@ -98,7 +129,9 @@ void BoadMaro::devInfo(const MString& message) {
     DiagRecord rec;
     rec.severity = DiagSeverity::DevInfo;
     rec.message = message.asChar();
-    MGlobal::displayInfo(MString("[Maro-Dev] ") + message);
+    if (isMainThread()) {
+        MGlobal::displayInfo(MString("[Maro-Dev] ") + message);
+    }
     std::lock_guard<std::mutex> lock(mutex());
     stream().push_back(std::move(rec));
 #else
@@ -171,7 +204,9 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         warnBookUnwritableOnce(bookPaths().spill);
     }
 
-    MGlobal::displayError(MString("[Maro-Error] ") + MString(rec.message.c_str()));
+    if (isMainThread()) {
+        MGlobal::displayError(MString("[Maro-Error] ") + MString(rec.message.c_str()));
+    }
     std::lock_guard<std::mutex> lock(mutex());
     stream().push_back(std::move(rec));
 }

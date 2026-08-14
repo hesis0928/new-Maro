@@ -9,6 +9,8 @@
 #include <maya/MGlobal.h>
 #include <maya/MPlug.h>
 
+#include "MaroDiag.h"
+
 namespace maro {
 
 MStatus createCapabilityOut(CapabilityOutAttrs& attrs) {
@@ -81,7 +83,8 @@ MStatus MaroRotationNode::compute(const MPlug& plug, MDataBlock& data) {
         data.setClean(plug);
         return MS::kSuccess;
     } catch (...) {
-        MGlobal::displayError("Maro: maroRotation compute failed.");
+        maro::BoadMaro::error("MaroRotationNode.compute.UnknownException",
+                              "Maro: maroRotation compute failed.");
         return MS::kFailure;
     }
 }
@@ -184,7 +187,8 @@ MStatus MaroLimitNode::compute(const MPlug& plug, MDataBlock& data) {
         data.setClean(plug);
         return MS::kSuccess;
     } catch (...) {
-        MGlobal::displayError("Maro: maroLimit compute failed.");
+        maro::BoadMaro::error("MaroLimitNode.compute.UnknownException",
+                              "Maro: maroLimit compute failed.");
         return MS::kFailure;
     }
 }
@@ -228,7 +232,8 @@ MStatus MaroSensorDirectionNode::compute(const MPlug& plug, MDataBlock& data) {
         data.setClean(plug);
         return MS::kSuccess;
     } catch (...) {
-        MGlobal::displayError("Maro: maroSensorDirection compute failed.");
+        maro::BoadMaro::error("MaroSensorDirectionNode.compute.UnknownException",
+                              "Maro: maroSensorDirection compute failed.");
         return MS::kFailure;
     }
 }
@@ -288,7 +293,8 @@ MStatus MaroSensorRangeNode::compute(const MPlug& plug, MDataBlock& data) {
         data.setClean(plug);
         return MS::kSuccess;
     } catch (...) {
-        MGlobal::displayError("Maro: maroSensorRange compute failed.");
+        maro::BoadMaro::error("MaroSensorRangeNode.compute.UnknownException",
+                              "Maro: maroSensorRange compute failed.");
         return MS::kFailure;
     }
 }

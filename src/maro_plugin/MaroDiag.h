@@ -12,19 +12,48 @@
 
 namespace maro {
 
+// Maya 메인 스레드를 기억해 둔다. initializePlugin()에서 딱 한 번 부른다 --
+// 그 함수는 정의상 메인 스레드에서 돈다.
+//
+// 왜 스레드 id를 직접 붙잡는가: Maya 2026 devkit 헤더에는 "지금이 메인
+// 스레드인가"를 묻는 공식 술어가 없다. MGlobal.h, MThreadUtils.h, MSpinLock.h,
+// MThreadAsync.h, MThreadPool.h, MAtomic.h를 전부 확인했고 isMainThread()류의
+// API는 존재하지 않는다 (있는 것은 executeCommandOnIdle/executeTaskOnIdle처럼
+// "메인 스레드로 넘기는" 수단뿐이다). 공식 수단이 없으므로 표준 라이브러리로
+// 판정한다.
+//
+// 이 함수는 book 경로 확인도 함께 미리 끝내 둔다. 그 지연 초기화는 내부에서
+// MEL `internalVar -userAppDir`를 한 번 실행하는데(MaroDiag.cpp의 bookPaths()
+// 참고), 첫 error()가 워커 스레드에서 터지면 그 MEL 실행도 워커에서 일어난다
+// -- display*만 막고 이쪽을 열어 두면 가드가 반쪽짜리가 된다.
+void markMainThread();
+
+// markMainThread()가 아직 불리지 않았다면 true를 돌려준다. 즉 "모른다"는
+// 지금까지와 똑같이(=가드 이전 동작) 취급한다 -- 등록 전에 진단이 나가는
+// 경로는 플러그인 안에 없지만, 판정 불능이 조용한 침묵으로 바뀌지 않게 한다.
+bool isMainThread();
+
 // 진단의 단일 출구 (설계 스펙 §4 boad 행). 모든 info/warn/devInfo/error가
 // 여기를 거친다. 인메모리 스트림을 스스로 들고 있다 -- 진단 패널(Layer B)은
 // 이것과 book 파일만 읽고 자체 상태를 갖지 않는다 (스펙 §4.2).
 //
 // 스레드 안전성: 레코드 벡터는 뮤텍스로 보호되어 동시 push_back/조회이 벡터
-// 자체를 깨뜨리지는 않는다. 하지만 info/warn/devInfo/error가 내부에서 부르는
-// MGlobal::display*는 여전히 메인 스레드에서만 안전하다 -- Maya API는 워커
-// 스레드 호출을 보장하지 않는다. 지금은 이 클래스를 메인 스레드 밖에서 부르는
-// 곳이 없어 우연히 문제가 없을 뿐이다. 72곳의 기존 MGlobal::display* 호출을
-// 이리로 옮기는 작업이 compute() 내부(워커 스레드에서 돌 수 있음, Maya 2026
-// Parallel Evaluation Manager 기본값)의 자리를 건드리게 되면, 그 자리는 이
-// display* 경로를 안전하게 쓸 수 없다는 뜻이므로 마이그레이션 시 반드시 별도
-// 처리가 필요하다.
+// 자체를 깨뜨리지는 않는다. 그리고 Task 7이 compute() 안의 진단들(MaroAxisNode
+// 하나 + 능력 노드 넷 + MaroCommandDeviceNode)을 이리로 옮기면서, Maya 2026의
+// 기본값인 Parallel Evaluation Manager가 compute()를 워커 스레드에서 돌릴 수
+// 있다는 사실이 실제로 이 경로에 닿았다 -- MGlobal::display*는 메인
+// 스레드에서만 안전하므로 그대로 두면 안 되는 상태였다.
+//
+// 그래서 info/warn/devInfo/error는 전부 메인 스레드 가드를 거친다:
+//   - 레코드는 언제나 남긴다 (뮤텍스로 보호된 인메모리 스트림). 진단
+//     패널(Layer B)이 읽는 것은 이 스트림이므로 사용자가 볼 내용은 하나도
+//     사라지지 않는다.
+//   - MGlobal::display* 호출(스크립트 에디터 즉시 에코)만 메인 스레드가
+//     아닐 때 건너뛴다. 워커에서는 애초에 안전하지 않았던 유일한 부분이다.
+// 이 가드는 72곳이 아니라 여기 한 곳에만 있다 -- boad가 진단의 단일 출구이기
+// 때문에 가능한 배치다.
+//
+// 메인 스레드 판정은 아래 markMainThread()/isMainThread()가 한다.
 //
 // 무한 성장: 레코드 벡터에는 상한도 축출(eviction)도 없다. 지금은 문제
 // 없지만, 실제 진단들이 (재생 중 매 프레임 발동하는 것들을 포함해) 여기로

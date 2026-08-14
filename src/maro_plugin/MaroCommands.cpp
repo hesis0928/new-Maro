@@ -44,15 +44,19 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
             MString name = args.asString(i, &status);
             if (!status) return status;
             if (!selection.add(name)) {
-                MGlobal::displayError(
-                    MString("Maro: cannot find node '") + name + "'.");
+                maro::BoadMaro::error(
+                    "MaroBindAxisCommand.NodeNotFound",
+                    MString("Maro: cannot find node '") + name + "'.",
+                    maro::onfix::capture("", "", name));
                 return MS::kFailure;
             }
         }
 
         if (selection.length() != 2) {
-            MGlobal::displayError(
-                "Maro: maroBindAxis needs exactly two arguments: <axis> <transform>.");
+            maro::BoadMaro::error(
+                "MaroBindAxisCommand.WrongArgCount",
+                "Maro: maroBindAxis needs exactly two arguments: <axis> <transform>.",
+                maro::onfix::capture("", "", ""));
             return MS::kFailure;
         }
 
@@ -63,8 +67,10 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
 
         MFnDependencyNode axisFn(axisObj);
         if (axisFn.typeId() != MaroAxisNode::id) {
-            MGlobal::displayError(
-                MString("Maro: '") + axisFn.name() + "' is not a maroAxis node.");
+            maro::BoadMaro::error(
+                "MaroBindAxisCommand.NotMaroAxisNode",
+                MString("Maro: '") + axisFn.name() + "' is not a maroAxis node.",
+                maro::onfix::capture(axisFn.typeName(), "", axisFn.name()));
             return MS::kFailure;
         }
 
@@ -96,17 +102,19 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
         if (axisSources.length() > 0) {
             MObject boundObj = axisSources[0].node();
             if (boundObj == targetObj) {
-                MGlobal::displayInfo(
+                maro::BoadMaro::info(
                     MString("Maro: '") + axisFn.name() + "' is already bound to '" +
                     targetFn.name() + "'.");
                 return redoIt();
             }
 
             MFnDependencyNode boundFn(boundObj);
-            MGlobal::displayError(
+            maro::BoadMaro::error(
+                "MaroBindAxisCommand.AxisAlreadyBound",
                 MString("Maro: '") + axisFn.name() + "' is already bound to '" +
                 boundFn.name() + "'. Disconnect it first before binding it to '" +
-                targetFn.name() + "'.");
+                targetFn.name() + "'.",
+                maro::onfix::capture(targetFn.typeName(), "targetObject", axisFn.name()));
             return MS::kFailure;
         }
 
@@ -118,10 +126,13 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
             for (unsigned int i = 0; i < destinations.length(); ++i) {
                 MFnDependencyNode otherFn(destinations[i].node());
                 if (otherFn.typeId() == MaroAxisNode::id) {
-                    MGlobal::displayError(
+                    maro::BoadMaro::error(
+                        "MaroBindAxisCommand.ObjectAlreadyHasAxis",
                         MString("Maro: '") + targetFn.name() +
                         "' is already bound to axis '" + otherFn.name() +
-                        "'. One object carries exactly one axis.");
+                        "'. One object carries exactly one axis.",
+                        maro::onfix::capture(targetFn.typeName(), "targetObject",
+                                             axisFn.name()));
                     return MS::kFailure;
                 }
             }
@@ -133,34 +144,47 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
         m_stagedChange = true;
         return redoIt();
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroBindAxis failed: ") + e.what());
+        maro::BoadMaro::error("MaroBindAxisCommand.doIt.Exception",
+                              MString("Maro: maroBindAxis failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: maroBindAxis failed with unknown error.");
+        maro::BoadMaro::error("MaroBindAxisCommand.doIt.UnknownException",
+                              "Maro: maroBindAxis failed with unknown error.");
         return MS::kFailure;
     }
 }
 
 MStatus MaroBindAxisCommand::redoIt() {
+    // 마커가 doIt에만 있으면 안 된다: Maya는 undo 큐에서 redoIt/undoIt을
+    // 원래의 doIt과 무관하게 다시 부른다. 그때 doIt의 마커는 이미 오래전에
+    // 스택에서 빠졌으므로, 아래 error()들은 activeCommand가 빈 문자열인 채로
+    // 기록된다 -- 이 진단 서브시스템이 존재하는 이유인 "원인" 정보가 바로
+    // 그 자리에서 비는 셈이다. 그래서 진단이 사는 redoIt/undoIt에도 설치한다.
+    maro::ScopedCommandContext ctxMarker("MaroBindAxisCommand");
     try {
         return m_modifier.doIt();
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroBindAxis redo failed: ") + e.what());
+        maro::BoadMaro::error("MaroBindAxisCommand.redoIt.Exception",
+                              MString("Maro: maroBindAxis redo failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: maroBindAxis redo failed with unknown error.");
+        maro::BoadMaro::error("MaroBindAxisCommand.redoIt.UnknownException",
+                              "Maro: maroBindAxis redo failed with unknown error.");
         return MS::kFailure;
     }
 }
 
 MStatus MaroBindAxisCommand::undoIt() {
+    maro::ScopedCommandContext ctxMarker("MaroBindAxisCommand");
     try {
         return m_modifier.undoIt();
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroBindAxis undo failed: ") + e.what());
+        maro::BoadMaro::error("MaroBindAxisCommand.undoIt.Exception",
+                              MString("Maro: maroBindAxis undo failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: maroBindAxis undo failed with unknown error.");
+        maro::BoadMaro::error("MaroBindAxisCommand.undoIt.UnknownException",
+                              "Maro: maroBindAxis undo failed with unknown error.");
         return MS::kFailure;
     }
 }
@@ -201,6 +225,7 @@ MSyntax MaroConnectAxisCommand::newSyntax() {
 }
 
 MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
+    maro::ScopedCommandContext ctxMarker("MaroConnectAxisCommand");
     // 예외는 경계를 넘지 않는다. 커맨드에서 던지면 Maya가 죽는다.
     try {
         MStatus status;
@@ -210,14 +235,18 @@ MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
             MString name = args.asString(i, &status);
             if (!status) return status;
             if (!selection.add(name)) {
-                MGlobal::displayError(MString("Maro: cannot find node '") + name + "'.");
+                maro::BoadMaro::error("MaroConnectAxisCommand.NodeNotFound",
+                                      MString("Maro: cannot find node '") + name + "'.",
+                                      maro::onfix::capture("", "", name));
                 return MS::kFailure;
             }
         }
 
         if (selection.length() != 2) {
-            MGlobal::displayError(
-                "Maro: maroConnectAxis needs exactly two arguments: <child> <parent>.");
+            maro::BoadMaro::error(
+                "MaroConnectAxisCommand.WrongArgCount",
+                "Maro: maroConnectAxis needs exactly two arguments: <child> <parent>.",
+                maro::onfix::capture("", "", ""));
             return MS::kFailure;
         }
 
@@ -231,20 +260,27 @@ MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
 
         if (childFn.typeId() != MaroAxisNode::id ||
             parentFn.typeId() != MaroAxisNode::id) {
-            MGlobal::displayError("Maro: maroConnectAxis expects two maroAxis nodes.");
+            maro::BoadMaro::error(
+                "MaroConnectAxisCommand.NotMaroAxisNode",
+                "Maro: maroConnectAxis expects two maroAxis nodes.",
+                maro::onfix::capture(childFn.typeName(), "", childFn.name()));
             return MS::kFailure;
         }
 
         if (childObj == parentObj) {
-            MGlobal::displayError(
-                MString("Maro: '") + childFn.name() + "' cannot be its own parent.");
+            maro::BoadMaro::error(
+                "MaroConnectAxisCommand.SelfParent",
+                MString("Maro: '") + childFn.name() + "' cannot be its own parent.",
+                maro::onfix::capture(childFn.typeName(), "parentAxis", childFn.name()));
             return MS::kFailure;
         }
 
         if (wouldCreateCycle(childObj, parentObj)) {
-            MGlobal::displayError(
+            maro::BoadMaro::error(
+                "MaroConnectAxisCommand.WouldCreateCycle",
                 MString("Maro: connecting '") + childFn.name() + "' under '" +
-                parentFn.name() + "' would create a cycle in the axis chain.");
+                parentFn.name() + "' would create a cycle in the axis chain.",
+                maro::onfix::capture(childFn.typeName(), "parentAxis", childFn.name()));
             return MS::kFailure;
         }
 
@@ -266,34 +302,44 @@ MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
 
         return redoIt();
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroConnectAxis failed: ") + e.what());
+        maro::BoadMaro::error("MaroConnectAxisCommand.doIt.Exception",
+                              MString("Maro: maroConnectAxis failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: maroConnectAxis failed with unknown error.");
+        maro::BoadMaro::error("MaroConnectAxisCommand.doIt.UnknownException",
+                              "Maro: maroConnectAxis failed with unknown error.");
         return MS::kFailure;
     }
 }
 
 MStatus MaroConnectAxisCommand::redoIt() {
+    // MaroBindAxisCommand::redoIt과 같은 이유로 여기에도 마커를 설치한다:
+    // undo 큐에서 재진입할 때 doIt의 마커는 이미 없다.
+    maro::ScopedCommandContext ctxMarker("MaroConnectAxisCommand");
     try {
         return m_modifier.doIt();
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroConnectAxis redo failed: ") + e.what());
+        maro::BoadMaro::error("MaroConnectAxisCommand.redoIt.Exception",
+                              MString("Maro: maroConnectAxis redo failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: maroConnectAxis redo failed with unknown error.");
+        maro::BoadMaro::error("MaroConnectAxisCommand.redoIt.UnknownException",
+                              "Maro: maroConnectAxis redo failed with unknown error.");
         return MS::kFailure;
     }
 }
 
 MStatus MaroConnectAxisCommand::undoIt() {
+    maro::ScopedCommandContext ctxMarker("MaroConnectAxisCommand");
     try {
         return m_modifier.undoIt();
     } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroConnectAxis undo failed: ") + e.what());
+        maro::BoadMaro::error("MaroConnectAxisCommand.undoIt.Exception",
+                              MString("Maro: maroConnectAxis undo failed: ") + e.what());
         return MS::kFailure;
     } catch (...) {
-        MGlobal::displayError("Maro: maroConnectAxis undo failed with unknown error.");
+        maro::BoadMaro::error("MaroConnectAxisCommand.undoIt.UnknownException",
+                              "Maro: maroConnectAxis undo failed with unknown error.");
         return MS::kFailure;
     }
 }
@@ -332,9 +378,14 @@ void shutdownBridge() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (MaroCommandDeviceNode::isThreadAlive()) {
-        MGlobal::displayError(
+        // 자유 함수라 자기 마커를 설치하지 않는다 -- 호출부(maroStartBridge의
+        // 실패 정리 경로, maroStopBridge, uninitializePlugin)가 각자 무엇인지
+        // 그대로 activeCommand에 남는 편이 원인 정보로서 더 정확하다.
+        maro::BoadMaro::error(
+            "shutdownBridge.CommandDeviceThreadStuck",
             "Maro: command device thread did not stop within 2s; "
-            "ROS 2 shutdown may hang or crash.");
+            "ROS 2 shutdown may hang or crash.",
+            maro::onfix::capture("maroCommandDevice", "", ""));
 
         // C2: 이 시점에 우리는 방금 "스레드가 아직 산다"는 걸 직접
         // 확인했다. 그런데도 아래로 흘러 g_runtime->stop()
@@ -385,8 +436,12 @@ MSyntax MaroStartBridgeCommand::newSyntax() {
 }
 
 MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
+    maro::ScopedCommandContext ctxMarker("MaroStartBridgeCommand");
+
     if (args.length() != 1) {
-        MGlobal::displayError("Maro: maroStartBridge needs <robotName>.");
+        maro::BoadMaro::error("MaroStartBridgeCommand.WrongArgCount",
+                              "Maro: maroStartBridge needs <robotName>.",
+                              maro::onfix::capture("", "", ""));
         return MS::kFailure;
     }
 
@@ -395,7 +450,7 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
     if (!status) return status;
 
     if (g_runtime && g_runtime->isRunning()) {
-        MGlobal::displayWarning("Maro: bridge is already running.");
+        maro::BoadMaro::warn("Maro: bridge is already running.");
         return MS::kSuccess;
     }
 
@@ -408,7 +463,7 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
     // 거부하지 않고 경고만 남긴다 -- 그래야 나중에 누가 처음부터 다시
     // 디버깅하지 않는다.
     if (MGlobal::mayaState() != MGlobal::kInteractive) {
-        MGlobal::displayWarning(
+        maro::BoadMaro::warn(
             "Maro: Maya is not running interactively (batch/headless mode). "
             "MPxThreadedDeviceNode relies on Maya's idle event queue for "
             "attribute updates, and that queue does not run in this mode, "
@@ -419,9 +474,11 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
     g_runtime = std::make_unique<MaroRosRuntime>();
     if (!g_runtime->start(robotName.asChar())) {
         g_runtime.reset();
-        MGlobal::displayError(
+        maro::BoadMaro::error(
+            "MaroStartBridgeCommand.RuntimeStartFailed",
             "Maro: could not start the ROS 2 bridge. Check that the ROS 2 "
-            "runtime DLLs sit next to the plugin.");
+            "runtime DLLs sit next to the plugin.",
+            maro::onfix::capture("", "", robotName));
         return MS::kFailure;
     }
 
@@ -429,7 +486,9 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
     if (!status) {
         g_runtime->stop();
         g_runtime.reset();
-        MGlobal::displayError("Maro: could not start the main-thread pump.");
+        maro::BoadMaro::error("MaroStartBridgeCommand.PumpStartFailed",
+                              "Maro: could not start the main-thread pump.",
+                              maro::onfix::capture("", "", robotName));
         return status;
     }
 
@@ -440,7 +499,9 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
         MaroPump::stop();
         g_runtime->stop();
         g_runtime.reset();
-        MGlobal::displayError("Maro: could not create the command device node.");
+        maro::BoadMaro::error("MaroStartBridgeCommand.CreateDeviceNodeFailed",
+                              "Maro: could not create the command device node.",
+                              maro::onfix::capture("maroCommandDevice", "", robotName));
         return status;
     }
     status = createModifier.doIt();
@@ -457,12 +518,16 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
         // 않는다 -- 중복 삭제가 아니다.
         const MStatus undoStatus = createModifier.undoIt();
         if (!undoStatus) {
-            MGlobal::displayError(
+            maro::BoadMaro::error(
+                "MaroStartBridgeCommand.UndoDeviceNodeFailedAfterDgAdd",
                 "Maro: could not undo command device node creation; a "
-                "stray node may remain and block plugin unload.");
+                "stray node may remain and block plugin unload.",
+                maro::onfix::capture("maroCommandDevice", "", robotName));
         }
         shutdownBridge();
-        MGlobal::displayError("Maro: could not add the command device node to the DG.");
+        maro::BoadMaro::error("MaroStartBridgeCommand.AddDeviceNodeToDgFailed",
+                              "Maro: could not add the command device node to the DG.",
+                              maro::onfix::capture("maroCommandDevice", "", robotName));
         return status;
     }
 
@@ -479,7 +544,7 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
     // 넘기지 않고 경고한다.
     const MStatus doNotWriteStatus = deviceFn.setDoNotWrite(true);
     if (!doNotWriteStatus) {
-        MGlobal::displayWarning(
+        maro::BoadMaro::warn(
             "Maro: could not mark the command device node non-persistent; "
             "it may be saved into the scene file.");
     }
@@ -492,9 +557,11 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
         // C1과 같은 이유로 플러그인 언로드가 막힌다. 만든 걸 되돌린다.
         const MStatus undoStatus = createModifier.undoIt();
         if (!undoStatus) {
-            MGlobal::displayError(
+            maro::BoadMaro::error(
+                "MaroStartBridgeCommand.UndoDeviceNodeFailedAfterNoInstance",
                 "Maro: could not undo command device node creation; a "
-                "stray node may remain and block plugin unload.");
+                "stray node may remain and block plugin unload.",
+                maro::onfix::capture("maroCommandDevice", "", robotName));
         }
 
         // Gap 2 (재검토): 위 undoIt()가 DG에서 노드를 지워도, 463행 근처
@@ -515,7 +582,9 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
         // 정리(정상 정지 또는 진짜 누수)만 남는데, 그게 정확히 우리가 여기서
         // 원하는 동작이다. 로직을 복제하는 대신 재사용한다.
         shutdownBridge();
-        MGlobal::displayError("Maro: command device node has no C++ instance.");
+        maro::BoadMaro::error("MaroStartBridgeCommand.DeviceNodeHasNoInstance",
+                              "Maro: command device node has no C++ instance.",
+                              maro::onfix::capture("maroCommandDevice", "", robotName));
         return MS::kFailure;
     }
 
@@ -532,7 +601,9 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
         deviceFn.findPlug(MPxThreadedDeviceNode::live, false), true);
     status = liveModifier.doIt();
     if (!status) {
-        MGlobal::displayError("Maro: could not set the command device live.");
+        maro::BoadMaro::error("MaroStartBridgeCommand.SetDeviceLiveFailed",
+                              "Maro: could not set the command device live.",
+                              maro::onfix::capture("maroCommandDevice", "live", robotName));
         shutdownBridge();
         return status;
     }
@@ -551,27 +622,35 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
     MStatus pullStatus;
     deviceFn.findPlug(MaroCommandDeviceNode::aCommandOut, false).asBool(&pullStatus);
     if (!pullStatus) {
-        MGlobal::displayWarning(
+        maro::BoadMaro::warn(
             "Maro: could not force the command device's first compute(); "
             "inbound delivery may not start until something else "
             "re-evaluates the node.");
     }
 
-    MGlobal::displayInfo(MString("Maro: bridge running as '") + robotName + "'.");
+    maro::BoadMaro::info(MString("Maro: bridge running as '") + robotName + "'.");
     return MS::kSuccess;
 }
 
 void* MaroStopBridgeCommand::creator() { return new MaroStopBridgeCommand(); }
 
 MStatus MaroStopBridgeCommand::doIt(const MArgList&) {
+    // shutdownBridge()가 진단을 낼 수 있고(스레드가 안 멈춘 경우), 그 진단이
+    // "어느 커맨드가 관여했는지"를 알아야 하므로 마커는 shutdownBridge() 호출
+    // 앞에 선다.
+    maro::ScopedCommandContext ctxMarker("MaroStopBridgeCommand");
     shutdownBridge();
-    MGlobal::displayInfo("Maro: bridge stopped.");
+    maro::BoadMaro::info("Maro: bridge stopped.");
     return MS::kSuccess;
 }
 
 void* MaroBridgeStatsCommand::creator() { return new MaroBridgeStatsCommand(); }
 
 MStatus MaroBridgeStatsCommand::doIt(const MArgList&) {
+    // 이 커맨드는 지금 진단을 하나도 내지 않지만, 마커는 6개 MPxCommand 전부에
+    // 설치한다 -- 나중에 여기 진단이 하나 생겼을 때 원인 정보가 조용히 비어
+    // 나가는 것을 막는 것이 이 마커의 목적이다.
+    maro::ScopedCommandContext ctxMarker("MaroBridgeStatsCommand");
     MIntArray stats;
     stats.append(static_cast<int>(MaroPump::collectedSampleCount()));
     stats.append(static_cast<int>(
@@ -595,11 +674,14 @@ MSyntax MaroSetControlModeCommand::newSyntax() {
 }
 
 MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
+    maro::ScopedCommandContext ctxMarker("MaroSetControlModeCommand");
     MStatus status;
 
     if (args.length() != 2) {
-        MGlobal::displayError(
-            "Maro: maroSetControlMode needs <axis> <0=Manual|1=ROS>.");
+        maro::BoadMaro::error(
+            "MaroSetControlModeCommand.WrongArgCount",
+            "Maro: maroSetControlMode needs <axis> <0=Manual|1=ROS>.",
+            maro::onfix::capture("", "", ""));
         return MS::kFailure;
     }
 
@@ -609,13 +691,19 @@ MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
     if (!status) return status;
 
     if (mode != 0 && mode != 1) {
-        MGlobal::displayError("Maro: control mode must be 0 (Manual) or 1 (ROS).");
+        maro::BoadMaro::error(
+            "MaroSetControlModeCommand.InvalidControlMode",
+            "Maro: control mode must be 0 (Manual) or 1 (ROS).",
+            maro::onfix::capture("", "controlMode", axisName));
         return MS::kFailure;
     }
 
     MSelectionList selection;
     if (!selection.add(axisName)) {
-        MGlobal::displayError(MString("Maro: cannot find node '") + axisName + "'.");
+        maro::BoadMaro::error(
+            "MaroSetControlModeCommand.NodeNotFound",
+            MString("Maro: cannot find node '") + axisName + "'.",
+            maro::onfix::capture("", "", axisName));
         return MS::kFailure;
     }
 
@@ -624,8 +712,10 @@ MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
 
     MFnDependencyNode axisFn(axisObj);
     if (axisFn.typeId() != MaroAxisNode::id) {
-        MGlobal::displayError(
-            MString("Maro: '") + axisName + "' is not a maroAxis node.");
+        maro::BoadMaro::error(
+            "MaroSetControlModeCommand.NotMaroAxisNode",
+            MString("Maro: '") + axisName + "' is not a maroAxis node.",
+            maro::onfix::capture(axisFn.typeName(), "controlMode", axisName));
         return MS::kFailure;
     }
 
@@ -650,7 +740,7 @@ MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
         // 설정이 아니라 프레임 단위 런타임 시딩이다.
         axisFn.findPlug(MaroAxisNode::aRosCommand, false).setDouble(seedValue);
 
-        MGlobal::displayInfo(
+        maro::BoadMaro::info(
             MString("Maro: seeding ROS target for '") + axisName + "' with " +
             seedValue + " to avoid a jump on mode switch.");
     }
