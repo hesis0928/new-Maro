@@ -12,6 +12,8 @@ set(SOURCE_FILES
     MaroRosRuntime.cpp
     MaroPump.cpp
     MaroCommandDeviceNode.cpp
+    MaroDiag.cpp
+    MaroDiagCommands.cpp
 )
 
 set(LIBRARIES
@@ -45,6 +47,7 @@ build_plugin()
 # keyword(PRIVATE/PUBLIC) 시그니처를 섞어 쓰는 것을 금지하므로, 여기서도
 # PRIVATE 없이 plain 형태로 이어 붙인다.
 target_link_libraries(${PROJECT_NAME} maro_transform)
+target_link_libraries(${PROJECT_NAME} maro_diag)
 
 foreach(ros_lib rclcpp rcl rcutils rcpputils rmw rosidl_runtime_c
                 rosidl_typesupport_cpp

@@ -1,0 +1,37 @@
+"""boad 진단 출구: 인메모리 스트림이 심각도·순서를 정확히 유지하는지 확인한다."""
+import os
+import sys
+
+import maya.standalone
+
+maya.standalone.initialize(name="python")
+
+import maya.cmds as cmds  # noqa: E402
+
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
+
+before = cmds.maroDiagCount()
+
+cmds.maroDiagEmit(severity="info", message="hello info")
+cmds.maroDiagEmit(severity="warn", message="hello warn")
+
+after = cmds.maroDiagCount()
+assert after == before + 2, f"expected {before + 2} records, got {after}"
+print("count OK")
+
+# index 0 = 가장 최근 = warn
+latest = cmds.maroDiagQuery(index=0)
+assert latest[0] == "warn", f"expected latest severity 'warn', got {latest[0]!r}"
+assert latest[1] == "hello warn", f"expected latest message 'hello warn', got {latest[1]!r}"
+print("latest record OK")
+
+previous = cmds.maroDiagQuery(index=1)
+assert previous[0] == "info"
+assert previous[1] == "hello info"
+print("previous record OK")
+
+cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
+maya.standalone.uninitialize()
+print("teardown OK")
+sys.exit(0)

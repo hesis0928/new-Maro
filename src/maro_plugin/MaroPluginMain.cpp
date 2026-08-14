@@ -7,6 +7,7 @@
 #include "MaroCommandDeviceNode.h"
 #include "MaroCommands.h"
 #include "MaroDeleteWatcher.h"
+#include "MaroDiagCommands.h"
 
 namespace {
 constexpr char kVendor[] = "Maro";
@@ -114,6 +115,26 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroDiagEmit", maro::MaroDiagEmitCommand::creator,
+                                    maro::MaroDiagEmitCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagEmit");
+        return status;
+    }
+
+    status = plugin.registerCommand("maroDiagCount", maro::MaroDiagCountCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagCount");
+        return status;
+    }
+
+    status = plugin.registerCommand("maroDiagQuery", maro::MaroDiagQueryCommand::creator,
+                                    maro::MaroDiagQueryCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagQuery");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -129,6 +150,10 @@ MStatus uninitializePlugin(MObject obj) {
 
     maro::shutdownBridge();
     maro::MaroDeleteWatcher::uninstall();
+
+    plugin.deregisterCommand("maroDiagQuery");
+    plugin.deregisterCommand("maroDiagCount");
+    plugin.deregisterCommand("maroDiagEmit");
 
     plugin.deregisterCommand("maroBridgeStats");
     plugin.deregisterCommand("maroStopBridge");
