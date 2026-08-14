@@ -188,16 +188,25 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
 
         BookEntry entry;
         if (store.query(hash, entry)) {
-            // entry.analysis가 비어 있을 수 있다 -- registerRemedy()가 아직
-            // book에 없는 해시에 해법만 등록하면 분석 없는 항목이 만들어진다
-            // (사용자가 스스로 고친 뒤 등록하는 경우). 그 경우 빈 문자열로
-            // 실제 에러 메시지를 덮어써서 사용자에게 아무 내용도 안 보여주면
-            // 안 되므로, 분석이 있을 때만 book 표기를 붙이고 없으면 원래
-            // message를 그대로 쓴다. 해법(remedy)과 servedFromBook은 두
-            // 경우 모두 그대로 적용한다.
-            rec.message = !entry.analysis.empty()
-                              ? entry.analysis + "\n(Maro: book에 있는 과거 분석에서 즉답)"
-                              : message.asChar();
+            // 리뷰 Finding C1: 여기서 예전에는 message를 entry.analysis(과거
+            // 분석 텍스트)로 덮어썼다. 해시는 실패의 "자리와 종류"만 같음을
+            // 보장할 뿐(ErrorHash.h 계약) 이번 발생에 관여한 구체적 노드
+            // 이름·값까지 같다고는 보장하지 않으므로, 그건 이번 발생과 무관한
+            // (심지어 이미 씬에 없는) 대상을 마치 방금 일어난 일처럼 사용자
+            // 눈앞에 내놓는 것이었다. message는 book 히트 여부와 무관하게
+            // 언제나 이번 호출이 실제로 넘긴, 지금 일어난 일이다.
+            //
+            // 과거 분석은 사라지지 않는다 -- priorAnalysis라는 별도 필드에
+            // 담아 "지금 무슨 일이 났는지"와 "이 자리에서 과거엔 뭘로
+            // 밝혀졌는지"를 한 레코드 안에 나란히 둔다(진단 패널 Layer B가
+            // 그대로 읽을 모양). entry.analysis가 비어 있을 수도 있다 --
+            // registerRemedy()가 아직 book에 없는 해시에 해법만 등록하면
+            // 분석 없는 항목이 만들어진다(사용자가 스스로 고친 뒤 등록하는
+            // 경우). 그때 priorAnalysis는 그냥 빈 문자열로 둔다(있는 그대로
+            // "과거 분석 없음"). 해법(remedy)과 servedFromBook은 두 경우
+            // 모두 그대로 적용한다.
+            rec.message = message.asChar();
+            rec.priorAnalysis = entry.analysis;
             rec.remedy = entry.remedy;
             rec.servedFromBook = true;
         } else {
@@ -233,8 +242,33 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         warnBookUnwritableOnce(bookPaths().spill);
     }
 
+    // 리뷰 Finding I2: rec.remedy는 book 히트에서 채워지지만, 지금까지는
+    // maroDiagQuery(테스트 전용 커맨드)로만 읽혔다 -- Layer B 패널이 아직
+    // 없는 지금은 어떤 프로덕션 경로도 사용자에게 해법을 보여주지 않았다.
+    // 여기서 별도의 displayInfo() 호출로 붙여, 실제로 등록된 해법이 있으면
+    // 그 자리에서 바로 보이게 한다.
+    //
+    // 판단: 에러 문장과 같은 displayError() 호출에 이어 붙이지 않고 별도의
+    // displayInfo() 줄로 낸다. 스크립트 에디터는 심각도별로 색이 다르다
+    // (에러=빨강, 일반=기본색) -- 한 줄로 합치면 전부 에러색으로 칠해져
+    // "해법은 실패의 일부가 아니라 제안"이라는 시각적 구분이 텍스트
+    // 마커만으로 흉내 낼 수밖에 없다. 별도 호출로 내면 그 구분이 Maya의
+    // 기본 색 규칙에서 공짜로 나온다.
+    //
+    // priorAnalysis(book에 있는 과거 분석)는 일부러 여기서 에코하지 않는다.
+    // Finding C1이 고친 바로 그 문제 -- 과거 발생의 텍스트가 이번 발생의
+    // 사실인 것처럼 보이는 것 -- 를, 굵은 글씨나 색 없이 한 줄짜리 스크립트
+    // 에디터 에코에 그대로 얹으면 "표기는 고쳤지만 사용자 눈에는 여전히
+    // 뒤섞여 보이는" 상태로 되돌아간다. priorAnalysis는 maroDiagQuery의
+    // 10번째 필드로 이미 노출되어 있고, "지금 일어난 일"과 "과거엔 뭐였는지"를
+    // 나란히, 구분된 자리에 보여주는 것은 정확히 진단 패널(Layer B)의
+    // 몫이다 -- 그게 아직 없다고 해서 그 구분을 포기하는 임시 에코를 먼저
+    // 내보내지 않는다.
     if (isMainThread()) {
         MGlobal::displayError(MString("[Maro-Error] ") + MString(rec.message.c_str()));
+        if (!rec.remedy.empty()) {
+            MGlobal::displayInfo(MString("[Maro-Fix] ") + MString(rec.remedy.c_str()));
+        }
     }
     std::lock_guard<std::mutex> lock(mutex());
     stream().push_back(std::move(rec));

@@ -242,6 +242,10 @@ MStatus MaroDiagQueryCommand::doIt(const MArgList& args) {
         result.append(MString(rec.context.axisOrTarget.c_str()));
         result.append(MString(rec.remedy.c_str()));
         result.append(rec.servedFromBook ? "1" : "0");
+        // 리뷰 Finding C1: 10번째 필드로 덧붙인다. 기존 테스트들이 0~8 인덱스를
+        // 위치로 참조하므로 그 사이에 끼워 넣지 않는다 -- 끝에만 붙여야 기존
+        // 인덱스가 전부 그대로 유지된다.
+        result.append(MString(rec.priorAnalysis.c_str()));
         setResult(result);
         return MS::kSuccess;
     } catch (const std::exception& e) {

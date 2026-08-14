@@ -39,6 +39,45 @@ struct CommandRecord {
     double rosValue;
 };
 
+// 리뷰 Finding I3: 이 노드는 두 가지 스레드 사정이 섞여 있다.
+//   - 소멸자, postConstructor, threadShutdownHandler는 전부 Maya가 메인
+//     스레드에서 부르는 노드 생애주기 콜백이다(threadShutdownHandler의
+//     주석 "File -> New, Exit, 또는 이 노드가 삭제될 때 Maya가 호출한다"
+//     참고) -- Maro_ThreadedDeviceNode 자신이 만드는 백그라운드
+//     스레드(threadHandler)와는 별개다. 여기서는 이름 조회를 망설일 이유가
+//     없다.
+//   - compute()는 다르다. MaroDiag.h의 스레드 안전성 주석대로, Maya 2026
+//     기본 평가 관리자 아래 compute()는 워커 스레드에서 돌 수 있다 --
+//     MaroAxisNode.cpp/MaroCapabilityNodes.cpp와 같은 이유로 같은 정책을
+//     쓴다: isMainThread()가 안전을 보장할 때만 이름을 조회한다.
+// nodeType은 어느 쪽이든 등록 이름 문자열 리터럴이라 항상 공짜로 채운다.
+DgContext selfContext(const MObject& node) {
+    DgContext ctx;
+    ctx.nodeType = "maroCommandDevice";
+    ctx.activeCommand = onfix::activeCommand();
+    try {
+        MFnDependencyNode fn(node);
+        ctx.axisOrTarget = fn.name().asChar();
+    } catch (...) {
+        // 소멸 도중이라 이름조차 못 얻을 수 있다 -- 컨텍스트 없이 진행한다.
+    }
+    return ctx;
+}
+
+DgContext computeContext(const MObject& node) {
+    DgContext ctx;
+    ctx.nodeType = "maroCommandDevice";
+    ctx.activeCommand = onfix::activeCommand();
+    if (isMainThread()) {
+        try {
+            MFnDependencyNode fn(node);
+            ctx.axisOrTarget = fn.name().asChar();
+        } catch (...) {
+        }
+    }
+    return ctx;
+}
+
 }  // namespace
 
 MTypeId MaroCommandDeviceNode::id(0x00135105);
@@ -86,11 +125,13 @@ MaroCommandDeviceNode::~MaroCommandDeviceNode() {
     } catch (const std::exception& e) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.destroyMemoryPools.Exception",
-            MString("Maro: command device destroyMemoryPools failed: ") + e.what());
+            MString("Maro: command device destroyMemoryPools failed: ") + e.what(),
+            selfContext(thisMObject()));
     } catch (...) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.destroyMemoryPools.UnknownException",
-            "Maro: command device destroyMemoryPools failed with unknown error.");
+            "Maro: command device destroyMemoryPools failed with unknown error.",
+            selfContext(thisMObject()));
     }
 }
 
@@ -138,11 +179,13 @@ void MaroCommandDeviceNode::postConstructor() {
     } catch (const std::exception& e) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.postConstructor.Exception",
-            MString("Maro: command device postConstructor failed: ") + e.what());
+            MString("Maro: command device postConstructor failed: ") + e.what(),
+            selfContext(thisMObject()));
     } catch (...) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.postConstructor.UnknownException",
-            "Maro: command device postConstructor failed with unknown error.");
+            "Maro: command device postConstructor failed with unknown error.",
+            selfContext(thisMObject()));
     }
 }
 
@@ -318,11 +361,13 @@ void MaroCommandDeviceNode::threadShutdownHandler() {
     } catch (const std::exception& e) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.threadShutdownHandler.Exception",
-            MString("Maro: command device threadShutdownHandler failed: ") + e.what());
+            MString("Maro: command device threadShutdownHandler failed: ") + e.what(),
+            selfContext(thisMObject()));
     } catch (...) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.threadShutdownHandler.UnknownException",
-            "Maro: command device threadShutdownHandler failed with unknown error.");
+            "Maro: command device threadShutdownHandler failed with unknown error.",
+            selfContext(thisMObject()));
     }
 }
 
@@ -376,12 +421,14 @@ MStatus MaroCommandDeviceNode::compute(const MPlug& plug, MDataBlock& data) {
     } catch (const std::exception& e) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.compute.Exception",
-            MString("Maro: command device compute failed: ") + e.what());
+            MString("Maro: command device compute failed: ") + e.what(),
+            computeContext(thisMObject()));
         return MS::kFailure;
     } catch (...) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.compute.UnknownException",
-            "Maro: command device compute failed with unknown error.");
+            "Maro: command device compute failed with unknown error.",
+            computeContext(thisMObject()));
         return MS::kFailure;
     }
 }

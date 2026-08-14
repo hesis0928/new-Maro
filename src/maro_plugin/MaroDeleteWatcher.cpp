@@ -29,6 +29,28 @@ bool isCapabilityNode(const MFnDependencyNode& fn) {
            id == MaroSensorDirectionNode::id || id == MaroSensorRangeNode::id;
 }
 
+// 리뷰 Finding I3: 이 파일의 콜백(onNodeAdded/onObjectAboutToDelete/
+// onAxisAboutToDelete)은 전부 Maya 노드 추가/삭제 콜백이라 항상 메인
+// 스레드에서 돈다(compute()의 워커 스레드 제약이 여기엔 없다) -- 그러니
+// MFnDependencyNode로 이름을 조회하는 것 자체는 망설일 이유가 없다.
+//
+// 다만 이 함수는 항상 catch(...) 블록 "안에서" -- 이미 예외가 한 번 난
+// 상태에서 -- 불린다. node가 이미 손상된 상태일 수 있어(그래서 애초에
+// 예외가 났을 수 있어) 이 조회 자체가 또 실패할 가능성을 안고 있다. 그
+// 실패가 이 함수 밖으로 새면 콜백 경계를 넘어 Maya가 죽는다 -- 그래서 한
+// 번 더 감싼다: 실패하면 컨텍스트 없이(빈 문자열로) 돌려준다.
+DgContext captureFromNode(const MObject& node) {
+    DgContext ctx;
+    ctx.activeCommand = onfix::activeCommand();
+    try {
+        MFnDependencyNode fn(node);
+        ctx.nodeType = fn.typeName().asChar();
+        ctx.axisOrTarget = fn.name().asChar();
+    } catch (...) {
+    }
+    return ctx;
+}
+
 // 고아 능력 노드를 담는 세트를 얻거나 만든다.
 // 세트에 속하면 연결이 생겨 File > Optimize Scene Size가 지우지 못한다.
 MObject orphanSet(MDGModifier& modifier) {
@@ -82,7 +104,8 @@ void MaroDeleteWatcher::onNodeAdded(MObject& node, void* /*clientData*/) {
     } catch (...) {
         // 콜백에서 예외가 새면 Maya가 죽는다.
         maro::BoadMaro::error("MaroDeleteWatcher.onNodeAdded.UnknownException",
-                              "Maro: failed to attach delete callback.");
+                              "Maro: failed to attach delete callback.",
+                              captureFromNode(node));
     }
 }
 
@@ -145,7 +168,8 @@ void MaroDeleteWatcher::onObjectAboutToDelete(MObject& node,
         }
     } catch (...) {
         maro::BoadMaro::error("MaroDeleteWatcher.onObjectAboutToDelete.UnknownException",
-                              "Maro: cascade delete failed.");
+                              "Maro: cascade delete failed.",
+                              captureFromNode(node));
     }
 }
 
@@ -199,7 +223,8 @@ void MaroDeleteWatcher::onAxisAboutToDelete(MObject& node, MDGModifier& modifier
         }
     } catch (...) {
         maro::BoadMaro::error("MaroDeleteWatcher.onAxisAboutToDelete.UnknownException",
-                              "Maro: orphan handling failed.");
+                              "Maro: orphan handling failed.",
+                              captureFromNode(node));
     }
 }
 

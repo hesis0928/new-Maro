@@ -131,7 +131,8 @@ if(MARO_BUILD_PLUGIN)
     # 플러그인만 있으면 되는 테스트. robustness는 순수 DG 조작/평가만 하고
     # 브리지(rclcpp)를 켜지 않으므로 이 그룹에 속한다.
     foreach(maya_test load axis_node binding capability_stack delete_rules
-                      robustness diag_boad diag_onfix diag_book diag_remedy
+                      robustness diag_boad diag_onfix diag_book
+                      diag_book_cross_session diag_remedy
                       diag_degraded diag_degraded_remedy diag_thread)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"

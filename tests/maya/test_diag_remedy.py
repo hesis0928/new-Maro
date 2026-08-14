@@ -94,9 +94,8 @@ print("remedy-only registration (no prior analysis) OK")
 
 cmds.maroDiagEmit(severity="error", message="probe message", siteTag=remedyOnlySiteTag)
 remedyOnlyRecord = cmds.maroDiagQuery(index=0)
-severity, message, errorHash2, nodeType, attributeName, activeCommand, axisOrTarget, remedy, servedFromBook = (
-    remedyOnlyRecord
-)
+(severity, message, errorHash2, nodeType, attributeName, activeCommand,
+ axisOrTarget, remedy, servedFromBook, priorAnalysis) = remedyOnlyRecord
 
 assert errorHash2 == remedyOnlyHash, (
     f"C++ hashError() and the python FNV-1a-64 reimplementation disagree: "
@@ -109,6 +108,14 @@ assert "probe message" in message, (
 assert remedy == remedyOnlyRemedy, f"expected the registered remedy, got {remedy!r}"
 assert servedFromBook == "1", (
     "a remedy-only book entry is still a book hit -- servedFromBook must stay true"
+)
+# 리뷰 Finding C1: 이 항목은 registerRemedy()가 해법만 등록해 만든 것이라
+# entry.analysis는 애초에 비어 있다 -- priorAnalysis도 그대로 빈 문자열이어야
+# 한다("과거 분석 없음"을 정직하게 반영). message는 message대로 지금 이
+# 호출이 넘긴 "probe message"를 그대로 담아야 한다 (위에서 이미 확인).
+assert priorAnalysis == "", (
+    f"a remedy-only entry has no recorded analysis, so priorAnalysis must "
+    f"stay empty, got {priorAnalysis!r}"
 )
 print("remedy-only entry preserved the error message OK")
 

@@ -8,6 +8,7 @@
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
 #include <maya/MFnCompoundAttribute.h>
+#include <maya/MFnDependencyNode.h>
 #include <maya/MFnEnumAttribute.h>
 #include <maya/MFnMatrixAttribute.h>
 #include <maya/MFnMessageAttribute.h>
@@ -21,6 +22,46 @@
 #include "MaroDiag.h"
 
 namespace maro {
+
+namespace {
+
+// 리뷰 Finding I3: compute()는 Maya 2026 기본 평가 관리자(Parallel
+// Evaluation Manager) 아래에서 워커 스레드 위에 돌 수 있다(MaroDiag.h의
+// 스레드 안전성 주석 참고). 그래서 여기서 DgContext를 조립할 때 어떤 필드가
+// Maya API 호출을 필요로 하는지를 신중히 가른다:
+//   - nodeType은 호출부가 이미 아는 컴파일 타임 상수(등록 이름 문자열)라
+//     Maya를 전혀 부르지 않고 항상 채운다 -- 비용도, 위험도 없다.
+//   - onfix::activeCommand()는 thread_local 벡터를 읽을 뿐 Maya API가
+//     아니므로 이것도 항상 안전하다(test_diag_thread.py가 이미 워커
+//     스레드에서 이 경로를 검증한다).
+//   - 노드 "이름"(axisOrTarget)은 다르다 -- MFnDependencyNode(thisMObject())
+//     로 실제 DG를 조회해야 나오는, 진짜 Maya API 호출이다. 이 파일의 다른
+//     compute() 자매 노드들(MaroCapabilityNodes.cpp)과 정책을 통일한다:
+//     isMainThread()가 안전을 보장할 때만 채우고, 워커로 판정되면 빈
+//     문자열로 둔다. DgContext의 계약("필드가 비어 있으면 그 시점에 관여가
+//     없었다는 뜻이지 에러가 아니다")과 맞는 정직한 "모른다"다 -- 이름을
+//     아예 얻을 방법이 없는 스레드에서 억지로 채우려다 워커 스레드에서
+//     금지된 Maya 호출을 내는 것보다 낫다.
+DgContext computeContext(const MPxNode& node, const char* nodeType) {
+    DgContext ctx;
+    ctx.nodeType = nodeType;
+    ctx.activeCommand = onfix::activeCommand();
+    if (isMainThread()) {
+        // 이 함수 자체가 compute()의 catch 블록 안에서 -- 즉 이미 예외가 한
+        // 번 난 상황에서 -- 불린다. MFnDependencyNode 조회가 여기서 또
+        // 실패/예외를 내면 그 예외는 compute()를 감싸는 바깥 try가 없으므로
+        // 곧장 Maya 콜백 경계를 넘는다 -- 그래서 반드시 그 자체를 한 번 더
+        // 감싼다: 실패하면 이름 없이(빈 문자열로) 진행한다.
+        try {
+            MFnDependencyNode fn(node.thisMObject());
+            ctx.axisOrTarget = fn.name().asChar();
+        } catch (...) {
+        }
+    }
+    return ctx;
+}
+
+}  // namespace
 
 MTypeId MaroAxisNode::id(0x00135100);
 
@@ -222,11 +263,13 @@ MStatus MaroAxisNode::compute(const MPlug& plug, MDataBlock& data) {
         return MS::kSuccess;
     } catch (const std::exception& e) {
         maro::BoadMaro::error("MaroAxisNode.compute.Exception",
-                              MString("Maro: maroAxis compute failed: ") + e.what());
+                              MString("Maro: maroAxis compute failed: ") + e.what(),
+                              computeContext(*this, "maroAxis"));
         return MS::kFailure;
     } catch (...) {
         maro::BoadMaro::error("MaroAxisNode.compute.UnknownException",
-                              "Maro: maroAxis compute failed with unknown error.");
+                              "Maro: maroAxis compute failed with unknown error.",
+                              computeContext(*this, "maroAxis"));
         return MS::kFailure;
     }
 }

@@ -81,16 +81,30 @@ bool MaroPump::isRunning() { return s_timerId != 0; }
 std::uint64_t MaroPump::collectedSampleCount() { return s_collected.load(); }
 
 void MaroPump::onTimer(float, float, void*) {
-    // Maya 콜백이다. 예외가 새면 Maya가 죽는다.
+    // Maya 콜백이다. 예외가 새면 Maya가 죽는다. 이 타이머는 항상 메인
+    // 스레드에서 불리므로(MTimerMessage 콜백) compute()류의 워커 스레드
+    // 제약이 없다 -- 리뷰 Finding I3.
+    //
+    // 그런데도 여기서 채울 수 있는 컨텍스트는 제한적이다: collectSamples()는
+    // 씬의 모든 maroAxis를 순회하며 발행하는데, 예외가 나면 그 루프 상태(몇
+    // 번째 축을 보던 중이었는지)는 이미 잃은 뒤다 -- 특정 축 인스턴스를
+    // 지목하려면 collectSamples() 내부에서 축 하나하나를 따로 try/catch로
+    // 감싸는 구조 변경이 필요한데, 그건 지금 실패 하나로 이 틱의 발행
+    // 전체를 중단하는 현재 동작을 "한 축의 실패가 나머지 축의 발행을 막지
+    // 않는다"로 바꾸는 별개의 행동 변화라 이 배치의 범위를 넘는다. 대신
+    // nodeType만 채운다 -- "어떤 노드 타입을 순회하다 터졌는지"만으로도
+    // 컨텍스트 없음보다는 낫다.
     try {
         if (s_runtime == nullptr) return;
         collectSamples(*s_runtime);
     } catch (const std::exception& e) {
         maro::BoadMaro::error("MaroPump.onTimer.Exception",
-                              MString("Maro: pump tick failed: ") + e.what());
+                              MString("Maro: pump tick failed: ") + e.what(),
+                              maro::onfix::capture("maroAxis", "", ""));
     } catch (...) {
         maro::BoadMaro::error("MaroPump.onTimer.UnknownException",
-                              "Maro: pump tick failed with unknown error.");
+                              "Maro: pump tick failed with unknown error.",
+                              maro::onfix::capture("maroAxis", "", ""));
     }
 }
 

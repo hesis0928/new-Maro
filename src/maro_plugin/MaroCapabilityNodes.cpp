@@ -4,6 +4,7 @@
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
 #include <maya/MFnCompoundAttribute.h>
+#include <maya/MFnDependencyNode.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnUnitAttribute.h>
 #include <maya/MGlobal.h>
@@ -12,6 +13,33 @@
 #include "MaroDiag.h"
 
 namespace maro {
+
+namespace {
+
+// 리뷰 Finding I3: 이 파일의 네 노드(maroRotation/maroLimit/
+// maroSensorDirection/maroSensorRange) 모두 compute()가 Maya 2026 기본
+// 평가 관리자 아래 워커 스레드에서 돌 수 있다 -- MaroAxisNode.cpp의
+// computeContext()와 정확히 같은 정책이다(그쪽에 전체 근거를 적어 뒀다):
+// nodeType과 activeCommand는 Maya 호출 없이 항상 채우고, 노드 "이름"은
+// isMainThread()가 안전을 보장할 때만 MFnDependencyNode로 조회한다. 워커면
+// 빈 문자열로 둔다.
+DgContext computeContext(const MPxNode& node, const char* nodeType) {
+    DgContext ctx;
+    ctx.nodeType = nodeType;
+    ctx.activeCommand = onfix::activeCommand();
+    if (isMainThread()) {
+        // catch 블록 안에서(이미 예외가 한 번 난 상태에서) 부르므로, 이
+        // 조회 자체가 또 실패해도 Maya 콜백 경계를 못 넘게 한 번 더 감싼다.
+        try {
+            MFnDependencyNode fn(node.thisMObject());
+            ctx.axisOrTarget = fn.name().asChar();
+        } catch (...) {
+        }
+    }
+    return ctx;
+}
+
+}  // namespace
 
 MStatus createCapabilityOut(CapabilityOutAttrs& attrs) {
     // capValue/capMin/capMax carry radians here on purpose, as plain doubles
@@ -84,7 +112,8 @@ MStatus MaroRotationNode::compute(const MPlug& plug, MDataBlock& data) {
         return MS::kSuccess;
     } catch (...) {
         maro::BoadMaro::error("MaroRotationNode.compute.UnknownException",
-                              "Maro: maroRotation compute failed.");
+                              "Maro: maroRotation compute failed.",
+                              computeContext(*this, "maroRotation"));
         return MS::kFailure;
     }
 }
@@ -188,7 +217,8 @@ MStatus MaroLimitNode::compute(const MPlug& plug, MDataBlock& data) {
         return MS::kSuccess;
     } catch (...) {
         maro::BoadMaro::error("MaroLimitNode.compute.UnknownException",
-                              "Maro: maroLimit compute failed.");
+                              "Maro: maroLimit compute failed.",
+                              computeContext(*this, "maroLimit"));
         return MS::kFailure;
     }
 }
@@ -233,7 +263,8 @@ MStatus MaroSensorDirectionNode::compute(const MPlug& plug, MDataBlock& data) {
         return MS::kSuccess;
     } catch (...) {
         maro::BoadMaro::error("MaroSensorDirectionNode.compute.UnknownException",
-                              "Maro: maroSensorDirection compute failed.");
+                              "Maro: maroSensorDirection compute failed.",
+                              computeContext(*this, "maroSensorDirection"));
         return MS::kFailure;
     }
 }
@@ -294,7 +325,8 @@ MStatus MaroSensorRangeNode::compute(const MPlug& plug, MDataBlock& data) {
         return MS::kSuccess;
     } catch (...) {
         maro::BoadMaro::error("MaroSensorRangeNode.compute.UnknownException",
-                              "Maro: maroSensorRange compute failed.");
+                              "Maro: maroSensorRange compute failed.",
+                              computeContext(*this, "maroSensorRange"));
         return MS::kFailure;
     }
 }
