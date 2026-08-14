@@ -1,10 +1,49 @@
 #include "MaroDiag.h"
 
+#include <atomic>
+#include <cstdlib>
+#include <filesystem>
 #include <utility>
 
 #include <maya/MGlobal.h>
 
+#include "maro_diag/BookStore.h"
+#include "maro_diag/ErrorHash.h"
+
 namespace maro {
+
+namespace {
+
+std::atomic<std::size_t> g_freshAnalysisCount{0};
+
+struct BookPaths {
+    std::filesystem::path canonical;
+    std::filesystem::path spill;
+};
+
+// 기본은 원안(Maro_DebugUtility/book_Maro.cpp)과 같은 위치다:
+// internalVar -userAppDir. MARO_DIAG_BOOK_DIR이 설정돼 있으면 그것을
+// 우선한다 -- 테스트가 매 실행마다 깨끗한 book으로 시작하기 위한 재정의다.
+const BookPaths& bookPaths() {
+    static const BookPaths paths = [] {
+        BookPaths p;
+        std::filesystem::path dir;
+        if (const char* override_ = std::getenv("MARO_DIAG_BOOK_DIR")) {
+            dir = override_;
+        } else {
+            const MString userAppDir =
+                MGlobal::executeCommandStringResult("internalVar -userAppDir");
+            dir = userAppDir.length() > 0 ? std::filesystem::path(userAppDir.asChar())
+                                           : std::filesystem::temp_directory_path();
+        }
+        p.canonical = dir / "maro_knowledge.jsonl";
+        p.spill = dir / "maro_knowledge.spill.jsonl";
+        return p;
+    }();
+    return paths;
+}
+
+}  // namespace
 
 std::vector<DiagRecord>& BoadMaro::stream() {
     static std::vector<DiagRecord> s_stream;
@@ -49,16 +88,52 @@ void BoadMaro::devInfo(const MString& message) {
 
 void BoadMaro::error(const std::string& siteTag, const MString& message,
                       const DgContext& context) {
-    // book 연동은 Task 5. 지금은 항상 "새 분석"으로 취급하고 스트림에만 남긴다.
-    (void)siteTag;
     DiagRecord rec;
     rec.severity = DiagSeverity::Error;
     rec.context = context;
-    rec.message = message.asChar();
-    MGlobal::displayError(MString("[Maro-Error] ") + message);
+
+    try {
+        const std::string hash = hashError(siteTag);
+        rec.errorHash = hash;
+
+        const BookPaths& paths = bookPaths();
+        const BookStore store = BookStore::loadMerged(paths.canonical, paths.spill);
+
+        BookEntry entry;
+        if (store.query(hash, entry)) {
+            rec.message = entry.analysis + "\n(Maro: book에 있는 과거 분석에서 즉답)";
+            rec.remedy = entry.remedy;
+            rec.servedFromBook = true;
+        } else {
+            rec.message = message.asChar();
+            rec.servedFromBook = false;
+
+            BookEntry fresh;
+            fresh.analysis = rec.message;
+            fresh.context = context;
+            BookStore::appendToSpill(paths.spill, hash, fresh);
+            ++g_freshAnalysisCount;
+        }
+    } catch (const std::exception& e) {
+        // book이 죽어도 진단은 죽지 않는다 (스펙 §3.6). 이 실패 자체는
+        // 재귀적으로 error()를 부르지 않고 devInfo로만 남긴다.
+        rec.message = message.asChar();
+        rec.servedFromBook = false;
+        ++g_freshAnalysisCount;
+        devInfo(MString("Maro: book 조회/기록 실패, 로컬 기록으로 진행: ") + e.what());
+    } catch (...) {
+        rec.message = message.asChar();
+        rec.servedFromBook = false;
+        ++g_freshAnalysisCount;
+        devInfo("Maro: book 조회/기록에서 알 수 없는 오류, 로컬 기록으로 진행.");
+    }
+
+    MGlobal::displayError(MString("[Maro-Error] ") + MString(rec.message.c_str()));
     std::lock_guard<std::mutex> lock(mutex());
     stream().push_back(std::move(rec));
 }
+
+std::size_t BoadMaro::freshAnalysisCount() { return g_freshAnalysisCount.load(); }
 
 std::size_t BoadMaro::recordCount() {
     std::lock_guard<std::mutex> lock(mutex());
@@ -73,6 +148,7 @@ DiagRecord BoadMaro::recordAt(std::size_t indexFromEnd) {
 void BoadMaro::resetForTest() {
     std::lock_guard<std::mutex> lock(mutex());
     stream().clear();
+    g_freshAnalysisCount = 0;
 }
 
 namespace {

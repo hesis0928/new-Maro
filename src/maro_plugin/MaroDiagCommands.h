@@ -35,4 +35,11 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
+// 인자 없음. book 캐시 미스로 실제 새 분석을 기록한 누적 횟수.
+class MaroDiagAnalysisCountCommand : public MPxCommand {
+public:
+    static void* creator();
+    MStatus doIt(const MArgList& args) override;
+};
+
 }  // namespace maro

@@ -150,4 +150,19 @@ MStatus MaroDiagQueryCommand::doIt(const MArgList& args) {
     }
 }
 
+void* MaroDiagAnalysisCountCommand::creator() { return new MaroDiagAnalysisCountCommand(); }
+
+MStatus MaroDiagAnalysisCountCommand::doIt(const MArgList& /*args*/) {
+    try {
+        setResult(static_cast<int>(BoadMaro::freshAnalysisCount()));
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(MString("Maro: maroDiagAnalysisCount failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError("Maro: maroDiagAnalysisCount failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
 }  // namespace maro

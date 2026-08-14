@@ -47,6 +47,9 @@ public:
     // push_back(재할당 포함)과 경합하는 매달린 참조가 될 수 있다.
     static DiagRecord recordAt(std::size_t indexFromEnd);
 
+    // book에서 실제로 새로 분석한(캐시 미스) 횟수. "기지 에러 즉답" 검증에 쓴다.
+    static std::size_t freshAnalysisCount();
+
     // 테스트 전용. 프로덕션 코드는 부르지 않는다.
     static void resetForTest();
 
