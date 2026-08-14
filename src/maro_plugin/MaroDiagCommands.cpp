@@ -19,6 +19,13 @@ const char* kSiteTagFlag = "-st";
 const char* kSiteTagFlagLong = "-siteTag";
 const char* kIndexFlag = "-i";
 const char* kIndexFlagLong = "-index";
+// "-h"는 Maya에서 관례상 도움말(-help) 짧은형으로 쓰인다. 실측 결과는 아래
+// newSyntax()의 addFlag 상태 로그로 남긴다 -- 안전한 쪽인 "-hs"를 쓴다
+// (테스트는 항상 "-hash" 긴 이름을 쓰므로 짧은형을 바꿔도 비용이 없다).
+const char* kHashFlag = "-hs";
+const char* kHashFlagLong = "-hash";
+const char* kRemedyFlag = "-r";
+const char* kRemedyFlagLong = "-remedy";
 
 MString severityToString(DiagSeverity s) {
     switch (s) {
@@ -161,6 +168,60 @@ MStatus MaroDiagAnalysisCountCommand::doIt(const MArgList& /*args*/) {
         return MS::kFailure;
     } catch (...) {
         MGlobal::displayError("Maro: maroDiagAnalysisCount failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
+void* MaroDiagRegisterRemedyCommand::creator() { return new MaroDiagRegisterRemedyCommand(); }
+
+MSyntax MaroDiagRegisterRemedyCommand::newSyntax() {
+    MSyntax syntax;
+    // 반환 상태를 반드시 확인한다 -- addFlag가 조용히 실패하면(예: 짧은형이
+    // Maya 예약 플래그와 충돌) 이 플래그는 syntax에 없는 것과 같아져서, 이후
+    // MArgDatabase가 사용자가 준 인자를 "알 수 없는 플래그"로 거부한다. 실측:
+    // 이 플러그인의 다른 커맨드로 MEL에서 등록되지 않은 "-h"를 호출하면
+    // "Invalid flag '-h'"로 거부됐다 -- Maya가 "-h"를 전역적으로 가로채 도움말을
+    // 띄우는 것은 아니었지만, "-h"는 관례상 -help의 짧은형이라 사용자 혼동
+    // 소지가 남는다. 테스트는 항상 "-hash" 긴 이름만 쓰므로("hash=..."),
+    // 짧은형을 "-hs"로 바꿔 그 위험을 아예 피했다 -- 비용이 없다.
+    MStatus hashStatus = syntax.addFlag(kHashFlag, kHashFlagLong, MSyntax::kString);
+    if (!hashStatus) {
+        MGlobal::displayWarning(
+            MString("Maro: maroDiagRegisterRemedy failed to register ") + kHashFlagLong +
+            " flag: " + hashStatus.errorString());
+    }
+    MStatus remedyStatus = syntax.addFlag(kRemedyFlag, kRemedyFlagLong, MSyntax::kString);
+    if (!remedyStatus) {
+        MGlobal::displayWarning(
+            MString("Maro: maroDiagRegisterRemedy failed to register ") + kRemedyFlagLong +
+            " flag: " + remedyStatus.errorString());
+    }
+    return syntax;
+}
+
+MStatus MaroDiagRegisterRemedyCommand::doIt(const MArgList& args) {
+    try {
+        MStatus status;
+        MArgDatabase argData(newSyntax(), args, &status);
+        if (!status) return status;
+
+        if (!argData.isFlagSet(kHashFlag) || !argData.isFlagSet(kRemedyFlag)) {
+            MGlobal::displayError("Maro: maroDiagRegisterRemedy needs -hash and -remedy.");
+            return MS::kFailure;
+        }
+
+        MString hash;
+        MString remedy;
+        argData.getFlagArgument(kHashFlag, 0, hash);
+        argData.getFlagArgument(kRemedyFlag, 0, remedy);
+
+        BoadMaro::registerRemedy(hash.asChar(), remedy);
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(MString("Maro: maroDiagRegisterRemedy failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError("Maro: maroDiagRegisterRemedy failed with unknown error.");
         return MS::kFailure;
     }
 }

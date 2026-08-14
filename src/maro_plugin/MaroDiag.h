@@ -50,6 +50,12 @@ public:
     // book에서 실제로 새로 분석한(캐시 미스) 횟수. "기지 에러 즉답" 검증에 쓴다.
     static std::size_t freshAnalysisCount();
 
+    // 실패 해시에 해법을 등록한다. 이미 book에 있는 항목이면 분석은 남기고
+    // 해법만 갱신한다. 아직 없는 해시면 분석 없이 해법만 있는 항목을 새로
+    // 만든다 (사용자가 스스로 고친 뒤 등록하는 경우 -- 스펙 §4.3 "해법이
+    // 없는 에러는 ... 사용자가 등록할 수 있게 한다").
+    static void registerRemedy(const std::string& errorHash, const MString& remedyText);
+
     // 테스트 전용. 프로덕션 코드는 부르지 않는다.
     static void resetForTest();
 

@@ -42,4 +42,13 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
+// -hash <string> -remedy <string>. 위 세 커맨드와 달리 이건 테스트 전용
+// 도구가 아니다 -- 사용자가 스스로 고친 해법을 book에 등록하는 실제 진입점.
+class MaroDiagRegisterRemedyCommand : public MPxCommand {
+public:
+    static void* creator();
+    static MSyntax newSyntax();
+    MStatus doIt(const MArgList& args) override;
+};
+
 }  // namespace maro

@@ -142,6 +142,14 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroDiagRegisterRemedy",
+                                    maro::MaroDiagRegisterRemedyCommand::creator,
+                                    maro::MaroDiagRegisterRemedyCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagRegisterRemedy");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -158,6 +166,7 @@ MStatus uninitializePlugin(MObject obj) {
     maro::shutdownBridge();
     maro::MaroDeleteWatcher::uninstall();
 
+    plugin.deregisterCommand("maroDiagRegisterRemedy");
     plugin.deregisterCommand("maroDiagAnalysisCount");
     plugin.deregisterCommand("maroDiagQuery");
     plugin.deregisterCommand("maroDiagCount");

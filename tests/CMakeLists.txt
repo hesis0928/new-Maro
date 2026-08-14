@@ -97,7 +97,8 @@ if(MARO_BUILD_PLUGIN)
     # 플러그인만 있으면 되는 테스트. robustness는 순수 DG 조작/평가만 하고
     # 브리지(rclcpp)를 켜지 않으므로 이 그룹에 속한다.
     foreach(maya_test load axis_node binding capability_stack delete_rules
-                      robustness diag_boad diag_onfix diag_book)
+                      robustness diag_boad diag_onfix diag_book diag_remedy
+                      diag_degraded)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
