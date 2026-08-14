@@ -2,14 +2,18 @@
 나오고 재분석(신규 분석 카운트 증가)이 일어나지 않는지 확인한다."""
 import os
 import sys
-import tempfile
 
 import maya.standalone
 
-# book 파일을 이 테스트 전용 임시 디렉터리로 돌린다. 실제
-# internalVar -userAppDir를 쓰면 반복 실행마다 지식이 쌓여 재현이 안 된다.
-os.environ["MARO_DIAG_BOOK_DIR"] = tempfile.mkdtemp(prefix="maro_diag_book_")
-
+# 리뷰(carried-forward Minor): 예전에는 여기서 tempfile.mkdtemp()로 자기만의
+# book 디렉터리를 만들어 MARO_DIAG_BOOK_DIR을 덮어썼다. 그러면 CMake가 이미
+# 이 테스트 전용으로 준 디렉터리(tests/CMakeLists.txt의 MARO_TEST_BOOK_ROOT,
+# maya_diag_book_root_reset fixture가 스위트 시작 시 통째로 비운다)를 쓰지
+# 않게 되어 그 fixture가 이 테스트에는 무의미해지고, 실행마다 새 임시
+# 디렉터리가 하나씩 새서 정리되지 않았다. 이 테스트는 test_diag_degraded.py
+# 처럼 "쓸 수 없는 경로" 같은 특수 구조가 필요 없다 -- 그냥 비어 있는 book
+# 디렉터리 하나면 충분하므로 CMake가 이미 설정해 둔 MARO_DIAG_BOOK_DIR을
+# 그대로 쓴다.
 maya.standalone.initialize(name="python")
 
 import maya.cmds as cmds  # noqa: E402

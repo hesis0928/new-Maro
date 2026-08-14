@@ -116,6 +116,26 @@ std::mutex& BoadMaro::mutex() {
     return s_mutex;
 }
 
+// Finding I4: book(스필) 파일 I/O와 그것을 거울처럼 비추는 세션 캐시를
+// 함께 지키는 전용 뮤텍스. 레코드 뮤텍스(mutex())와는 별개다 -- 그 뮤텍스는
+// "MGlobal::display* 동안 쥐지 않는다/devInfo·warn을 부를 때 쥐지 않는다"는
+// 엄격한 규율이 이미 있고, book 작업(파일 열기, JSON 파싱, append)은 그
+// 규율과 무관한 별개의 관심사라 같은 락에 얹으면 두 규율이 뒤섞인다.
+std::mutex& BoadMaro::bookMutex() {
+    static std::mutex s_bookMutex;
+    return s_bookMutex;
+}
+
+// Finding M3: "이 세션에서 book에 있다고 이미 확인된 해시"만 담는다. 캐시에
+// 없다고 해서 book에 없다는 뜻은 아니다 -- 그냥 이 세션이 아직 확인 안 했다는
+// 뜻이다. 아직 book에 없는(미스인) 해시는 절대 여기 담기지 않는다: 그래야
+// book이 쓰기 불가능한 동안의 반복 실패가 매번 정직하게 "새 분석"으로
+// 집계된다(test_diag_degraded.py). bookMutex()로 보호된다.
+std::unordered_map<std::string, BookEntry>& BoadMaro::bookCache() {
+    static std::unordered_map<std::string, BookEntry> s_bookCache;
+    return s_bookCache;
+}
+
 void BoadMaro::info(const MString& message) {
     DiagRecord rec;
     rec.severity = DiagSeverity::Info;
@@ -183,43 +203,84 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         const std::string hash = hashError(siteTag);
         rec.errorHash = hash;
 
-        const BookPaths& paths = bookPaths();
-        const BookStore store = BookStore::loadMerged(paths.canonical, paths.spill);
+        // Finding I4/M3: book 파일(정본+스필) I/O와 그것을 거울처럼 비추는
+        // 세션 캐시를 하나의 book 뮤텍스로 직렬화한다. Task 7 이후
+        // compute() 여럿이 워커 스레드에서 동시에 여기 도달할 수 있다
+        // (MaroDiag.h 클래스 주석 참고) -- 이 락 없이는 appendToSpill의
+        // "마지막 바이트 확인 후 개행 삽입" TOCTOU와 스트림 삽입 두 번
+        // (ofs << dump() << '\n')이 서로 다른 스레드 사이에서 겹쳐 book
+        // 파일이 깨질 수 있었다. 이 lock_guard는 try 블록 스코프에 묶여
+        // 있으므로, 정상 종료든 아래에서 예외가 새 스택이 되감기든 catch
+        // 절이 도는 시점에는 이미 풀려 있다 -- catch 블록의 devInfo()가
+        // (레코드 뮤텍스를 스스로 잡으므로) book 뮤텍스와 얽힐 일이 없다.
+        std::lock_guard<std::mutex> bookLock(bookMutex());
 
-        BookEntry entry;
-        if (store.query(hash, entry)) {
-            // 리뷰 Finding C1: 여기서 예전에는 message를 entry.analysis(과거
-            // 분석 텍스트)로 덮어썼다. 해시는 실패의 "자리와 종류"만 같음을
-            // 보장할 뿐(ErrorHash.h 계약) 이번 발생에 관여한 구체적 노드
-            // 이름·값까지 같다고는 보장하지 않으므로, 그건 이번 발생과 무관한
-            // (심지어 이미 씬에 없는) 대상을 마치 방금 일어난 일처럼 사용자
-            // 눈앞에 내놓는 것이었다. message는 book 히트 여부와 무관하게
-            // 언제나 이번 호출이 실제로 넘긴, 지금 일어난 일이다.
-            //
-            // 과거 분석은 사라지지 않는다 -- priorAnalysis라는 별도 필드에
-            // 담아 "지금 무슨 일이 났는지"와 "이 자리에서 과거엔 뭘로
-            // 밝혀졌는지"를 한 레코드 안에 나란히 둔다(진단 패널 Layer B가
-            // 그대로 읽을 모양). entry.analysis가 비어 있을 수도 있다 --
-            // registerRemedy()가 아직 book에 없는 해시에 해법만 등록하면
-            // 분석 없는 항목이 만들어진다(사용자가 스스로 고친 뒤 등록하는
-            // 경우). 그때 priorAnalysis는 그냥 빈 문자열로 둔다(있는 그대로
-            // "과거 분석 없음"). 해법(remedy)과 servedFromBook은 두 경우
-            // 모두 그대로 적용한다.
+        // 캐시 먼저 본다 -- 있으면 파일을 전혀 건드리지 않는다 (Finding M3:
+        // 매 틱 같은 실패를 내는 compute()/onTimer가 매번 병합 읽기 +
+        // 스필 append를 하는 것을 막는다). 캐시에 없다고 해서 book에 없다는
+        // 뜻은 아니다(다른 프로세스/이 프로세스의 과거 세션이 이미 썼을 수
+        // 있다) -- 그래서 캐시 미스는 항상 디스크를 확인한다. 아직 book에
+        // 없는(미스인) 해시는 절대 캐시에 담기지 않는다: 그래야 book이 쓰기
+        // 불가능한 동안의 반복 실패가 매번 정직하게 "새 분석"으로 집계된다
+        // (test_diag_degraded.py) -- 캐시는 파일 I/O만 건너뛸 뿐 회계까지
+        // 건너뛰면 안 된다.
+        const auto cacheIt = bookCache().find(hash);
+        if (cacheIt != bookCache().end()) {
+            const BookEntry& entry = cacheIt->second;
             rec.message = message.asChar();
             rec.priorAnalysis = entry.analysis;
             rec.remedy = entry.remedy;
             rec.servedFromBook = true;
         } else {
-            rec.message = message.asChar();
-            rec.servedFromBook = false;
+            const BookPaths& paths = bookPaths();
+            const BookStore store = BookStore::loadMerged(paths.canonical, paths.spill);
 
-            BookEntry fresh;
-            fresh.analysis = rec.message;
-            fresh.context = context;
-            if (!BookStore::appendToSpill(paths.spill, hash, fresh)) {
-                bookUnwritable = true;
+            BookEntry entry;
+            if (store.query(hash, entry)) {
+                // 리뷰 Finding C1: 여기서 예전에는 message를 entry.analysis(과거
+                // 분석 텍스트)로 덮어썼다. 해시는 실패의 "자리와 종류"만 같음을
+                // 보장할 뿐(ErrorHash.h 계약) 이번 발생에 관여한 구체적 노드
+                // 이름·값까지 같다고는 보장하지 않으므로, 그건 이번 발생과 무관한
+                // (심지어 이미 씬에 없는) 대상을 마치 방금 일어난 일처럼 사용자
+                // 눈앞에 내놓는 것이었다. message는 book 히트 여부와 무관하게
+                // 언제나 이번 호출이 실제로 넘긴, 지금 일어난 일이다.
+                //
+                // 과거 분석은 사라지지 않는다 -- priorAnalysis라는 별도 필드에
+                // 담아 "지금 무슨 일이 났는지"와 "이 자리에서 과거엔 뭘로
+                // 밝혀졌는지"를 한 레코드 안에 나란히 둔다(진단 패널 Layer B가
+                // 그대로 읽을 모양). entry.analysis가 비어 있을 수도 있다 --
+                // registerRemedy()가 아직 book에 없는 해시에 해법만 등록하면
+                // 분석 없는 항목이 만들어진다(사용자가 스스로 고친 뒤 등록하는
+                // 경우). 그때 priorAnalysis는 그냥 빈 문자열로 둔다(있는 그대로
+                // "과거 분석 없음"). 해법(remedy)과 servedFromBook은 두 경우
+                // 모두 그대로 적용한다.
+                rec.message = message.asChar();
+                rec.priorAnalysis = entry.analysis;
+                rec.remedy = entry.remedy;
+                rec.servedFromBook = true;
+                // 디스크에서 확인된 히트이므로 이 세션 동안은 다시 디스크를
+                // 볼 필요가 없다 -- 캐시에 채운다.
+                bookCache().emplace(hash, entry);
+            } else {
+                rec.message = message.asChar();
+                rec.servedFromBook = false;
+
+                BookEntry fresh;
+                fresh.analysis = rec.message;
+                fresh.context = context;
+                if (BookStore::appendToSpill(paths.spill, hash, fresh)) {
+                    // 쓰기가 실제로 성공했을 때만 캐시한다. 실패했으면(book
+                    // 불가) book에는 진짜로 아무 것도 없으므로, 캐시했다가는
+                    // 다음 번 동일 실패를 거짓으로 "book 히트"라 답하게 된다
+                    // -- test_diag_degraded.py가 요구하는 "book 불가 동안은
+                    // 매 발생이 새 분석"이라는 정직성이 바로 이 분기에 달려
+                    // 있다.
+                    bookCache().emplace(hash, fresh);
+                } else {
+                    bookUnwritable = true;
+                }
+                ++g_freshAnalysisCount;
             }
-            ++g_freshAnalysisCount;
         }
     } catch (const std::exception& e) {
         // book이 죽어도 진단은 죽지 않는다 (스펙 §3.6). 이 실패 자체는
@@ -277,7 +338,14 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
 std::size_t BoadMaro::freshAnalysisCount() { return g_freshAnalysisCount.load(); }
 
 void BoadMaro::registerRemedy(const std::string& errorHash, const MString& remedyText) {
+    // Finding I4: error()와 같은 book 뮤텍스로 book 파일 I/O + 캐시를
+    // 보호한다. 어느 쪽(error()의 캐시 미스 경로, 여기)이 먼저 book을 만지든
+    // 같은 락으로 직렬화되어야, 두 스레드가 스필에 동시에 append하는 경합이
+    // 사라진다.
+    bool bookUnwritable = false;
     try {
+        std::lock_guard<std::mutex> bookLock(bookMutex());
+
         const BookPaths& paths = bookPaths();
         const BookStore store = BookStore::loadMerged(paths.canonical, paths.spill);
 
@@ -288,14 +356,33 @@ void BoadMaro::registerRemedy(const std::string& errorHash, const MString& remed
         // 여기서도 book이 쓰기 불가능할 수 있다 -- error()의 캐시 미스 경로와
         // 같은 래치를 공유해서, 어느 쪽이 먼저 실패를 발견하든 세션당 한 번만
         // 경고한다("book을 쓸 수 없다"는 사실은 호출 경로와 무관한 하나의
-        // 사실이다).
+        // 사실이다). 실제 warn() 호출은 아래에서, 이 락을 놓은 뒤에 한다.
         if (!BookStore::appendToSpill(paths.spill, errorHash, entry)) {
-            warnBookUnwritableOnce(paths.spill);
+            bookUnwritable = true;
         }
+
+        // Finding M3: 이 해시의 캐시 항목을 무효화한다. error()가 이전에
+        // 이 해시를 채워 뒀을 수 있는데, 그대로 두면 방금 등록한 해법을
+        // 캐시된 옛 항목(해법 없음)이 계속 가려서 이번 세션 안에서는 영원히
+        // 보이지 않는다. 지우기만 하고 새 값으로 다시 채우지 않는 이유:
+        // 위 appendToSpill이 실패했을 수 있고(book 불가), 그 경우 디스크의
+        // 실제 상태보다 캐시가 앞서가는 상태를 만들지 않기 위해서다 -- 다음
+        // 조회가 디스크를 다시 확인하게 둔다.
+        bookCache().erase(errorHash);
     } catch (const std::exception& e) {
         devInfo(MString("Maro: 해법 등록 실패: ") + e.what());
+        return;
     } catch (...) {
         devInfo("Maro: 해법 등록에서 알 수 없는 오류.");
+        return;
+    }
+
+    // error()와 같은 이유로 락 밖에서 부른다: warn()은 레코드 뮤텍스를
+    // 스스로 잡는다. book 뮤텍스는 위 try 블록이 끝나며 이미 풀렸으므로
+    // 얽히진 않지만, book I/O와 화면/기록 에코라는 두 관심사를 여기서도
+    // 명확히 분리해 둔다 (error()와 같은 규율).
+    if (bookUnwritable) {
+        warnBookUnwritableOnce(bookPaths().spill);
     }
 }
 
@@ -310,9 +397,23 @@ DiagRecord BoadMaro::recordAt(std::size_t indexFromEnd) {
 }
 
 void BoadMaro::resetForTest() {
-    std::lock_guard<std::mutex> lock(mutex());
-    stream().clear();
+    // carried-forward Minor finding: 예전에는 레코드 스트림과
+    // freshAnalysisCount만 리셋하고 g_bookUnwritableWarned 래치와(이 배치가
+    // 추가한) book 캐시는 그대로 남겨 뒀다 -- "테스트 전용 리셋 훅"이라는
+    // 이름과 실제 동작이 어긋났다. 지금은 콜러가 없지만(grep 확인됨), 이름이
+    // 약속하는 대로 boad 세션 상태 전부를 되돌리는 편이 나중에 누가 이걸
+    // 실제로 쓰기 시작했을 때 "일부만 리셋됐다"는 조용한 함정을 남기지
+    // 않는다.
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        stream().clear();
+    }
+    {
+        std::lock_guard<std::mutex> bookLock(bookMutex());
+        bookCache().clear();
+    }
     g_freshAnalysisCount = 0;
+    g_bookUnwritableWarned = false;
 }
 
 namespace {

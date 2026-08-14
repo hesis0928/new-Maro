@@ -31,6 +31,11 @@ assert previous[0] == "info"
 assert previous[1] == "hello info"
 print("previous record OK")
 
+# 리뷰(carried-forward Minor): 이 파일만 unloadPlugin 전에
+# cmds.file(new=True, force=True)가 없었다 -- 프로젝트 전역 제약("Maya
+# tests must call cmds.file(new=True, force=True) before unloadPlugin")을
+# 다른 diag_* 형제들처럼 지킨다.
+cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
 print("teardown OK")

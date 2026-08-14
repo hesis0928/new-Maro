@@ -120,18 +120,36 @@ MaroCommandDeviceNode::MaroCommandDeviceNode() {}
 
 MaroCommandDeviceNode::~MaroCommandDeviceNode() {
     // 소멸자에서 예외가 새면 std::terminate다. 다른 콜백들과 같은 규칙.
+    //
+    // carried-forward Minor 2: 이 바깥 try/catch만으로는 충분하지 않았다.
+    // boad::error()는 자기 내부의 book 조회/기록만 try로 감싸고, 그 앞뒤의
+    // 문자열 조립(message.asChar(), MString 연결)과 레코드 벡터
+    // push_back(재할당 포함)은 그 try 밖에 있다 -- 즉 error() 자신도
+    // bad_alloc 등을 던질 수 있다. 여기는 이미 catch 절 안(스택 되감기
+    // 도중)이므로, 그 error() 호출이 새로 던지면 예외가 소멸자 밖으로
+    // 나가 std::terminate로 직행한다. 그래서 각 error() 호출을 한 번 더
+    // catch(...)로 감싸 무조건 삼킨다 -- 소멸자에서 더 할 수 있는 안전한
+    // 조치가 없으므로 조용히 넘기는 것이 유일한 선택이다.
     try {
         destroyMemoryPools();
     } catch (const std::exception& e) {
-        maro::BoadMaro::error(
-            "MaroCommandDeviceNode.destroyMemoryPools.Exception",
-            MString("Maro: command device destroyMemoryPools failed: ") + e.what(),
-            selfContext(thisMObject()));
+        try {
+            maro::BoadMaro::error(
+                "MaroCommandDeviceNode.destroyMemoryPools.Exception",
+                MString("Maro: command device destroyMemoryPools failed: ") + e.what(),
+                selfContext(thisMObject()));
+        } catch (...) {
+            // 삼킨다 -- 소멸자 밖으로는 아무것도 새면 안 된다.
+        }
     } catch (...) {
-        maro::BoadMaro::error(
-            "MaroCommandDeviceNode.destroyMemoryPools.UnknownException",
-            "Maro: command device destroyMemoryPools failed with unknown error.",
-            selfContext(thisMObject()));
+        try {
+            maro::BoadMaro::error(
+                "MaroCommandDeviceNode.destroyMemoryPools.UnknownException",
+                "Maro: command device destroyMemoryPools failed with unknown error.",
+                selfContext(thisMObject()));
+        } catch (...) {
+            // 삼킨다 -- 소멸자 밖으로는 아무것도 새면 안 된다.
+        }
     }
 }
 

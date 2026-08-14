@@ -20,14 +20,15 @@ mayapy 배치 모드의 display* 경로는 워커 호출을 관대하게 넘길 
 """
 import os
 import sys
-import tempfile
 
 import maya.standalone
 
-# error() 경로가 book을 건드리므로 이 테스트 전용 임시 디렉터리로 돌린다
-# (test_diag_book.py와 같은 이유). 여기 없으면 사용자의 실제 Maya prefs에
-# 스필이 쌓인다.
-os.environ["MARO_DIAG_BOOK_DIR"] = tempfile.mkdtemp(prefix="maro_diag_thread_")
+# 리뷰(carried-forward Minor): 예전에는 여기서 tempfile.mkdtemp()로 자기만의
+# book 디렉터리를 만들어 MARO_DIAG_BOOK_DIR을 덮어썼다 -- test_diag_book.py와
+# 같은 이유로, CMake가 이미 준 테스트 전용 디렉터리(및
+# maya_diag_book_root_reset fixture)를 무의미하게 만들고 임시 디렉터리를
+# 실행마다 하나씩 흘렸다. 이 테스트도 특수한 경로 구조가 필요 없으므로
+# CMake가 설정해 둔 MARO_DIAG_BOOK_DIR을 그대로 쓴다.
 
 maya.standalone.initialize(name="python")
 

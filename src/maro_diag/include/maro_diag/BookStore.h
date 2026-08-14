@@ -39,10 +39,30 @@ struct BookEntry {
 // 때문에 생기는 의도된 동작이지만, 필드 단위로 병합될 거라고 오해하기
 // 쉽다.
 //
-// 동시성 가정: 스필에 대한 append의 안전성은 OS의 append 원자성에 기댄다.
-// 지금은 플러그인 인스턴스가 하나뿐이라 문제되지 않지만, 이 가정은 코드
-// 어디에도 명시돼 있지 않았다 -- 여러 프로세스/스레드가 동시에 스필에 쓰는
-// 상황을 지원하려면 이 가정부터 다시 검토해야 한다.
+// 동시성: 이 클래스 자신(loadMerged/query/appendToSpill)은 스레드 안전을
+// 스스로 보장하지 않는다 -- 파일을 열고 읽고 쓰는 정적 함수 모음일 뿐,
+// 내부에 락이 없다. 그 대신 유일한 프로덕션 호출부인
+// maro::BoadMaro::error()/registerRemedy()(MaroDiag.cpp)가 book 전용
+// 뮤텍스(BoadMaro::bookMutex())로 이 클래스에 대한 모든 접근을 직렬화한다
+// -- 그래서 이 파일 자체에는 동시성 코드가 없다(Finding I4).
+//
+// 왜 필요해졌는가: Task 7이 MaroAxisNode::compute, 능력 노드 넷의 compute,
+// MaroCommandDeviceNode::compute를 전부 BoadMaro::error()로 옮겼고, Maya
+// 2026의 기본 평가 관리자(Parallel Evaluation Manager)는 그 compute()들을
+// 서로 다른 워커 스레드에서 동시에 돌릴 수 있다(tests/maya/test_diag_thread.py가
+// 워커에서 실제로 스필까지 닿는다는 것을 증명한다). 락 없이 두 스레드가
+// 같은 세션에서 동시에 이 클래스를 거치면, appendToSpill의 "마지막 바이트가
+// 개행인지 확인한 뒤 아니면 개행을 쓴다"는 검사-후-쓰기(TOCTOU)와, 그
+// 뒤의 `ofs << dump() << '\n'`(스트림 삽입 두 번, 한 버퍼에 들어갈 때만
+// 원자적)이 서로 겹쳐 스필 파일이 깨질 수 있었다 -- 로더가 깨진 줄을
+// 건너뛰므로 겉으로는 "책이 아무 말썽 없이 도는" 것처럼 보이지만, 그건
+// 설계가 아니라 운이었다.
+//
+// 여러 "프로세스"가 동시에 같은 스필에 쓰는 상황(예: 서로 다른 Maya 인스턴스
+// 두 개가 같은 MARO_DIAG_BOOK_DIR을 공유)은 여전히 이 락의 범위 밖이다 --
+// bookMutex()는 한 프로세스 안의 스레드끼리만 직렬화한다. 그 시나리오까지
+// 지원하려면 파일 락(예: OS 레벨 advisory lock) 같은 별도 메커니즘이
+// 필요하다.
 class BookStore {
 public:
     // 정본과 스필을 읽어 병합한다. 둘 다 없으면 빈 스토어를 돌려준다 --

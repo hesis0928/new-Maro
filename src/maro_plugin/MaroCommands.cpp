@@ -446,199 +446,214 @@ MSyntax MaroStartBridgeCommand::newSyntax() {
 
 MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
     maro::ScopedCommandContext ctxMarker("MaroStartBridgeCommand");
+    // Finding I5: 예전에는 여기 try가 없었다. 이 몸체는 boad::error()를
+    // 반복해서 부르는데, 그 내부의 문자열 조립/해시 계산/vector push_back
+    // 중 어느 하나가 bad_alloc을 던져도 잡아 줄 것이 없어 Maya 프로세스
+    // 전체가 죽었다 -- 형제 커맨드들(MaroBindAxisCommand 등)은 이미 이
+    // 모양을 갖추고 있었다. 마커는 밖에 둔다: catch 절 안에서도 boad::error가
+    // activeCommand를 채우려면 마커가 살아 있어야 한다.
+    try {
+        if (args.length() != 1) {
+            maro::BoadMaro::error("MaroStartBridgeCommand.WrongArgCount",
+                                  "Maro: maroStartBridge needs <robotName>.",
+                                  maro::onfix::capture("", "", ""));
+            return MS::kFailure;
+        }
 
-    if (args.length() != 1) {
-        maro::BoadMaro::error("MaroStartBridgeCommand.WrongArgCount",
-                              "Maro: maroStartBridge needs <robotName>.",
-                              maro::onfix::capture("", "", ""));
-        return MS::kFailure;
-    }
+        MStatus status;
+        const MString robotName = args.asString(0, &status);
+        if (!status) return status;
 
-    MStatus status;
-    const MString robotName = args.asString(0, &status);
-    if (!status) return status;
+        if (g_runtime && g_runtime->isRunning()) {
+            maro::BoadMaro::warn("Maro: bridge is already running.");
+            return MS::kSuccess;
+        }
 
-    if (g_runtime && g_runtime->isRunning()) {
-        maro::BoadMaro::warn("Maro: bridge is already running.");
+        // I3.3: devkit 헤더(MPxThreadedDeviceNode.h, "NOTE" 근처)는 어트리뷰트
+        // 갱신이 유휴 이벤트 큐에 얹혀 있고, 그 큐가 배치 모드에서 돌지 않는다고
+        // 명시한다. 아래 강제 조회(있는 곳에 주석 참고)는 스레드를 한 번 킥할
+        // 뿐 그 큐를 대신하지 못하므로, 배치/헤드리스에서는 인바운드(ROS 2 ->
+        // Maya)가 절대 전달되지 않는다. 아웃바운드 발행은 MTimerMessage 기반이라
+        // 이 제약과 무관하고 테스트도 헤드리스로 그걸 검증하므로, 시작을
+        // 거부하지 않고 경고만 남긴다 -- 그래야 나중에 누가 처음부터 다시
+        // 디버깅하지 않는다.
+        if (MGlobal::mayaState() != MGlobal::kInteractive) {
+            maro::BoadMaro::warn(
+                "Maro: Maya is not running interactively (batch/headless mode). "
+                "MPxThreadedDeviceNode relies on Maya's idle event queue for "
+                "attribute updates, and that queue does not run in this mode, "
+                "so inbound ROS 2 commands will NOT be delivered. Outbound "
+                "publishing is unaffected.");
+        }
+
+        g_runtime = std::make_unique<MaroRosRuntime>();
+        if (!g_runtime->start(robotName.asChar())) {
+            g_runtime.reset();
+            maro::BoadMaro::error(
+                "MaroStartBridgeCommand.RuntimeStartFailed",
+                "Maro: could not start the ROS 2 bridge. Check that the ROS 2 "
+                "runtime DLLs sit next to the plugin.",
+                maro::onfix::capture("", "", robotName));
+            return MS::kFailure;
+        }
+
+        status = MaroPump::start(*g_runtime);
+        if (!status) {
+            g_runtime->stop();
+            g_runtime.reset();
+            maro::BoadMaro::error("MaroStartBridgeCommand.PumpStartFailed",
+                                  "Maro: could not start the main-thread pump.",
+                                  maro::onfix::capture("", "", robotName));
+            return status;
+        }
+
+        // 수신 노드. Maya가 스레드를 만들고 관리한다 -- 우리는 만들지 않는다.
+        MDGModifier createModifier;
+        MObject deviceObj = createModifier.createNode(MaroCommandDeviceNode::id, &status);
+        if (!status) {
+            MaroPump::stop();
+            g_runtime->stop();
+            g_runtime.reset();
+            maro::BoadMaro::error("MaroStartBridgeCommand.CreateDeviceNodeFailed",
+                                  "Maro: could not create the command device node.",
+                                  maro::onfix::capture("maroCommandDevice", "", robotName));
+            return status;
+        }
+        status = createModifier.doIt();
+        if (!status) {
+            // 아래 devicePtr == nullptr 분기와 똑같은 경합이다: createNode()가
+            // 이미 호출됐으므로(doIt() 실패 여부와 무관하게) 디바이스 스레드가
+            // 이미 살아있을 수 있고, 여기서처럼 g_runtime->stop()을 직접 부르면
+            // 그 스레드 밑에서 rclcpp::shutdown()이 도는 경합 -- shutdownBridge()
+            // 가 폴링으로 막으려는 바로 그 상황 -- 을 재현한다. 만든 노드를
+            // undoIt()으로 먼저 되돌리고(안 그러면 노드가 씬에 남아 플러그인
+            // 언로드를 막는다), 나머지 정리는 shutdownBridge()에 맡긴다.
+            // g_commandDeviceHandle은 이 지점에서 아직 세팅되지 않았으므로
+            // shutdownBridge()의 "핸들로 노드 지우기" 단계는 아무 일도 하지
+            // 않는다 -- 중복 삭제가 아니다.
+            const MStatus undoStatus = createModifier.undoIt();
+            if (!undoStatus) {
+                maro::BoadMaro::error(
+                    "MaroStartBridgeCommand.UndoDeviceNodeFailedAfterDgAdd",
+                    "Maro: could not undo command device node creation; a "
+                    "stray node may remain and block plugin unload.",
+                    maro::onfix::capture("maroCommandDevice", "", robotName));
+            }
+            shutdownBridge();
+            maro::BoadMaro::error("MaroStartBridgeCommand.AddDeviceNodeToDgFailed",
+                                  "Maro: could not add the command device node to the DG.",
+                                  maro::onfix::capture("maroCommandDevice", "", robotName));
+            return status;
+        }
+
+        MFnDependencyNode deviceFn(deviceObj);
+
+        // C1: 이 노드는 런타임 배관이지 사용자 데이터가 아니다. 표시해 두지
+        // 않으면 브리지를 켠 채로 씬을 저장했을 때 이 노드가 파일에 그대로
+        // 실린다. 다음에 그 씬을 열면 g_commandDeviceHandle은 빈 채로 시작하므로
+        // shutdownBridge()가 그 노드를 절대 찾지 못해 못 지우고, setRobotName()도
+        // 다시 불리지 않아 threadHandler()는 이름 없는 노드를 붙들고 영원히
+        // 돈다 -- 그리고 인스턴스가 남아 있으니 deregisterNode도 실패해
+        // 플러그인을 내릴 수 없다. 씬 저장 한 번으로 이 태스크가 고치려는
+        // "프로세스가 안 끝나는" 전례를 재현하는 셈이라, 실패해도 조용히
+        // 넘기지 않고 경고한다.
+        const MStatus doNotWriteStatus = deviceFn.setDoNotWrite(true);
+        if (!doNotWriteStatus) {
+            maro::BoadMaro::warn(
+                "Maro: could not mark the command device node non-persistent; "
+                "it may be saved into the scene file.");
+        }
+
+        auto* devicePtr = dynamic_cast<MaroCommandDeviceNode*>(deviceFn.userNode());
+        if (devicePtr == nullptr) {
+            // I6: createModifier.doIt()가 이미 이 노드를 DG에 넣었고,
+            // g_commandDeviceHandle은 아직 세팅 전이다. 여기서 그냥 리턴하면
+            // shutdownBridge()가 이 노드를 절대 찾지 못해 인스턴스가 씬에 남고,
+            // C1과 같은 이유로 플러그인 언로드가 막힌다. 만든 걸 되돌린다.
+            const MStatus undoStatus = createModifier.undoIt();
+            if (!undoStatus) {
+                maro::BoadMaro::error(
+                    "MaroStartBridgeCommand.UndoDeviceNodeFailedAfterNoInstance",
+                    "Maro: could not undo command device node creation; a "
+                    "stray node may remain and block plugin unload.",
+                    maro::onfix::capture("maroCommandDevice", "", robotName));
+            }
+
+            // Gap 2 (재검토): 위 undoIt()가 DG에서 노드를 지워도, 463행 근처
+            // 주석이 이미 짚었듯 threadHandler()는 노드 "생성" 시점에 이미
+            // 시작됐을 수 있다 -- live나 C++ 인스턴스 획득 여부와 무관하게.
+            // deleteNode() 계열 호출이 그 스레드의 종료를 동기적으로 보장한다는
+            // 근거가 devkit 문서에 없다는 사실도 shutdownBridge() 맨 위 설계
+            // 노트와 똑같이 적용된다. 그러므로 여기서 (예전 코드처럼)
+            // g_runtime->stop()을 직접 부르면, shutdownBridge()가 존재하는
+            // 이유였던 바로 그 경합 -- 살아있는 스레드 밑에서
+            // rclcpp::shutdown() -- 을 다른 호출부에서 그대로 재현하게 된다.
+            // shutdownBridge()를 부르는 게 안전한 이유: g_commandDeviceHandle은
+            // 이 지점에서 아직 세팅되지 않았으므로(무효 핸들, 464행 근처에서야
+            // 세팅된다) shutdownBridge()의 "핸들로 노드 지우기" 단계는 아무 일도
+            // 안 한다 (이미 위 undoIt()로 지웠다) -- 중복 삭제가 아니다. g_runtime은
+            // 이 지점에서 항상 non-null이다 (바로 위에서 make_unique와 start()가
+            // 성공했다). 그 뒤로는 shutdownBridge()의 폴링 + 가드된 g_runtime
+            // 정리(정상 정지 또는 진짜 누수)만 남는데, 그게 정확히 우리가 여기서
+            // 원하는 동작이다. 로직을 복제하는 대신 재사용한다.
+            shutdownBridge();
+            maro::BoadMaro::error("MaroStartBridgeCommand.DeviceNodeHasNoInstance",
+                                  "Maro: command device node has no C++ instance.",
+                                  maro::onfix::capture("maroCommandDevice", "", robotName));
+            return MS::kFailure;
+        }
+
+        MaroCommandDeviceNode::resetStats();
+        // setRobotName()은 메인 스레드에서, live를 켜기 전에 부른다. 스레드
+        // 자체는 노드 생성 시점에 이미 돌기 시작했을 수 있으므로 (문서상 live는
+        // 스레드 존재가 아니라 데이터 처리만 게이트한다), 로봇 이름은 뮤텍스로
+        // 안전하게 넘긴다 (MaroCommandDeviceNode::setRobotName 참고).
+        devicePtr->setRobotName(robotName);
+        g_commandDeviceHandle = MObjectHandle(deviceObj);
+
+        MDGModifier liveModifier;
+        liveModifier.newPlugValueBool(
+            deviceFn.findPlug(MPxThreadedDeviceNode::live, false), true);
+        status = liveModifier.doIt();
+        if (!status) {
+            maro::BoadMaro::error("MaroStartBridgeCommand.SetDeviceLiveFailed",
+                                  "Maro: could not set the command device live.",
+                                  maro::onfix::capture("maroCommandDevice", "live", robotName));
+            shutdownBridge();
+            return status;
+        }
+
+        // I3.1: 이 조회가 실제로 하는 일은 딱 하나다 -- DG의 지연 평가 규칙을
+        // 깨고 aCommandOut의 첫 compute()를 강제로 한 번 트리거해서, 그 안에서
+        // Maya가 백그라운드 스레드를 존재하게 만들도록 킥하는 것. 그게 전부다.
+        // 이후 반복 compute() 갱신 -- 즉 명령이 실제로 계속 흘러 들어오는 부분
+        // -- 은 이 호출과 무관하게 유휴(idle) 이벤트 큐가 담당하고, devkit
+        // 헤더가 명시하듯(MPxThreadedDeviceNode.h, "NOTE" 근처) 그 큐는 배치
+        // 모드에서 돌지 않는다. 그러므로 이 한 줄은 배치/헤드리스에서 인바운드
+        // 전달을 살리지 못한다 -- threadTicks가 0보다 커져서 위 배치 경고가
+        // 없다면 "건강해 보이지만 사실 죽어 있는" 상태를 만들 뿐이다.
+        // I3.2: 이 줄의 존재 이유 자체가 "안 그러면 조용히 실패한다"인데, 정작
+        // 이 줄 자체가 조용히 실패하면 안 되므로 MStatus를 받아 확인한다.
+        MStatus pullStatus;
+        deviceFn.findPlug(MaroCommandDeviceNode::aCommandOut, false).asBool(&pullStatus);
+        if (!pullStatus) {
+            maro::BoadMaro::warn(
+                "Maro: could not force the command device's first compute(); "
+                "inbound delivery may not start until something else "
+                "re-evaluates the node.");
+        }
+
+        maro::BoadMaro::info(MString("Maro: bridge running as '") + robotName + "'.");
         return MS::kSuccess;
-    }
-
-    // I3.3: devkit 헤더(MPxThreadedDeviceNode.h, "NOTE" 근처)는 어트리뷰트
-    // 갱신이 유휴 이벤트 큐에 얹혀 있고, 그 큐가 배치 모드에서 돌지 않는다고
-    // 명시한다. 아래 강제 조회(있는 곳에 주석 참고)는 스레드를 한 번 킥할
-    // 뿐 그 큐를 대신하지 못하므로, 배치/헤드리스에서는 인바운드(ROS 2 ->
-    // Maya)가 절대 전달되지 않는다. 아웃바운드 발행은 MTimerMessage 기반이라
-    // 이 제약과 무관하고 테스트도 헤드리스로 그걸 검증하므로, 시작을
-    // 거부하지 않고 경고만 남긴다 -- 그래야 나중에 누가 처음부터 다시
-    // 디버깅하지 않는다.
-    if (MGlobal::mayaState() != MGlobal::kInteractive) {
-        maro::BoadMaro::warn(
-            "Maro: Maya is not running interactively (batch/headless mode). "
-            "MPxThreadedDeviceNode relies on Maya's idle event queue for "
-            "attribute updates, and that queue does not run in this mode, "
-            "so inbound ROS 2 commands will NOT be delivered. Outbound "
-            "publishing is unaffected.");
-    }
-
-    g_runtime = std::make_unique<MaroRosRuntime>();
-    if (!g_runtime->start(robotName.asChar())) {
-        g_runtime.reset();
-        maro::BoadMaro::error(
-            "MaroStartBridgeCommand.RuntimeStartFailed",
-            "Maro: could not start the ROS 2 bridge. Check that the ROS 2 "
-            "runtime DLLs sit next to the plugin.",
-            maro::onfix::capture("", "", robotName));
+    } catch (const std::exception& e) {
+        maro::BoadMaro::error("MaroStartBridgeCommand.doIt.Exception",
+                              MString("Maro: maroStartBridge failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        maro::BoadMaro::error("MaroStartBridgeCommand.doIt.UnknownException",
+                              "Maro: maroStartBridge failed with unknown error.");
         return MS::kFailure;
     }
-
-    status = MaroPump::start(*g_runtime);
-    if (!status) {
-        g_runtime->stop();
-        g_runtime.reset();
-        maro::BoadMaro::error("MaroStartBridgeCommand.PumpStartFailed",
-                              "Maro: could not start the main-thread pump.",
-                              maro::onfix::capture("", "", robotName));
-        return status;
-    }
-
-    // 수신 노드. Maya가 스레드를 만들고 관리한다 -- 우리는 만들지 않는다.
-    MDGModifier createModifier;
-    MObject deviceObj = createModifier.createNode(MaroCommandDeviceNode::id, &status);
-    if (!status) {
-        MaroPump::stop();
-        g_runtime->stop();
-        g_runtime.reset();
-        maro::BoadMaro::error("MaroStartBridgeCommand.CreateDeviceNodeFailed",
-                              "Maro: could not create the command device node.",
-                              maro::onfix::capture("maroCommandDevice", "", robotName));
-        return status;
-    }
-    status = createModifier.doIt();
-    if (!status) {
-        // 아래 devicePtr == nullptr 분기와 똑같은 경합이다: createNode()가
-        // 이미 호출됐으므로(doIt() 실패 여부와 무관하게) 디바이스 스레드가
-        // 이미 살아있을 수 있고, 여기서처럼 g_runtime->stop()을 직접 부르면
-        // 그 스레드 밑에서 rclcpp::shutdown()이 도는 경합 -- shutdownBridge()
-        // 가 폴링으로 막으려는 바로 그 상황 -- 을 재현한다. 만든 노드를
-        // undoIt()으로 먼저 되돌리고(안 그러면 노드가 씬에 남아 플러그인
-        // 언로드를 막는다), 나머지 정리는 shutdownBridge()에 맡긴다.
-        // g_commandDeviceHandle은 이 지점에서 아직 세팅되지 않았으므로
-        // shutdownBridge()의 "핸들로 노드 지우기" 단계는 아무 일도 하지
-        // 않는다 -- 중복 삭제가 아니다.
-        const MStatus undoStatus = createModifier.undoIt();
-        if (!undoStatus) {
-            maro::BoadMaro::error(
-                "MaroStartBridgeCommand.UndoDeviceNodeFailedAfterDgAdd",
-                "Maro: could not undo command device node creation; a "
-                "stray node may remain and block plugin unload.",
-                maro::onfix::capture("maroCommandDevice", "", robotName));
-        }
-        shutdownBridge();
-        maro::BoadMaro::error("MaroStartBridgeCommand.AddDeviceNodeToDgFailed",
-                              "Maro: could not add the command device node to the DG.",
-                              maro::onfix::capture("maroCommandDevice", "", robotName));
-        return status;
-    }
-
-    MFnDependencyNode deviceFn(deviceObj);
-
-    // C1: 이 노드는 런타임 배관이지 사용자 데이터가 아니다. 표시해 두지
-    // 않으면 브리지를 켠 채로 씬을 저장했을 때 이 노드가 파일에 그대로
-    // 실린다. 다음에 그 씬을 열면 g_commandDeviceHandle은 빈 채로 시작하므로
-    // shutdownBridge()가 그 노드를 절대 찾지 못해 못 지우고, setRobotName()도
-    // 다시 불리지 않아 threadHandler()는 이름 없는 노드를 붙들고 영원히
-    // 돈다 -- 그리고 인스턴스가 남아 있으니 deregisterNode도 실패해
-    // 플러그인을 내릴 수 없다. 씬 저장 한 번으로 이 태스크가 고치려는
-    // "프로세스가 안 끝나는" 전례를 재현하는 셈이라, 실패해도 조용히
-    // 넘기지 않고 경고한다.
-    const MStatus doNotWriteStatus = deviceFn.setDoNotWrite(true);
-    if (!doNotWriteStatus) {
-        maro::BoadMaro::warn(
-            "Maro: could not mark the command device node non-persistent; "
-            "it may be saved into the scene file.");
-    }
-
-    auto* devicePtr = dynamic_cast<MaroCommandDeviceNode*>(deviceFn.userNode());
-    if (devicePtr == nullptr) {
-        // I6: createModifier.doIt()가 이미 이 노드를 DG에 넣었고,
-        // g_commandDeviceHandle은 아직 세팅 전이다. 여기서 그냥 리턴하면
-        // shutdownBridge()가 이 노드를 절대 찾지 못해 인스턴스가 씬에 남고,
-        // C1과 같은 이유로 플러그인 언로드가 막힌다. 만든 걸 되돌린다.
-        const MStatus undoStatus = createModifier.undoIt();
-        if (!undoStatus) {
-            maro::BoadMaro::error(
-                "MaroStartBridgeCommand.UndoDeviceNodeFailedAfterNoInstance",
-                "Maro: could not undo command device node creation; a "
-                "stray node may remain and block plugin unload.",
-                maro::onfix::capture("maroCommandDevice", "", robotName));
-        }
-
-        // Gap 2 (재검토): 위 undoIt()가 DG에서 노드를 지워도, 463행 근처
-        // 주석이 이미 짚었듯 threadHandler()는 노드 "생성" 시점에 이미
-        // 시작됐을 수 있다 -- live나 C++ 인스턴스 획득 여부와 무관하게.
-        // deleteNode() 계열 호출이 그 스레드의 종료를 동기적으로 보장한다는
-        // 근거가 devkit 문서에 없다는 사실도 shutdownBridge() 맨 위 설계
-        // 노트와 똑같이 적용된다. 그러므로 여기서 (예전 코드처럼)
-        // g_runtime->stop()을 직접 부르면, shutdownBridge()가 존재하는
-        // 이유였던 바로 그 경합 -- 살아있는 스레드 밑에서
-        // rclcpp::shutdown() -- 을 다른 호출부에서 그대로 재현하게 된다.
-        // shutdownBridge()를 부르는 게 안전한 이유: g_commandDeviceHandle은
-        // 이 지점에서 아직 세팅되지 않았으므로(무효 핸들, 464행 근처에서야
-        // 세팅된다) shutdownBridge()의 "핸들로 노드 지우기" 단계는 아무 일도
-        // 안 한다 (이미 위 undoIt()로 지웠다) -- 중복 삭제가 아니다. g_runtime은
-        // 이 지점에서 항상 non-null이다 (바로 위에서 make_unique와 start()가
-        // 성공했다). 그 뒤로는 shutdownBridge()의 폴링 + 가드된 g_runtime
-        // 정리(정상 정지 또는 진짜 누수)만 남는데, 그게 정확히 우리가 여기서
-        // 원하는 동작이다. 로직을 복제하는 대신 재사용한다.
-        shutdownBridge();
-        maro::BoadMaro::error("MaroStartBridgeCommand.DeviceNodeHasNoInstance",
-                              "Maro: command device node has no C++ instance.",
-                              maro::onfix::capture("maroCommandDevice", "", robotName));
-        return MS::kFailure;
-    }
-
-    MaroCommandDeviceNode::resetStats();
-    // setRobotName()은 메인 스레드에서, live를 켜기 전에 부른다. 스레드
-    // 자체는 노드 생성 시점에 이미 돌기 시작했을 수 있으므로 (문서상 live는
-    // 스레드 존재가 아니라 데이터 처리만 게이트한다), 로봇 이름은 뮤텍스로
-    // 안전하게 넘긴다 (MaroCommandDeviceNode::setRobotName 참고).
-    devicePtr->setRobotName(robotName);
-    g_commandDeviceHandle = MObjectHandle(deviceObj);
-
-    MDGModifier liveModifier;
-    liveModifier.newPlugValueBool(
-        deviceFn.findPlug(MPxThreadedDeviceNode::live, false), true);
-    status = liveModifier.doIt();
-    if (!status) {
-        maro::BoadMaro::error("MaroStartBridgeCommand.SetDeviceLiveFailed",
-                              "Maro: could not set the command device live.",
-                              maro::onfix::capture("maroCommandDevice", "live", robotName));
-        shutdownBridge();
-        return status;
-    }
-
-    // I3.1: 이 조회가 실제로 하는 일은 딱 하나다 -- DG의 지연 평가 규칙을
-    // 깨고 aCommandOut의 첫 compute()를 강제로 한 번 트리거해서, 그 안에서
-    // Maya가 백그라운드 스레드를 존재하게 만들도록 킥하는 것. 그게 전부다.
-    // 이후 반복 compute() 갱신 -- 즉 명령이 실제로 계속 흘러 들어오는 부분
-    // -- 은 이 호출과 무관하게 유휴(idle) 이벤트 큐가 담당하고, devkit
-    // 헤더가 명시하듯(MPxThreadedDeviceNode.h, "NOTE" 근처) 그 큐는 배치
-    // 모드에서 돌지 않는다. 그러므로 이 한 줄은 배치/헤드리스에서 인바운드
-    // 전달을 살리지 못한다 -- threadTicks가 0보다 커져서 위 배치 경고가
-    // 없다면 "건강해 보이지만 사실 죽어 있는" 상태를 만들 뿐이다.
-    // I3.2: 이 줄의 존재 이유 자체가 "안 그러면 조용히 실패한다"인데, 정작
-    // 이 줄 자체가 조용히 실패하면 안 되므로 MStatus를 받아 확인한다.
-    MStatus pullStatus;
-    deviceFn.findPlug(MaroCommandDeviceNode::aCommandOut, false).asBool(&pullStatus);
-    if (!pullStatus) {
-        maro::BoadMaro::warn(
-            "Maro: could not force the command device's first compute(); "
-            "inbound delivery may not start until something else "
-            "re-evaluates the node.");
-    }
-
-    maro::BoadMaro::info(MString("Maro: bridge running as '") + robotName + "'.");
-    return MS::kSuccess;
 }
 
 void* MaroStopBridgeCommand::creator() { return new MaroStopBridgeCommand(); }
@@ -648,9 +663,22 @@ MStatus MaroStopBridgeCommand::doIt(const MArgList&) {
     // "어느 커맨드가 관여했는지"를 알아야 하므로 마커는 shutdownBridge() 호출
     // 앞에 선다.
     maro::ScopedCommandContext ctxMarker("MaroStopBridgeCommand");
-    shutdownBridge();
-    maro::BoadMaro::info("Maro: bridge stopped.");
-    return MS::kSuccess;
+    // Finding I5: 예전에는 try가 없었다. shutdownBridge()가 부르는
+    // boad::error()/info()가 새로 던지면(예: bad_alloc) 잡아줄 것이 없어
+    // Maya가 통째로 죽었다.
+    try {
+        shutdownBridge();
+        maro::BoadMaro::info("Maro: bridge stopped.");
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        maro::BoadMaro::error("MaroStopBridgeCommand.doIt.Exception",
+                              MString("Maro: maroStopBridge failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        maro::BoadMaro::error("MaroStopBridgeCommand.doIt.UnknownException",
+                              "Maro: maroStopBridge failed with unknown error.");
+        return MS::kFailure;
+    }
 }
 
 void* MaroBridgeStatsCommand::creator() { return new MaroBridgeStatsCommand(); }
@@ -660,16 +688,30 @@ MStatus MaroBridgeStatsCommand::doIt(const MArgList&) {
     // 설치한다 -- 나중에 여기 진단이 하나 생겼을 때 원인 정보가 조용히 비어
     // 나가는 것을 막는 것이 이 마커의 목적이다.
     maro::ScopedCommandContext ctxMarker("MaroBridgeStatsCommand");
-    MIntArray stats;
-    stats.append(static_cast<int>(MaroPump::collectedSampleCount()));
-    stats.append(static_cast<int>(
-        g_runtime ? g_runtime->drainedSampleCount() : 0));
-    stats.append(static_cast<int>(MaroCommandDeviceNode::appliedCommandCount()));
-    stats.append(static_cast<int>(MaroCommandDeviceNode::threadTickCount()));
-    stats.append(static_cast<int>(
-        g_runtime ? g_runtime->publishErrorCount() : 0));
-    setResult(stats);
-    return MS::kSuccess;
+    // Finding I5: 지금은 이 몸체가 boad를 직접 부르지 않지만, 형제 커맨드
+    // 다섯 개가 전부 이 모양(try/catch)을 갖추고 있고 MIntArray::append/
+    // setResult도 할당을 한다 -- 예외가 새면 잡아줄 것이 없었다. 다른 넷과
+    // 같은 이유로 감싼다.
+    try {
+        MIntArray stats;
+        stats.append(static_cast<int>(MaroPump::collectedSampleCount()));
+        stats.append(static_cast<int>(
+            g_runtime ? g_runtime->drainedSampleCount() : 0));
+        stats.append(static_cast<int>(MaroCommandDeviceNode::appliedCommandCount()));
+        stats.append(static_cast<int>(MaroCommandDeviceNode::threadTickCount()));
+        stats.append(static_cast<int>(
+            g_runtime ? g_runtime->publishErrorCount() : 0));
+        setResult(stats);
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        maro::BoadMaro::error("MaroBridgeStatsCommand.doIt.Exception",
+                              MString("Maro: maroBridgeStats failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        maro::BoadMaro::error("MaroBridgeStatsCommand.doIt.UnknownException",
+                              "Maro: maroBridgeStats failed with unknown error.");
+        return MS::kFailure;
+    }
 }
 
 void* MaroSetControlModeCommand::creator() {
@@ -684,80 +726,93 @@ MSyntax MaroSetControlModeCommand::newSyntax() {
 
 MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
     maro::ScopedCommandContext ctxMarker("MaroSetControlModeCommand");
-    MStatus status;
+    // Finding I5: 예전에는 여기 try가 없었다. 아래 boad::error()/info() 호출
+    // 여럿의 문자열/벡터 작업이 예외를 던지면 잡아줄 것이 없었다 -- 형제
+    // 커맨드들(MaroBindAxisCommand 등)은 이미 이 모양을 갖추고 있었다.
+    try {
+        MStatus status;
 
-    if (args.length() != 2) {
-        maro::BoadMaro::error(
-            "MaroSetControlModeCommand.WrongArgCount",
-            "Maro: maroSetControlMode needs <axis> <0=Manual|1=ROS>.",
-            maro::onfix::capture("", "", ""));
+        if (args.length() != 2) {
+            maro::BoadMaro::error(
+                "MaroSetControlModeCommand.WrongArgCount",
+                "Maro: maroSetControlMode needs <axis> <0=Manual|1=ROS>.",
+                maro::onfix::capture("", "", ""));
+            return MS::kFailure;
+        }
+
+        const MString axisName = args.asString(0, &status);
+        if (!status) return status;
+        const int mode = args.asInt(1, &status);
+        if (!status) return status;
+
+        if (mode != 0 && mode != 1) {
+            maro::BoadMaro::error(
+                "MaroSetControlModeCommand.InvalidControlMode",
+                "Maro: control mode must be 0 (Manual) or 1 (ROS).",
+                maro::onfix::capture("", "controlMode", axisName));
+            return MS::kFailure;
+        }
+
+        MSelectionList selection;
+        if (!selection.add(axisName)) {
+            maro::BoadMaro::error(
+                "MaroSetControlModeCommand.NodeNotFound",
+                MString("Maro: cannot find node '") + axisName + "'.",
+                maro::onfix::capture("", "", axisName));
+            return MS::kFailure;
+        }
+
+        MObject axisObj;
+        selection.getDependNode(0, axisObj);
+
+        MFnDependencyNode axisFn(axisObj);
+        if (axisFn.typeId() != MaroAxisNode::id) {
+            maro::BoadMaro::error(
+                "MaroSetControlModeCommand.NotMaroAxisNode",
+                MString("Maro: '") + axisName + "' is not a maroAxis node.",
+                maro::onfix::capture(axisFn.typeName(), "controlMode", axisName));
+            return MS::kFailure;
+        }
+
+        MPlug modePlug = axisFn.findPlug(MaroAxisNode::aControlMode, false, &status);
+        if (!status) return status;
+
+        // Manual -> ROS 전환 시, 실제 명령이 오기 전까지의 목표를 현재 값으로
+        // 시딩해 로봇이 마지막 명령값으로 튀는 것을 막는다. 순서가 중요하다:
+        // outValue를 먼저 읽고 aRosCommand를 시딩한 다음에 모드를 바꿔야 한다.
+        // 반대로 하면 compute()가 이미 소스를 ROS로 바꾼 뒤라 0에서 시딩하게
+        // 된다.
+        if (mode == 1 && modePlug.asShort() == 0) {
+            MPlug outValue = axisFn.findPlug(MaroAxisNode::aOutValue, false);
+            // outValue는 MFnUnitAttribute::kAngle이다. asDouble()로 읽으면 Maya가
+            // UI 각도 단위(기본 도)로 변환한 값을 돌려줄 수 있어 로그가 실제
+            // 라디안 값과 어긋난다. MaroPump.cpp가 같은 이유로 이미 asMAngle().
+            // asRadians()를 쓰고 있다 -- 여기는 로그 전용이라 동작은 안 바뀐다.
+            const double seedValue = outValue.asMAngle().asRadians();
+
+            // 런타임 데이터 흐름이므로 직접 쓴다 (applyToMatchingAxis와 동일한
+            // 관례). undo 스택(m_modifier)에는 올리지 않는다 -- 이건 사용자
+            // 설정이 아니라 프레임 단위 런타임 시딩이다.
+            axisFn.findPlug(MaroAxisNode::aRosCommand, false).setDouble(seedValue);
+
+            maro::BoadMaro::info(
+                MString("Maro: seeding ROS target for '") + axisName + "' with " +
+                seedValue + " to avoid a jump on mode switch.");
+        }
+
+        status = m_modifier.newPlugValueShort(modePlug, static_cast<short>(mode));
+        if (!status) return status;
+
+        return redoIt();
+    } catch (const std::exception& e) {
+        maro::BoadMaro::error("MaroSetControlModeCommand.doIt.Exception",
+                              MString("Maro: maroSetControlMode failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        maro::BoadMaro::error("MaroSetControlModeCommand.doIt.UnknownException",
+                              "Maro: maroSetControlMode failed with unknown error.");
         return MS::kFailure;
     }
-
-    const MString axisName = args.asString(0, &status);
-    if (!status) return status;
-    const int mode = args.asInt(1, &status);
-    if (!status) return status;
-
-    if (mode != 0 && mode != 1) {
-        maro::BoadMaro::error(
-            "MaroSetControlModeCommand.InvalidControlMode",
-            "Maro: control mode must be 0 (Manual) or 1 (ROS).",
-            maro::onfix::capture("", "controlMode", axisName));
-        return MS::kFailure;
-    }
-
-    MSelectionList selection;
-    if (!selection.add(axisName)) {
-        maro::BoadMaro::error(
-            "MaroSetControlModeCommand.NodeNotFound",
-            MString("Maro: cannot find node '") + axisName + "'.",
-            maro::onfix::capture("", "", axisName));
-        return MS::kFailure;
-    }
-
-    MObject axisObj;
-    selection.getDependNode(0, axisObj);
-
-    MFnDependencyNode axisFn(axisObj);
-    if (axisFn.typeId() != MaroAxisNode::id) {
-        maro::BoadMaro::error(
-            "MaroSetControlModeCommand.NotMaroAxisNode",
-            MString("Maro: '") + axisName + "' is not a maroAxis node.",
-            maro::onfix::capture(axisFn.typeName(), "controlMode", axisName));
-        return MS::kFailure;
-    }
-
-    MPlug modePlug = axisFn.findPlug(MaroAxisNode::aControlMode, false, &status);
-    if (!status) return status;
-
-    // Manual -> ROS 전환 시, 실제 명령이 오기 전까지의 목표를 현재 값으로
-    // 시딩해 로봇이 마지막 명령값으로 튀는 것을 막는다. 순서가 중요하다:
-    // outValue를 먼저 읽고 aRosCommand를 시딩한 다음에 모드를 바꿔야 한다.
-    // 반대로 하면 compute()가 이미 소스를 ROS로 바꾼 뒤라 0에서 시딩하게
-    // 된다.
-    if (mode == 1 && modePlug.asShort() == 0) {
-        MPlug outValue = axisFn.findPlug(MaroAxisNode::aOutValue, false);
-        // outValue는 MFnUnitAttribute::kAngle이다. asDouble()로 읽으면 Maya가
-        // UI 각도 단위(기본 도)로 변환한 값을 돌려줄 수 있어 로그가 실제
-        // 라디안 값과 어긋난다. MaroPump.cpp가 같은 이유로 이미 asMAngle().
-        // asRadians()를 쓰고 있다 -- 여기는 로그 전용이라 동작은 안 바뀐다.
-        const double seedValue = outValue.asMAngle().asRadians();
-
-        // 런타임 데이터 흐름이므로 직접 쓴다 (applyToMatchingAxis와 동일한
-        // 관례). undo 스택(m_modifier)에는 올리지 않는다 -- 이건 사용자
-        // 설정이 아니라 프레임 단위 런타임 시딩이다.
-        axisFn.findPlug(MaroAxisNode::aRosCommand, false).setDouble(seedValue);
-
-        maro::BoadMaro::info(
-            MString("Maro: seeding ROS target for '") + axisName + "' with " +
-            seedValue + " to avoid a jump on mode switch.");
-    }
-
-    status = m_modifier.newPlugValueShort(modePlug, static_cast<short>(mode));
-    if (!status) return status;
-
-    return redoIt();
 }
 
 MStatus MaroSetControlModeCommand::redoIt() {

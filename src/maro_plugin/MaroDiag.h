@@ -4,10 +4,12 @@
 #include <cstddef>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <maya/MString.h>
 
+#include "maro_diag/BookStore.h"
 #include "maro_diag/DiagRecord.h"
 
 namespace maro {
@@ -58,6 +60,23 @@ bool isMainThread();
 // 무한 성장: 레코드 벡터에는 상한도 축출(eviction)도 없다. 지금은 문제
 // 없지만, 실제 진단들이 (재생 중 매 프레임 발동하는 것들을 포함해) 여기로
 // 몰리기 시작하면 끝없이 자란다 -- 아직 대응되어 있지 않다.
+//
+// 락 두 개, 각자 다른 것을 지킨다 (Finding I4):
+//   - mutex()(레코드 뮤텍스): stream()(인메모리 진단 벡터)만 보호한다. 이미
+//     엄격한 규율이 있다 -- MGlobal::display* 호출 동안 절대 쥐고 있지
+//     않고, devInfo()/warn()이 스스로 이 락을 잡으므로 그 함수들을 부를 때도
+//     쥐고 있지 않는다(재진입 불가능한 std::mutex이므로 안 지키면 교착).
+//   - bookMutex()(book 뮤텍스): book(스필/정본) 파일 I/O와 그것을 거울처럼
+//     비추는 세션 캐시(bookCache())를 함께 보호한다. Task 7 이후
+//     compute()들이 워커 스레드에서 동시에 boad로 들어올 수 있으므로, 두
+//     스레드가 같은 스필 파일에 동시에 append하는 경합(체크-후-쓰기 TOCTOU,
+//     그리고 스트림 삽입 두 번은 원자적이지 않음)을 이 락으로 직렬화한다.
+//     book 작업 중에는 절대 레코드 뮤텍스를 재진입하지 않고(별개 뮤텍스라
+//     교착 위험은 없지만, 두 락이 섞이면 향후 유지보수가 헷갈리므로 book
+//     뮤텍스는 항상 disk/cache 작업이 끝나면 놓은 뒤에야 warn()/devInfo()를
+//     부른다 -- error()의 기존 "warn()은 락 밖에서" 규율과 같은 이유).
+// 이 두 뮤텍스를 동시에 쥐는 코드 경로는 없다 -- 락 순서 역전에 의한 교착이
+// 애초에 성립하지 않는다.
 class BoadMaro {
 public:
     static void info(const MString& message);
@@ -85,12 +104,26 @@ public:
     // 없는 에러는 ... 사용자가 등록할 수 있게 한다").
     static void registerRemedy(const std::string& errorHash, const MString& remedyText);
 
-    // 테스트 전용. 프로덕션 코드는 부르지 않는다.
+    // 테스트 전용. 프로덕션 코드는 부르지 않는다. boad 세션 상태(레코드
+    // 스트림, 신규분석 카운터, book-불가 경고 래치, book 캐시) 전부를
+    // 초기 상태로 되돌린다 -- 콜러가 없다고 절반만 리셋되는 상태로 방치하면
+    // "테스트 전용 리셋 훅"이라는 이름이 거짓말이 된다 (carried-forward
+    // Minor finding).
     static void resetForTest();
 
 private:
     static std::vector<DiagRecord>& stream();
     static std::mutex& mutex();
+
+    // book 뮤텍스와 그것이 지키는 세션 캐시. 캐시는 "이 세션에서 이미 book에
+    // 있다고 확인된 해시 -> 항목"만 담는다(Finding M3). 아직 book에 없는
+    // (미스인) 해시는 캐시하지 않는다 -- 그래야 book이 쓰기 불가능한 동안의
+    // 반복 실패가 매번 "새 분석"으로 정직하게 집계된다
+    // (test_diag_degraded.py). registerRemedy()는 항목을 갱신할 때마다 해당
+    // 해시를 캐시에서 지운다(무효화) -- 안 그러면 세션 중간에 등록한 해법을
+    // 이미 캐시된 옛 항목이 계속 가려 버린다.
+    static std::mutex& bookMutex();
+    static std::unordered_map<std::string, BookEntry>& bookCache();
 };
 
 // 진행 중인 커맨드 이름의 스택. MPxCommand::doIt 진입 시 설치되고 함수가
@@ -128,11 +161,19 @@ DgContext capture(const MString& nodeType, const MString& attributeName,
 // 쓰는 CMake 기본 구성인 RelWithDebInfo는 MSVC에서 NDEBUG를 정의하므로
 // assert는 무연산(no-op)으로 컴파일된다 -- 즉 이 구성에서는 기록만 하고
 // 중단하지 않는다.
-#define MARO_ASSERT(cond, msg)                              \
-    do {                                                    \
-        if (!(cond)) {                                      \
-            maro::BoadMaro::error("ASSERT_FAILED", (msg));  \
-            assert(false && (msg));                         \
-        }                                                    \
+//
+// siteTag를 반드시 받는다 (carried-forward Minor finding). 원래는
+// "ASSERT_FAILED" 하나로 모든 호출 지점을 뭉갰는데, 사이트 태그는 해시
+// 입력이므로(ErrorHash.h 계약) 그러면 미래의 assert 호출 지점 전부가 book
+// 항목 하나를 공유해, 가장 먼저 실패한 지점의 분석/해법이 나머지 전부에
+// 잘못 서빙된다 -- test_diag_onfix.py가 서로 다른 실패는 서로 다른 해시를
+// 가져야 한다고 못박은 바로 그 문제다. 이 매크로는 지금 호출 지점이 0곳이라
+// (grep 확인됨) 시그니처를 바꿔도 기존 코드에 영향이 없다.
+#define MARO_ASSERT(siteTag, cond, msg)                      \
+    do {                                                     \
+        if (!(cond)) {                                       \
+            maro::BoadMaro::error((siteTag), (msg));         \
+            assert(false && (msg));                          \
+        }                                                     \
     } while (0)
 #endif

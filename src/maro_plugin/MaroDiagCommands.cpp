@@ -230,7 +230,12 @@ MStatus MaroDiagQueryCommand::doIt(const MArgList& args) {
             return MS::kFailure;
         }
 
-        const DiagRecord& rec = BoadMaro::recordAt(static_cast<std::size_t>(index));
+        // 리뷰(carried-forward Minor): recordAt()은 값으로 반환한다(뮤텍스
+        // 스코프 밖으로 내부 원소 참조가 새는 것을 막으려고 -- MaroDiag.h
+        // 참고). 여기서 그 반환값을 const&로 받으면 컴파일은 되지만(임시
+        // 객체 수명이 참조 수명까지 늘어난다) 정확히 이 함수가 막으려던
+        // "매달린 참조" 패턴과 똑같이 읽혀 오해를 부른다. 값으로 받는다.
+        const DiagRecord rec = BoadMaro::recordAt(static_cast<std::size_t>(index));
 
         MStringArray result;
         result.append(severityToString(rec.severity));
@@ -284,15 +289,20 @@ MSyntax MaroDiagRegisterRemedyCommand::newSyntax() {
     // 띄우는 것은 아니었지만, "-h"는 관례상 -help의 짧은형이라 사용자 혼동
     // 소지가 남는다. 테스트는 항상 "-hash" 긴 이름만 쓰므로("hash=..."),
     // 짧은형을 "-hs"로 바꿔 그 위험을 아예 피했다 -- 비용이 없다.
+    // 리뷰(carried-forward Minor): 이 두 경고는 실제 사용자가 해법을
+    // 등록하려 할 때 닿을 수 있는 프로덕션 경로다(이 파일의 나머지는 대부분
+    // 테스트 전용 도구지만, maroDiagRegisterRemedy는 아니다) -- boad가
+    // 진단의 단일 출구라는 불변식을 지키려면 MGlobal::displayWarning을
+    // 직접 부르면 안 된다.
     MStatus hashStatus = syntax.addFlag(kHashFlag, kHashFlagLong, MSyntax::kString);
     if (!hashStatus) {
-        MGlobal::displayWarning(
+        BoadMaro::warn(
             MString("Maro: maroDiagRegisterRemedy failed to register ") + kHashFlagLong +
             " flag: " + hashStatus.errorString());
     }
     MStatus remedyStatus = syntax.addFlag(kRemedyFlag, kRemedyFlagLong, MSyntax::kString);
     if (!remedyStatus) {
-        MGlobal::displayWarning(
+        BoadMaro::warn(
             MString("Maro: maroDiagRegisterRemedy failed to register ") + kRemedyFlagLong +
             " flag: " + remedyStatus.errorString());
     }
@@ -300,13 +310,26 @@ MSyntax MaroDiagRegisterRemedyCommand::newSyntax() {
 }
 
 MStatus MaroDiagRegisterRemedyCommand::doIt(const MArgList& args) {
+    // 리뷰(carried-forward Minor): 이 파일의 나머지 커맨드는 대부분 테스트
+    // 전용 도구라 마커를 설치하지 않지만, maroDiagRegisterRemedy는 실제
+    // 사용자가 해법을 등록할 때 쓰는 프로덕션 진입점이다. 다른 프로덕션
+    // 커맨드들(MaroCommands.cpp)과 같은 관례로 마커를 설치해, 아래 boad::error가
+    // activeCommand를 채울 수 있게 한다.
+    maro::ScopedCommandContext ctxMarker("MaroDiagRegisterRemedyCommand");
     try {
         MStatus status;
         MArgDatabase argData(newSyntax(), args, &status);
         if (!status) return status;
 
         if (!argData.isFlagSet(kHashFlag) || !argData.isFlagSet(kRemedyFlag)) {
-            MGlobal::displayError("Maro: maroDiagRegisterRemedy needs -hash and -remedy.");
+            // 리뷰(carried-forward Minor): 예전에는 MGlobal::displayError를
+            // 직접 불렀다 -- 이 파일이 "boad가 진단의 단일 출구"라는 불변식을
+            // boad 자신의 커맨드 구현에서 깨고 있었다. 이 검증 실패는 실제
+            // 사용자가 밟을 수 있는 경로이므로(테스트 전용 도구가 아니다)
+            // boad를 거친다.
+            BoadMaro::error("MaroDiagRegisterRemedyCommand.WrongArgCount",
+                            "Maro: maroDiagRegisterRemedy needs -hash and -remedy.",
+                            onfix::capture("", "", ""));
             return MS::kFailure;
         }
 
