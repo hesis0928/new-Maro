@@ -86,8 +86,16 @@ MStatus MaroDiagEmitCommand::doIt(const MArgList& args) {
 void* MaroDiagCountCommand::creator() { return new MaroDiagCountCommand(); }
 
 MStatus MaroDiagCountCommand::doIt(const MArgList& /*args*/) {
-    setResult(static_cast<int>(BoadMaro::recordCount()));
-    return MS::kSuccess;
+    try {
+        setResult(static_cast<int>(BoadMaro::recordCount()));
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(MString("Maro: maroDiagCount failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError("Maro: maroDiagCount failed with unknown error.");
+        return MS::kFailure;
+    }
 }
 
 void* MaroDiagQueryCommand::creator() { return new MaroDiagQueryCommand(); }
