@@ -15,6 +15,7 @@ gtest_discover_tests(maro_transform_tests)
 
 add_executable(maro_diag_tests
     diag/test_error_hash.cpp
+    diag/test_book_store.cpp
 )
 
 target_link_libraries(maro_diag_tests PRIVATE
