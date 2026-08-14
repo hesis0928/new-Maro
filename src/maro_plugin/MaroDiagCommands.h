@@ -64,4 +64,20 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
+// 리뷰 Finding 1 전용 테스트 도구. maroDiagEmit과 달리 이 커맨드는 자기
+// 이름으로 된 ScopedCommandContext 마커를 스스로 설치한 채로
+// BoadMaro::error()를 **세 번째 인자(컨텍스트) 없이** 부른다 -- capture()를
+// 거치지 않는, 즉 error()의 기본 인자 DgContext{}를 그대로 타는 유일한 진짜
+// 에러 경로다. doIt/redoIt/undoIt의 catch 블록들이 실제로 겪는 상황(마커는
+// 살아 있는데 컨텍스트는 안 채워 옴)을 그대로 재현해, error() 자신이
+// g_commandStack에서 activeCommand를 채우는지를 테스트가 결정적으로 확인할
+// 수 있게 한다.
+// -siteTag <string> -message <string>
+class MaroDiagEmitMarkedCommand : public MPxCommand {
+public:
+    static void* creator();
+    static MSyntax newSyntax();
+    MStatus doIt(const MArgList& args) override;
+};
+
 }  // namespace maro

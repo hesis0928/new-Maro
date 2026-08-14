@@ -322,4 +322,45 @@ MStatus MaroDiagRegisterRemedyCommand::doIt(const MArgList& args) {
     }
 }
 
+void* MaroDiagEmitMarkedCommand::creator() { return new MaroDiagEmitMarkedCommand(); }
+
+MSyntax MaroDiagEmitMarkedCommand::newSyntax() {
+    MSyntax syntax;
+    syntax.addFlag(kMessageFlag, kMessageFlagLong, MSyntax::kString);
+    syntax.addFlag(kSiteTagFlag, kSiteTagFlagLong, MSyntax::kString);
+    return syntax;
+}
+
+MStatus MaroDiagEmitMarkedCommand::doIt(const MArgList& args) {
+    // 리뷰 Finding 1 전용: 이 커맨드 자신을 이름으로 하는 마커를 설치한 채로
+    // BoadMaro::error()를 세 번째 인자(컨텍스트) 없이 부른다 -- 기본 인자
+    // DgContext{}를 그대로 태우면서도 스택에는 살아있는 마커가 있는 상태를
+    // 재현한다. error()가 빈 activeCommand를 g_commandStack에서 채워 넣는지
+    // (Finding 1 수정) 여기서 직접 확인할 수 있다.
+    maro::ScopedCommandContext ctxMarker("MaroDiagEmitMarkedCommand");
+    try {
+        MStatus status;
+        MArgDatabase argData(newSyntax(), args, &status);
+        if (!status) return status;
+
+        MString message;
+        MString siteTag;
+        argData.getFlagArgument(kMessageFlag, 0, message);
+        if (!argData.isFlagSet(kSiteTagFlag)) {
+            MGlobal::displayError("Maro: maroDiagEmitMarked requires -siteTag.");
+            return MS::kFailure;
+        }
+        argData.getFlagArgument(kSiteTagFlag, 0, siteTag);
+
+        BoadMaro::error(siteTag.asChar(), message);
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(MString("Maro: maroDiagEmitMarked failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError("Maro: maroDiagEmitMarked failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
 }  // namespace maro

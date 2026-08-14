@@ -41,8 +41,24 @@ const BookPaths& bookPaths() {
         } else {
             const MString userAppDir =
                 MGlobal::executeCommandStringResult("internalVar -userAppDir");
-            dir = userAppDir.length() > 0 ? std::filesystem::path(userAppDir.asChar())
-                                           : std::filesystem::temp_directory_path();
+            if (userAppDir.length() > 0) {
+                dir = std::filesystem::path(userAppDir.asChar());
+            } else {
+                dir = std::filesystem::temp_directory_path();
+                // 리뷰 Finding 2: 이 폴백은 이 세션 내내 영구히, 조용히
+                // 쓰인다 -- 알리지 않으면 사용자의 지식 저장소가 세션 동안
+                // 통째로 보이지 않는데 아무도 그 이유를 모른다. 여기는
+                // markMainThread()의 첫 호출(정의상 메인 스레드)이거나
+                // 그 뒤의 첫 error()/registerRemedy() 호출이므로, 이 시점엔
+                // g_mainThreadKnown이 이미 true다 -- warn()의 화면 에코
+                // 가드가 이 경고를 삼키지 않는다.
+                BoadMaro::warn(
+                    MString("Maro: could not resolve the user app directory "
+                            "(internalVar -userAppDir returned empty); using "
+                            "the temp directory for the knowledge store "
+                            "instead: ") +
+                    MString(dir.string().c_str()));
+            }
         }
         p.canonical = dir / "maro_knowledge.jsonl";
         p.spill = dir / "maro_knowledge.spill.jsonl";
@@ -144,6 +160,19 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
     DiagRecord rec;
     rec.severity = DiagSeverity::Error;
     rec.context = context;
+
+    // 리뷰 Finding 1: activeCommand는 여기서 항상 채운다. capture()를 거친
+    // context는 이미 채워져 있으니 손대지 않는다 -- 이 조건은 호출부가
+    // 컨텍스트를 통째로 생략했거나(기본 인자 DgContext{}) capture() 없이
+    // 만든 경우에만 걸린다. 그런 호출부는 지금 doIt/redoIt/undoIt의 catch
+    // 블록과 postConstructor의 두 catch가 전부다 -- 그 자리들은 살아있는
+    // ScopedCommandContext 마커 안에서 도는데도 마커 값이 기록에 닿지
+    // 못했다(2절 Finding 1). call site마다 인자를 추가하는 대신 여기 한
+    // 곳에서 채워서, 다음에 생기는 catch 블록도 똑같은 함정에 빠지지 않게
+    // 한다.
+    if (rec.context.activeCommand.empty()) {
+        rec.context.activeCommand = onfix::activeCommand();
+    }
 
     // appendToSpill이 false를 돌려주면(book 디렉터리를 쓸 수 없는 등) true가
     // 된다. try/catch 밖, 아직 이 함수가 자신의 lock_guard를 잡기 전에

@@ -260,10 +260,19 @@ MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
 
         if (childFn.typeId() != MaroAxisNode::id ||
             parentFn.typeId() != MaroAxisNode::id) {
+            // 리뷰 Finding 5: child가 정상 maroAxis이고 parent만 문제인
+            // 경우도 있다 -- 그때 child를 원인으로 지목하면 멀쩡한 노드를
+            // 가리키는 잘못된 원인 분석이 된다. 실제로 검사에 실패한 쪽을
+            // 그대로 잡는다(child가 통과했으면 parent가 범인). 사이트
+            // 태그는 그대로 둔다 -- 실패 종류("인자가 maroAxis가 아님")는
+            // 어느 쪽이 범인이든 같고, 태그는 해시 입력이라 바꾸면 기존
+            // book 항목이 고아가 된다.
+            const bool childIsOffender = childFn.typeId() != MaroAxisNode::id;
+            const MFnDependencyNode& offenderFn = childIsOffender ? childFn : parentFn;
             maro::BoadMaro::error(
                 "MaroConnectAxisCommand.NotMaroAxisNode",
                 "Maro: maroConnectAxis expects two maroAxis nodes.",
-                maro::onfix::capture(childFn.typeName(), "", childFn.name()));
+                maro::onfix::capture(offenderFn.typeName(), "", offenderFn.name()));
             return MS::kFailure;
         }
 

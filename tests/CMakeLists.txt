@@ -113,6 +113,21 @@ if(MARO_BUILD_PLUGIN)
     # 그대로 자기 값을 쓴다 -- 그쪽 시나리오는 영향을 받지 않는다.
     set(MARO_TEST_BOOK_ROOT "${CMAKE_CURRENT_BINARY_DIR}/diag_book")
 
+    # 리뷰 Finding 3: 위 book 디렉터리들은 빌드 트리 밑이라 사용자 진짜 prefs는
+    # 더 이상 안 건드리지만, 그 자체가 ctest 재실행 사이에 남는다. 두 번째
+    # 실행부터는 이 스위트의 모든 거부가 book 캐시 히트가 되어(스필에 새로
+    # 기록하는 대신 저장된 분석 + "book에서 즉답" 딱지로 메시지가 바뀌고
+    # appendToSpill이 전혀 안 돈다) fresh-analysis 경로가 첫 실행 이후로는
+    # 커버되지 않는다. Maya 테스트가 시작하기 전에 book 루트를 통째로 지우는
+    # CTest fixture 하나로 해결한다 -- 16개 파이썬 파일 각각에 정리 코드를
+    # 넣지 않는다. FIXTURES_SETUP/FIXTURES_REQUIRED는 실행 순서를 보장한다:
+    # 이 리셋 테스트가 먼저 통과해야 그것을 요구하는 테스트들이 돈다(CTest가
+    # add_test 순서와 무관하게 이 의존을 스케줄링한다).
+    add_test(NAME maya_diag_book_root_reset
+             COMMAND ${CMAKE_COMMAND} -E rm -rf "${MARO_TEST_BOOK_ROOT}")
+    set_tests_properties(maya_diag_book_root_reset PROPERTIES
+        FIXTURES_SETUP MaroDiagBookRoot)
+
     # 플러그인만 있으면 되는 테스트. robustness는 순수 DG 조작/평가만 하고
     # 브리지(rclcpp)를 켜지 않으므로 이 그룹에 속한다.
     foreach(maya_test load axis_node binding capability_stack delete_rules
@@ -125,6 +140,7 @@ if(MARO_BUILD_PLUGIN)
             ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_${maya_test}"
+            FIXTURES_REQUIRED MaroDiagBookRoot
             TIMEOUT 240)
     endforeach()
 
@@ -138,6 +154,7 @@ if(MARO_BUILD_PLUGIN)
         ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_bridge_pump"
+        FIXTURES_REQUIRED MaroDiagBookRoot
         TIMEOUT 240
         RUN_SERIAL TRUE)
 
@@ -150,6 +167,7 @@ if(MARO_BUILD_PLUGIN)
             ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>;MARO_PEER_PATH=$<TARGET_FILE:maro_test_peer>"
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_${maya_test}"
+            FIXTURES_REQUIRED MaroDiagBookRoot
             TIMEOUT 360)
         # 같은 DDS 도메인을 쓰므로 병렬 실행 시 서로 간섭한다.
         set_tests_properties(maya_${maya_test} PROPERTIES RUN_SERIAL TRUE)

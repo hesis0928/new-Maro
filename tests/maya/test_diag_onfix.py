@@ -64,31 +64,96 @@ print("stack unwound OK")
 # 돌려주므로 이 스위트의 나머지는 전부 통과한다 -- 실측으로 확인했다.
 # 그런데 그 구현은 book이 "기지 에러 즉답"을 하는 순간 조용히 틀린 답을
 # 내놓는다: 두 번째 종류의 실패가 첫 번째 종류의 분석을 "과거 분석에서 즉답"
-# 딱지까지 붙여 확신에 차서 제시한다. 그래서 여기서 두 종류의 실패가 실제로
-# 다른 해시로 갈리는지 직접 확인한다.
+# 딱지까지 붙여 확신에 차서 제시한다.
+#
+# 리뷰 Finding 4: A/B 두 해시만 비교하면 "전부 하나로 뭉갬"은 잡지만, 부분
+# 뭉갬 -- 예를 들어 NotMaroAxisNode/SelfParent/WouldCreateCycle 세 가지가
+# 서로 하나로 접히는 경우 -- 은 여전히 통과한다. 태그 목록을 테스트에
+# 복제하지 않으면서 이걸 잡으려면, N개의 서로 다른 거부를 한 번의 실행에서
+# 유발하고 각 레코드의 해시가 실제로 N개 다 다른지 직접 세어 확인해야 한다.
+rejections = []  # [(label, errorHash, message, activeCommand), ...]
+
+
+def trigger_rejection(label, invoke):
+    """invoke()가 RuntimeError로 거부되는지 확인하고 그 직후 최신 레코드를 모은다."""
+    try:
+        invoke()
+        raise AssertionError(f"{label} should have been rejected")
+    except RuntimeError:
+        pass
+    rec = cmds.maroDiagQuery(index=0)
+    rejections.append((label, rec[2], rec[1], rec[5]))
+
+
 cycleA = cmds.createNode("maroAxis", name="cycleAxisA")
 cycleB = cmds.createNode("maroAxis", name="cycleAxisB")
-cmds.maroConnectAxis(cycleB, cycleA)
-try:
-    cmds.maroConnectAxis(cycleA, cycleB)
-    raise AssertionError("cycle should have been rejected")
-except RuntimeError:
-    pass
+plainCube = cmds.polyCube(name="plainCubeForConnect")[0]
+cmds.maroConnectAxis(cycleB, cycleA)  # cycleB의 부모 = cycleA
 
-cycleRec = cmds.maroDiagQuery(index=0)
-assert cycleRec[2] != errorHash, (
+trigger_rejection(
+    "connect: not a maroAxis node",
+    lambda: cmds.maroConnectAxis(plainCube, cycleA))
+trigger_rejection(
+    "connect: self-parent",
+    lambda: cmds.maroConnectAxis(cycleA, cycleA))
+trigger_rejection(
+    "connect: would create a cycle",
+    lambda: cmds.maroConnectAxis(cycleA, cycleB))
+trigger_rejection(
+    "bind: not a maroAxis node",
+    lambda: cmds.maroBindAxis(light, plainCube))
+
+hashes = [h for _, h, _, _ in rejections]
+labels = [label for label, _, _, _ in rejections]
+assert len(set(hashes)) == len(rejections), (
+    f"expected {len(rejections)} distinct error hashes, one per rejection "
+    f"{labels}, but only got {len(set(hashes))} distinct hashes back -- some "
+    f"of these rejections share a site tag, so book will serve one "
+    f"failure's stored analysis and remedy for a different failure"
+)
+
+by_label = {label: (h, msg, active) for label, h, msg, active in rejections}
+
+cycle_hash, cycle_message, cycle_active_command = by_label["connect: would create a cycle"]
+assert cycle_hash != errorHash, (
     f"a cycle rejection and a non-transform binding rejection are different "
     f"failures and must not share an error hash -- both hashed to "
-    f"{cycleRec[2]!r}, so book will serve one failure's analysis for the other"
+    f"{cycle_hash!r}, so book will serve one failure's analysis for the other"
 )
-assert "cycle" in cycleRec[1], (
+assert "cycle" in cycle_message, (
     f"the cycle rejection must show its own explanation, not another "
-    f"failure's, got {cycleRec[1]!r}"
+    f"failure's, got {cycle_message!r}"
 )
-assert cycleRec[5] == "MaroConnectAxisCommand", (
-    f"expected activeCommand 'MaroConnectAxisCommand', got {cycleRec[5]!r}"
+assert cycle_active_command == "MaroConnectAxisCommand", (
+    f"expected activeCommand 'MaroConnectAxisCommand', got {cycle_active_command!r}"
 )
-print("distinct failures kept distinct site tags OK")
+print(
+    f"distinct failures kept distinct site tags OK "
+    f"({len(rejections)} rejections, {len(set(hashes))} distinct hashes)"
+)
+
+# 리뷰 Finding 1: redoIt/undoIt(그리고 doIt의 예외 경로)에 설치된 마커는
+# capture()를 거치지 않고 BoadMaro::error()를 기본 컨텍스트(DgContext{})로
+# 부른다. 위의 검증-거부 시나리오들은 전부 onfix::capture()를 거쳐
+# activeCommand가 채워지므로 이 경로에는 닿지 않는다. maroDiagEmitMarked는
+# 그 기본-컨텍스트 경로를 재현하는 테스트 전용 도구다: 자기 이름의 마커를
+# 설치한 채로 error()를 세 번째 인자 없이 부른다. error()가
+# g_commandStack에서 activeCommand를 채워 넣지 않으면 이 값은 빈 문자열로
+# 남는다 -- 바로 그게 Finding 1이 지적한, 수정 전 상태다.
+before_marked = cmds.maroDiagCount()
+cmds.maroDiagEmitMarked(siteTag="Test.MarkedProbe", message="marked probe")
+after_marked = cmds.maroDiagCount()
+assert after_marked == before_marked + 1, (
+    f"expected exactly one new diagnostic record from maroDiagEmitMarked, "
+    f"got {after_marked - before_marked}"
+)
+markedRec = cmds.maroDiagQuery(index=0)
+assert markedRec[5] == "MaroDiagEmitMarkedCommand", (
+    f"expected activeCommand 'MaroDiagEmitMarkedCommand' filled in by "
+    f"BoadMaro::error() from the live marker stack (the default-context "
+    f"path exercised by doIt/redoIt/undoIt catch blocks), got {markedRec[5]!r}"
+)
+print("default-context activeCommand fill-in OK")
 
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
