@@ -17,6 +17,7 @@
 
 #include "MaroAxisNode.h"
 #include "MaroCommandDeviceNode.h"
+#include "MaroDiag.h"
 #include "MaroPump.h"
 #include "MaroRosRuntime.h"
 
@@ -33,6 +34,7 @@ MSyntax MaroBindAxisCommand::newSyntax() {
 }
 
 MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
+    maro::ScopedCommandContext ctxMarker("MaroBindAxisCommand");
     // 예외는 경계를 넘지 않는다. 커맨드에서 던지면 Maya가 죽는다.
     try {
         MStatus status;
@@ -71,10 +73,12 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
         if (!MDagPath::getAPathTo(targetObj, targetPath) ||
             !targetPath.hasFn(MFn::kTransform)) {
             MFnDependencyNode targetFn(targetObj);
-            MGlobal::displayError(
+            maro::BoadMaro::error(
+                "MaroBindAxisCommand.TargetNotTransform",
                 MString("Maro: '") + targetFn.name() +
                 "' is not a transform, so an axis cannot drive it. "
-                "Select the transform node instead of its shape.");
+                "Select the transform node instead of its shape.",
+                maro::onfix::capture(targetFn.typeName(), "targetObject", axisFn.name()));
             return MS::kFailure;
         }
 

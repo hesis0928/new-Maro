@@ -75,4 +75,35 @@ void BoadMaro::resetForTest() {
     stream().clear();
 }
 
+namespace {
+// Maya 메인 스레드만 doIt을 부르지만, thread_local로 두면 우연한 재진입도 안전하다.
+thread_local std::vector<std::string> g_commandStack;
+}  // namespace
+
+ScopedCommandContext::ScopedCommandContext(const char* commandName) {
+    g_commandStack.emplace_back(commandName);
+}
+
+ScopedCommandContext::~ScopedCommandContext() {
+    if (!g_commandStack.empty()) g_commandStack.pop_back();
+}
+
+namespace onfix {
+
+std::string activeCommand() {
+    return g_commandStack.empty() ? std::string() : g_commandStack.back();
+}
+
+DgContext capture(const MString& nodeType, const MString& attributeName,
+                   const MString& axisOrTarget) {
+    DgContext ctx;
+    ctx.nodeType = nodeType.asChar();
+    ctx.attributeName = attributeName.asChar();
+    ctx.axisOrTarget = axisOrTarget.asChar();
+    ctx.activeCommand = activeCommand();
+    return ctx;
+}
+
+}  // namespace onfix
+
 }  // namespace maro

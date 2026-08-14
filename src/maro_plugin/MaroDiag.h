@@ -55,6 +55,33 @@ private:
     static std::mutex& mutex();
 };
 
+// 진행 중인 커맨드 이름의 스택. MPxCommand::doIt 진입 시 설치되고 함수가
+// 반환하면 자동으로 해제된다. onfix가 "어느 커맨드가 관여했는지"를 아는
+// 유일한 경로다 (설계 스펙 §4 onfix 행 "커맨드").
+class ScopedCommandContext {
+public:
+    explicit ScopedCommandContext(const char* commandName);
+    ~ScopedCommandContext();
+
+    ScopedCommandContext(const ScopedCommandContext&) = delete;
+    ScopedCommandContext& operator=(const ScopedCommandContext&) = delete;
+};
+
+namespace onfix {
+
+// 현재 활성 커맨드 이름. 스택이 비어 있으면 빈 문자열.
+std::string activeCommand();
+
+// 에러 시점의 DG 컨텍스트를 조립한다. 노드 타입·어트리뷰트·축/대상은
+// 호출부가 건넨다 -- boad/onfix는 Maya 씬을 스스로 훑지 않는다. 사건이
+// 일어난 그 자리에서만 정확히 안다(감시자가 Maya 주소공간을 못 보는 것과
+// 같은 이유로, 포착은 항상 발생지에서 한다는 원칙을 여기서도 지킨다).
+// activeCommand는 항상 여기서 스택으로부터 채운다 -- 호출부가 직접 쓰지 않는다.
+DgContext capture(const MString& nodeType, const MString& attributeName,
+                   const MString& axisOrTarget);
+
+}  // namespace onfix
+
 }  // namespace maro
 
 #ifndef MARO_ASSERT
