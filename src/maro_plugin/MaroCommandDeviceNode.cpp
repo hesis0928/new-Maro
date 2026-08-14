@@ -64,13 +64,18 @@ DgContext selfContext(const MObject& node) {
     return ctx;
 }
 
-DgContext computeContext(const MObject& node) {
+// selfContext와 달리 MObject가 아니라 노드 자체를 받는다. thisMObject()도
+// Maya API 호출이므로 호출부에서 미리 평가하면 워커 스레드에서 그것부터
+// 부르게 된다 -- 가드 안으로 들여야 "compute()에서는 메인 스레드일 때만
+// Maya를 만진다"가 실제로 지켜진다. MaroAxisNode.cpp가 같은 이유로 같은
+// 모양이다.
+DgContext computeContext(const MPxNode& node) {
     DgContext ctx;
     ctx.nodeType = "maroCommandDevice";
     ctx.activeCommand = onfix::activeCommand();
     if (isMainThread()) {
         try {
-            MFnDependencyNode fn(node);
+            MFnDependencyNode fn(node.thisMObject());
             ctx.axisOrTarget = fn.name().asChar();
         } catch (...) {
         }
@@ -440,13 +445,13 @@ MStatus MaroCommandDeviceNode::compute(const MPlug& plug, MDataBlock& data) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.compute.Exception",
             MString("Maro: command device compute failed: ") + e.what(),
-            computeContext(thisMObject()));
+            computeContext(*this));
         return MS::kFailure;
     } catch (...) {
         maro::BoadMaro::error(
             "MaroCommandDeviceNode.compute.UnknownException",
             "Maro: command device compute failed with unknown error.",
-            computeContext(thisMObject()));
+            computeContext(*this));
         return MS::kFailure;
     }
 }

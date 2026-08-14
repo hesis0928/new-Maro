@@ -224,6 +224,15 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         // 불가능한 동안의 반복 실패가 매번 정직하게 "새 분석"으로 집계된다
         // (test_diag_degraded.py) -- 캐시는 파일 I/O만 건너뛸 뿐 회계까지
         // 건너뛰면 안 된다.
+        //
+        // 알려진 한계 (히트 방향): 한 번 담긴 해시는 이 세션 동안 다시
+        // 디스크를 보지 않는다. 이 프로세스가 등록한 해법은 registerRemedy()가
+        // 해당 항목을 erase하므로 즉시 반영되지만, *다른* 주체가 공유
+        // 파일에 쓴 것은 세션이 끝날 때까지 안 보인다. Layer C의 감시자가
+        // 정본 파일에 분석을 써 넣는 것이 바로 그 경우다 -- 두 파일 구조가
+        // 존재하는 이유 자체가 그것이므로, 감시자를 붙일 때 이 캐시의
+        // 무효화 경로부터 다시 봐야 한다(파일 mtime 확인이든, 감시자가
+        // 쓴 뒤 알려 주는 경로든).
         const auto cacheIt = bookCache().find(hash);
         if (cacheIt != bookCache().end()) {
             const BookEntry& entry = cacheIt->second;
@@ -285,12 +294,20 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
     } catch (const std::exception& e) {
         // book이 죽어도 진단은 죽지 않는다 (스펙 §3.6). 이 실패 자체는
         // 재귀적으로 error()를 부르지 않고 devInfo로만 남긴다.
+        //
+        // priorAnalysis/remedy도 함께 비운다: 히트 분기가 그 둘을 채운
+        // 뒤에 예외가 나면, servedFromBook=false인데 과거 분석은 달려 있는
+        // 자기모순 레코드가 남는다.
         rec.message = message.asChar();
+        rec.priorAnalysis.clear();
+        rec.remedy.clear();
         rec.servedFromBook = false;
         ++g_freshAnalysisCount;
         devInfo(MString("Maro: book 조회/기록 실패, 로컬 기록으로 진행: ") + e.what());
     } catch (...) {
         rec.message = message.asChar();
+        rec.priorAnalysis.clear();
+        rec.remedy.clear();
         rec.servedFromBook = false;
         ++g_freshAnalysisCount;
         devInfo("Maro: book 조회/기록에서 알 수 없는 오류, 로컬 기록으로 진행.");

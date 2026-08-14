@@ -30,7 +30,6 @@ MARO_DIAG_BOOK_DIR을 공유한다.
 import os
 import subprocess
 import sys
-import tempfile
 
 MAYAPY = sys.executable
 THIS_FILE = os.path.abspath(__file__)
@@ -72,12 +71,12 @@ def run_session(session_label, env):
 
 
 def orchestrate():
-    # 두 세션이 공유할 book 디렉터리. diag_book.py/diag_remedy.py와 같은
-    # 이유로 전용 임시 디렉터리를 쓴다 -- 실제 사용자 prefs를 건드리지
-    # 않으면서, 반복 실행 사이에 지식이 쌓여 재현이 안 되는 것도 막는다.
-    bookDir = tempfile.mkdtemp(prefix="maro_diag_book_cross_session_")
+    # 두 세션이 공유할 book 디렉터리는 CMake가 MARO_DIAG_BOOK_DIR로 이미
+    # 건네준다(빌드 트리 밑, maya_diag_book_root_reset 픽스처가 매 실행 전에
+    # 비운다). 여기서 따로 mkdtemp를 하면 그 픽스처를 무력화하고 실행마다
+    # 디렉터리를 하나씩 흘리게 된다. 자식 세션들은 os.environ.copy()로
+    # 그대로 물려받는다.
     env = os.environ.copy()
-    env["MARO_DIAG_BOOK_DIR"] = bookDir
 
     rc1, out1 = run_session("1", env)
     print("---- session 1 (fresh analysis) output ----")

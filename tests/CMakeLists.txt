@@ -109,8 +109,10 @@ if(MARO_BUILD_PLUGIN)
     # 같다: ENVIRONMENT는 세미콜론 구분 리스트라 Windows 경로가 섞이면
     # 조각난다. set은 값 하나만 다루므로 안전하다. 또 ENVIRONMENT_MODIFICATION은
     # 프로세스 환경을 세팅할 뿐이므로, 파이썬에서 os.environ으로 직접 덮어쓰는
-    # 테스트(diag_book/diag_remedy/diag_degraded/diag_degraded_remedy/diag_thread)는
-    # 그대로 자기 값을 쓴다 -- 그쪽 시나리오는 영향을 받지 않는다.
+    # 테스트는 그대로 자기 값을 쓴다. 지금 그렇게 하는 것은 강등 시나리오
+    # 둘(diag_degraded/diag_degraded_remedy)뿐이다 -- 그 둘은 "쓸 수 없는
+    # 경로"를 일부러 만들어야 해서 여기서 주는 정상 디렉터리를 쓸 수 없다.
+    # 나머지는 전부 이 값을 그대로 받아 쓴다(아래 초기화 픽스처가 걸리도록).
     set(MARO_TEST_BOOK_ROOT "${CMAKE_CURRENT_BINARY_DIR}/diag_book")
 
     # 리뷰 Finding 3: 위 book 디렉터리들은 빌드 트리 밑이라 사용자 진짜 prefs는
