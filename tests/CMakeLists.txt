@@ -13,6 +13,18 @@ target_link_libraries(maro_transform_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(maro_transform_tests)
 
+add_executable(maro_diag_tests
+    diag/test_error_hash.cpp
+)
+
+target_link_libraries(maro_diag_tests PRIVATE
+    maro_diag
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_discover_tests(maro_diag_tests)
+
 if(MARO_BUILD_PLUGIN)
     set(MAYAPY "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe")
 
