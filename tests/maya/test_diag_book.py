@@ -37,6 +37,22 @@ first = cmds.maroDiagQuery(index=0)
 assert first[8] == "0", "first occurrence must not claim it was served from book"
 print("first occurrence OK")
 
+# book이 인메모리 캐시로 몰래 바뀌어도 이 테스트가 안 흔들리려면, 1회차
+# 분석이 실제로 디스크의 스필 파일에 남았는지부터 확인해야 한다 -- 이게
+# 없으면 아래 2회차 즉답은 "같은 프로세스가 기억한다"만 증명할 뿐 "book이
+# 세션을 넘어 살아남는다"는 증명하지 못한다.
+spillPath = os.path.join(os.environ["MARO_DIAG_BOOK_DIR"], "maro_knowledge.spill.jsonl")
+assert os.path.exists(spillPath), (
+    f"expected spill file at {spillPath} after first occurrence, but it does not exist"
+)
+with open(spillPath, "r", encoding="utf-8") as f:
+    spillContents = f.read()
+assert first[2] in spillContents, (
+    f"expected spill file at {spillPath} to contain the error hash {first[2]!r} "
+    f"recorded by the first occurrence, but it was not found in: {spillContents!r}"
+)
+print("first occurrence reached disk OK")
+
 # 2회차: 완전히 같은 사이트(같은 노드 타입/커맨드)이므로 해시가 같다.
 try:
     cmds.maroBindAxis(axis, light)
