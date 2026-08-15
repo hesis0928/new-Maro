@@ -1,98 +1,110 @@
-﻿#include "rclcpp/rclcpp.hpp"
-#include "geometry_msgs/msg/pose.hpp"
-#include "maro_library/IpcData.h"
+﻿#include <iostream>
+#include <thread>
+#include <chrono>
 
+// 윈도우 네트워크 통신(소켓) 헤더
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+
+// Maya 플러그인(Maro)과 연결할 공유 메모리 헤더
 #include <boost/interprocess/windows_shared_memory.hpp>
 #include <boost/interprocess/mapped_region.hpp>
-#include <boost/interprocess/sync/named_mutex.hpp>
-#include <boost/interprocess/sync/scoped_lock.hpp>
+#include "maro_library/IpcData.h"
 
-using std::placeholders::_1;
+using namespace boost::interprocess;
 
-class ControlBridgeNode : public rclcpp::Node {
-public:
-    ControlBridgeNode() : Node("control_bridge_node") {
-        try {
-            // Maya가 먼저 켜져서 만들어둔 제어 메모리(Track C)에 연결합니다.
-            m_mutex = std::make_unique<boost::interprocess::named_mutex>(boost::interprocess::open_only, MaroPlugin::CTRL_MUTEX_NAME);
-            m_shm = std::make_unique<boost::interprocess::windows_shared_memory>(boost::interprocess::open_only, MaroPlugin::CTRL_SHM_NAME, boost::interprocess::read_write);
-            m_region = std::make_unique<boost::interprocess::mapped_region>(*m_shm, boost::interprocess::read_write);
-
-            m_ctrlData = static_cast<MaroPlugin::RobotControlData*>(m_region->get_address());
-            RCLCPP_INFO(this->get_logger(), "Successfully connected to Maya Control SHM (Track C).");
-
-        }
-        catch (const boost::interprocess::interprocess_exception& e) {
-            RCLCPP_FATAL(this->get_logger(), "Failed to connect to SHM: %s. Is Maya running with 'rosSim'?", e.what());
-            // 에러 발생 시 main 함수의 catch 블록으로 던져서 안전하게 종료되도록 수정
-            throw std::runtime_error("Maya 공유 메모리(SHM)에 연결할 수 없습니다. Maya가 먼저 실행되어 있는지 확인하세요.");
-        }
-
-        // ROS2 토픽 구독 설정 (/robot_pose 토픽을 받습니다)
-        m_subscriber = this->create_subscription<geometry_msgs::msg::Pose>(
-            "/robot_pose", 10, std::bind(&ControlBridgeNode::poseCallback, this, _1));
-
-        RCLCPP_INFO(this->get_logger(), "Listening to /robot_pose topic...");
-    }
-
-private:
-    void poseCallback(const geometry_msgs::msg::Pose::SharedPtr msg) {
-        if (!m_ctrlData || !m_mutex) return;
-
-        // 동시 접근을 막기 위한 뮤텍스 잠금
-        boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(*m_mutex);
-
-        m_ctrlData->has_transform = true;
-
-        // 위치(Position) 값 복사
-        m_ctrlData->position[0] = static_cast<float>(msg->position.x);
-        m_ctrlData->position[1] = static_cast<float>(msg->position.y);
-        m_ctrlData->position[2] = static_cast<float>(msg->position.z);
-
-        // 회전(Orientation - Quaternion) 값 복사
-        m_ctrlData->orientation[0] = static_cast<float>(msg->orientation.x);
-        m_ctrlData->orientation[1] = static_cast<float>(msg->orientation.y);
-        m_ctrlData->orientation[2] = static_cast<float>(msg->orientation.z);
-        m_ctrlData->orientation[3] = static_cast<float>(msg->orientation.w);
-
-        // Maya가 값을 읽어갈 수 있도록 시퀀스 인덱스 증가 (+1)
-        m_ctrlData->command_index.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    std::unique_ptr<boost::interprocess::named_mutex> m_mutex;
-    std::unique_ptr<boost::interprocess::windows_shared_memory> m_shm;
-    std::unique_ptr<boost::interprocess::mapped_region> m_region;
-    MaroPlugin::RobotControlData* m_ctrlData = nullptr;
-    rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr m_subscriber;
+// 우분투에서 날아오는 네트워크 패킷 규격 (IpcData.h의 데이터와 동일한 크기)
+// 네트워크 수신용이므로 std::atomic은 제외하고 원시 타입(uint64_t)으로 받습니다.
+#pragma pack(push, 1)
+struct UdpControlPacket {
+    uint64_t command_index;
+    bool has_transform;
+    float position[3];
+    float orientation[4];
 };
+#pragma pack(pop)
 
-int main(int argc, char* argv[]) {
+int main(int argc, char** argv) {
+    std::cout << "=========================================" << std::endl;
+    std::cout << " [Maro Control Bridge] Windows UDP Receiver" << std::endl;
+    std::cout << "=========================================" << std::endl;
+
+    // 1. 윈도우 네트워크(Winsock) 초기화
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        std::cerr << "Winsock 초기화 실패!" << std::endl;
+        return 1;
+    }
+
+    // 2. UDP 소켓 생성
+    SOCKET recvSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (recvSocket == INVALID_SOCKET) {
+        std::cerr << "소켓 생성 실패!" << std::endl;
+        WSACleanup();
+        return 1;
+    }
+
+    // 3. 포트 9090 바인딩
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(9090);
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(recvSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        std::cerr << "포트 9090 바인딩 실패!" << std::endl;
+        closesocket(recvSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    // 4. Maya가 생성해둔 공유 메모리 열기 (Maya 플러그인이 켜져 있어야 함)
+    MaroPlugin::RobotControlData* shm_data = nullptr;
     try {
-        // [수정됨] 단 한 번만 초기화합니다.
-        rclcpp::init(argc, argv);
-
-        // 노드를 생성하고 스핀(대기)합니다.
-        rclcpp::spin(std::make_shared<ControlBridgeNode>());
-
-        // 스핀이 종료되면(Ctrl+C 등) 안전하게 ROS 2를 종료합니다.
-        rclcpp::shutdown();
+        windows_shared_memory shm(open_only, MaroPlugin::CTRL_SHM_NAME, read_write);
+        mapped_region region(shm, read_write);
+        shm_data = static_cast<MaroPlugin::RobotControlData*>(region.get_address());
+        std::cout << "🚀 Maya 공유 메모리 연결 성공!" << std::endl;
     }
-    catch (const std::exception& e) {
-        std::cerr << "\n==================================" << std::endl;
-        std::cerr << " 🚨 ROS 2 치명적 에러 발생: " << e.what() << std::endl;
-        std::cerr << "==================================\n" << std::endl;
+    catch (const interprocess_exception& e) {
+        std::cerr << "공유 메모리 에러: " << e.what() << "\n(Maya에서 ViewportStreamer를 먼저 실행하세요.)" << std::endl;
+        closesocket(recvSocket);
+        WSACleanup();
+        return 1;
+    }
 
-        // 에러로 인해 튕겼을 때도 ROS 2 엔진을 안전하게 꺼줍니다.
-        if (rclcpp::ok()) {
-            rclcpp::shutdown();
+    std::cout << "통신 대기 중... (UDP Port: 9090)" << std::endl;
+
+    // 5. 무한 루프 돌면서 데이터 수신 및 SHM 업데이트
+    char buffer[sizeof(UdpControlPacket)];
+    sockaddr_in clientAddr;
+    int clientAddrLen = sizeof(clientAddr);
+
+    while (true) {
+        int bytesReceived = recvfrom(recvSocket, buffer, sizeof(UdpControlPacket), 0, (SOCKADDR*)&clientAddr, &clientAddrLen);
+
+        if (bytesReceived == sizeof(UdpControlPacket)) {
+            // 바이트 배열을 네트워크 패킷 구조체로 캐스팅
+            UdpControlPacket* received_data = reinterpret_cast<UdpControlPacket*>(buffer);
+
+            // 공유 메모리(SHM) 구조체에 데이터 밀어넣기
+            shm_data->command_index.store(received_data->command_index);
+            shm_data->has_transform = received_data->has_transform;
+
+            for (int i = 0; i < 3; i++) shm_data->position[i] = received_data->position[i];
+            for (int i = 0; i < 4; i++) shm_data->orientation[i] = received_data->orientation[i];
+
+            std::cout << "[제어 수신] Index: " << received_data->command_index
+                << " | X: " << received_data->position[0]
+                << " | Y: " << received_data->position[1]
+                << " | Z: " << received_data->position[2] << std::endl;
+        }
+        else if (bytesReceived == SOCKET_ERROR) {
+            std::cerr << "수신 에러 발생!" << std::endl;
+            break;
         }
     }
-    catch (...) {
-        std::cerr << "\n 🚨 알 수 없는 에러로 종료되었습니다.\n" << std::endl;
-        if (rclcpp::ok()) {
-            rclcpp::shutdown();
-        }
-    }
 
+    closesocket(recvSocket);
+    WSACleanup();
     return 0;
 }

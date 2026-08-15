@@ -1,35 +1,26 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.8)
 project(image_bridge)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ament_cmake와 뼈대(maro_library) 불러오기
 find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(image_transport REQUIRED)
 find_package(maro_library REQUIRED)
+
 find_package(Boost REQUIRED COMPONENTS interprocess)
 find_package(OpenCV REQUIRED)
 
+set(NETWORK_LIBS ws2_32)
+
 add_executable(image_bridge_node src/image_bridge_node.cpp)
 
-# ament_target_dependencies를 사용하여 모든 ROS2 의존성을 한 번에 연결
-# maro_library가 이미 여기에 포함되어 있으므로, 컴파일러는 자동으로
-# maro_library/include 경로를 탐색하게 됩니다.
-ament_target_dependencies(image_bridge_node
-  rclcpp
-  sensor_msgs
-  image_transport
-  maro_library
-)
+target_include_directories(image_bridge_node PRIVATE ${Boost_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(image_bridge_node PRIVATE Boost::interprocess ${OpenCV_LIBRARIES} ${NETWORK_LIBS})
 
-# 비-ROS2 라이브러리들을 키워드 없이 '일반' 방식으로 링크합니다.
-target_link_libraries(image_bridge_node
-    Boost::interprocess
-    ${OpenCV_LIBRARIES}
-)
+# ROS 2 시스템(rclcpp) 없이 순수 헤더(IpcData.h)만 안전하게 연결!
+ament_target_dependencies(image_bridge_node maro_library)
 
-install(TARGETS
-    image_bridge_node
-    DESTINATION lib/${PROJECT_NAME}
-)
+install(TARGETS image_bridge_node DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

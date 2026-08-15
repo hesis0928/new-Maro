@@ -1,115 +1,104 @@
-#include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/image.hpp"
-#include "image_transport/image_transport.hpp"
-// maro_library ����� �����մϴ�. cv_bridge�� �� �̻� �ʿ� �����ϴ�.
-#include "maro_library/maro_bridge.hpp"
-#include "maro_library/IpcData.h"
+﻿#include <iostream>
+#include <vector>
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
 
 #include <boost/interprocess/windows_shared_memory.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include <boost/interprocess/sync/named_mutex.hpp>
 #include <boost/interprocess/sync/scoped_lock.hpp>
-
 #include <opencv2/opencv.hpp>
-#include <memory>
-#include <chrono>
 
-using namespace std::chrono_literals;
+// 공유 메모리 구조체가 정의된 뼈대 헤더
+#include "maro_library/IpcData.h"
 
-class ImageBridgeNode : public rclcpp::Node {
-public:
-    ImageBridgeNode() : Node("image_bridge_node"), m_lastReadFrame(0) {
-        RCLCPP_INFO(this->get_logger(), "Initializing Image Bridge Node...");
+using namespace boost::interprocess;
 
-        try {
-            m_mutex = std::make_unique<boost::interprocess::named_mutex>(boost::interprocess::open_or_create, MaroPlugin::MUTEX_NAME);
-            m_shm = std::make_unique<boost::interprocess::windows_shared_memory>(
-                boost::interprocess::open_or_create,
-                MaroPlugin::SHM_NAME,
-                boost::interprocess::read_write,
-                MaroPlugin::SHM_SIZE
-            );
-            m_region = std::make_unique<boost::interprocess::mapped_region>(*m_shm, boost::interprocess::read_write);
-            
-            m_header = static_cast<MaroPlugin::SharedImageHeader*>(m_region->get_address());
-            m_buffer = static_cast<unsigned char*>(m_region->get_address()) + sizeof(MaroPlugin::SharedImageHeader);
+int main() {
+    std::cout << "=========================================" << std::endl;
+    std::cout << " [Maro Image Bridge] Windows TCP Sender" << std::endl;
+    std::cout << "=========================================" << std::endl;
 
-        } catch (const boost::interprocess::interprocess_exception& e) {
-            RCLCPP_FATAL(this->get_logger(), "Failed to create/open shared memory: %s", e.what());
-            rclcpp::shutdown();
-            return;
-        }
+    // 터미널 출력 인코딩을 강제로 UTF-8로 고정
+    SetConsoleOutputCP(CP_UTF8);
 
-        m_publisher = std::make_shared<image_transport::Publisher>(
-            image_transport::create_publisher(this, "/maya/viewport_image"));
+    std::cout << "=========================================" << std::endl;
 
-        m_timer = this->create_wall_timer(16ms, std::bind(&ImageBridgeNode::timerCallback, this));
-        
-        RCLCPP_INFO(this->get_logger(), "Image Bridge Node started. Publishing to /maya/viewport_image");
+    // 1. 윈도우 네트워크(Winsock) 초기화
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return 1;
+
+    // 2. TCP 소켓 생성 (대용량 영상 전송에는 TCP가 필수)
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(9091); // 이미지 전용 포트 9091
+    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); // 리눅스(WSL2) 주소
+
+    // 3. 우분투 수신기가 켜질 때까지 무한 접속 시도
+    std::cout << "우분투 Image Receiver(Port:9091) 연결 대기 중..." << std::endl;
+    while (connect(sock, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        Sleep(1000);
     }
+    std::cout << "🚀 우분투와 이미지 통신망 연결 성공!" << std::endl;
 
-    ~ImageBridgeNode() {
-        boost::interprocess::shared_memory_object::remove(MaroPlugin::SHM_NAME);
-        boost::interprocess::named_mutex::remove(MaroPlugin::MUTEX_NAME);
-        RCLCPP_INFO(this->get_logger(), "Shared memory objects removed.");
-    }
+    try {
+        // 4. 공유 메모리 오픈
+        named_mutex mutex(open_only, MaroPlugin::MUTEX_NAME);
+        windows_shared_memory shm(open_only, MaroPlugin::SHM_NAME, read_only);
+        mapped_region region(shm, read_only);
 
-private:
-    void timerCallback() {
-        uint64_t currentFrame = 0;
-        cv::Mat image;
+        MaroPlugin::SharedImageHeader* header = static_cast<MaroPlugin::SharedImageHeader*>(region.get_address());
+        uint8_t* pPixels = static_cast<uint8_t*>(region.get_address()) + sizeof(MaroPlugin::SharedImageHeader);
 
-        {
-            boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(*m_mutex);
-            currentFrame = m_header->frame_index.load(std::memory_order_relaxed);
+        uint64_t last_frame = 0;
 
-            if (currentFrame > m_lastReadFrame && m_header->width > 0 && m_header->height > 0) {
-                image = cv::Mat(m_header->height, m_header->width, CV_8UC4, m_buffer).clone();
-                m_lastReadFrame = currentFrame;
+        // 5. 초고속 영상 전송 무한 루프
+        while (true) {
+            mutex.lock();
+
+            // ★ 수정된 부분: frame_index 오타 수정 및 atomic 안전 로드
+            uint64_t current_frame = header->frame_index.load();
+
+            // 새 프레임이 없거나 데이터가 비어있으면 스킵
+            if (current_frame == last_frame || header->width == 0) {
+                mutex.unlock();
+                Sleep(1);
+                continue;
+            }
+
+            int width = header->width;
+            int height = header->height;
+            int data_size = width * height * 4; // RGBA 4채널
+
+            // 뮤텍스 잠금 시간을 최소화하기 위해 데이터를 로컬로 쏙 빼옵니다.
+            std::vector<uint8_t> local_buffer(pPixels, pPixels + data_size);
+            last_frame = current_frame;
+            mutex.unlock();
+
+            // OpenCV를 이용해 마야의 RGBA를 ROS 2 표준인 BGRA로 색상 변환
+            cv::Mat image(height, width, CV_8UC4, local_buffer.data());
+            cv::cvtColor(image, image, cv::COLOR_RGBA2BGRA);
+
+            // [전송 1] 해상도 정보(헤더) 먼저 쏘기
+            int header_info[2] = { width, height };
+            if (send(sock, (char*)header_info, sizeof(header_info), 0) <= 0) break;
+
+            // [전송 2] 변환된 픽셀 데이터 쏘기 (청크 분할 안전 전송)
+            int total_sent = 0;
+            char* data_ptr = (char*)image.data;
+            while (total_sent < data_size) {
+                int sent = send(sock, data_ptr + total_sent, data_size - total_sent, 0);
+                if (sent <= 0) break;
+                total_sent += sent;
             }
         }
-
-        if (!image.empty()) {
-            // OpenCV �̹����� BGRA �����̹Ƿ�, ROS �޽��� ���ڵ��� "bgra8"�� �����մϴ�.
-            // cvtColor�� �� �̻� �ʿ����� �ʽ��ϴ�.
-            // cv::cvtColor(image, image, cv::COLOR_RGBA2BGRA); 
-            
-            // ================================================================
-            // <<< �ٽ� ���� ���� >>>
-            
-            // 1. maro_bridge::CvImage ����ü�� �����մϴ�.
-            maro_bridge::CvImage maro_image;
-
-            // 2. ���, ���ڵ�, �̹��� �����͸� ä��ϴ�.
-            maro_image.header.stamp = this->get_clock()->now();
-            maro_image.header.frame_id = "maya_viewport";
-            maro_image.encoding = "bgra8"; // OpenCV Mat�� BGRA �����̹Ƿ� ��ġ��ŵ�ϴ�.
-            maro_image.image = image;
-
-            // 3. maro_bridge::toImageMsg �Լ��� ȣ���Ͽ� ROS2 �޽����� �����մϴ�.
-            sensor_msgs::msg::Image::SharedPtr msg = maro_bridge::toImageMsg(maro_image);
-            
-            // ================================================================
-            
-            m_publisher->publish(std::move(msg));
-        }
+    }
+    catch (const interprocess_exception& ex) {
+        std::cerr << "공유 메모리 에러: " << ex.what() << "\n(Maya에서 ViewportStreamer가 켜져 있는지 확인하세요.)" << std::endl;
     }
 
-    rclcpp::TimerBase::SharedPtr m_timer;
-    std::shared_ptr<image_transport::Publisher> m_publisher;
-    
-    std::unique_ptr<boost::interprocess::named_mutex> m_mutex;
-    std::unique_ptr<boost::interprocess::windows_shared_memory> m_shm;
-    std::unique_ptr<boost::interprocess::mapped_region> m_region;
-
-    MaroPlugin::SharedImageHeader* m_header;
-    unsigned char* m_buffer;
-    uint64_t m_lastReadFrame;
-};
-
-int main(int argc, char* argv[]) {
-    rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<ImageBridgeNode>());
-    rclcpp::shutdown();
+    closesocket(sock);
+    WSACleanup();
     return 0;
 }
