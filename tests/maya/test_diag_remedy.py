@@ -98,7 +98,8 @@ print("remedy-only registration (no prior analysis) OK")
 cmds.maroDiagEmit(severity="error", message="probe message", siteTag=remedyOnlySiteTag)
 remedyOnlyRecord = cmds.maroDiagQuery(index=0)
 (severity, message, errorHash2, nodeType, attributeName, activeCommand,
- axisOrTarget, remedy, servedFromBook, priorAnalysis) = remedyOnlyRecord
+ axisOrTarget, remedy, servedFromBook, priorAnalysis, _sequence,
+ _timestampMs) = remedyOnlyRecord
 
 assert errorHash2 == remedyOnlyHash, (
     f"C++ hashError() and the python FNV-1a-64 reimplementation disagree: "

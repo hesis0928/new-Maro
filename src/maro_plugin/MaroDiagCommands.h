@@ -25,9 +25,10 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
-// -index <int, 기본 0>. 0 = 가장 최근 레코드. 필드 9개를 순서대로 담은
+// -index <int, 기본 0>. 0 = 가장 최근 레코드. 필드 12개를 순서대로 담은
 // 문자열 배열을 돌려준다: severity, message, errorHash, nodeType,
-// attributeName, activeCommand, axisOrTarget, remedy, servedFromBook("0"/"1").
+// attributeName, activeCommand, axisOrTarget, remedy, servedFromBook("0"/"1"),
+// priorAnalysis, sequence, timestampMs.
 class MaroDiagQueryCommand : public MPxCommand {
 public:
     static void* creator();

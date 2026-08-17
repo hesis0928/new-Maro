@@ -145,7 +145,7 @@ def run_as_session(session_label):
         rec = cmds.maroDiagQuery(index=0)
         (severity, message, errorHash, nodeType, attributeName,
          activeCommand, axisOrTarget, remedy, servedFromBook,
-         priorAnalysis) = rec
+         priorAnalysis, _sequence, _timestampMs) = rec
 
         assert servedFromBook == "1", (
             f"session 2 triggers the exact same rejection site as session 1 "

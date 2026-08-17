@@ -1,6 +1,8 @@
 #include "MaroDiag.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <thread>
@@ -16,6 +18,21 @@ namespace maro {
 namespace {
 
 std::atomic<std::size_t> g_freshAnalysisCount{0};
+
+// 레코드 순번. 0은 "안 채워짐"을 뜻하므로 첫 레코드가 1을 받도록 pre-increment
+// 한다. 레코드 뮤텍스와 무관하게 워커 스레드에서도 불리므로 atomic이다.
+std::atomic<std::uint64_t> g_nextSequence{0};
+
+std::uint64_t nowMs() {
+    using namespace std::chrono;
+    return static_cast<std::uint64_t>(
+        duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
+}
+
+void stampRecord(DiagRecord& rec) {
+    rec.sequence = ++g_nextSequence;
+    rec.timestampMs = nowMs();
+}
 
 // book(스필)에 한 번도 쓸 수 없게 되면 이 세션 동안 한 번만 알린다. devInfo는
 // _DEBUG 밖(우리가 빌드/테스트하는 RelWithDebInfo 포함)에서 무연산으로
@@ -138,6 +155,7 @@ std::unordered_map<std::string, BookEntry>& BoadMaro::bookCache() {
 
 void BoadMaro::info(const MString& message) {
     DiagRecord rec;
+    stampRecord(rec);
     rec.severity = DiagSeverity::Info;
     rec.message = message.asChar();
     // 워커 스레드에서는 화면 에코를 건너뛴다 -- 레코드는 그대로 남는다
@@ -151,6 +169,7 @@ void BoadMaro::info(const MString& message) {
 
 void BoadMaro::warn(const MString& message) {
     DiagRecord rec;
+    stampRecord(rec);
     rec.severity = DiagSeverity::Warn;
     rec.message = message.asChar();
     if (isMainThread()) {
@@ -163,6 +182,7 @@ void BoadMaro::warn(const MString& message) {
 void BoadMaro::devInfo(const MString& message) {
 #ifdef _DEBUG
     DiagRecord rec;
+    stampRecord(rec);
     rec.severity = DiagSeverity::DevInfo;
     rec.message = message.asChar();
     if (isMainThread()) {
@@ -178,6 +198,7 @@ void BoadMaro::devInfo(const MString& message) {
 void BoadMaro::error(const std::string& siteTag, const MString& message,
                       const DgContext& context) {
     DiagRecord rec;
+    stampRecord(rec);
     rec.severity = DiagSeverity::Error;
     rec.context = context;
 
@@ -425,6 +446,7 @@ void BoadMaro::resetForTest() {
         std::lock_guard<std::mutex> lock(mutex());
         stream().clear();
     }
+    g_nextSequence.store(0);
     {
         std::lock_guard<std::mutex> bookLock(bookMutex());
         bookCache().clear();

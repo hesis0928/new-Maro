@@ -60,6 +60,7 @@ DgContext selfContext(const MObject& node) {
         ctx.axisOrTarget = fn.name().asChar();
     } catch (...) {
         // 소멸 도중이라 이름조차 못 얻을 수 있다 -- 컨텍스트 없이 진행한다.
+        ctx.nameUnavailable = true;
     }
     return ctx;
 }
@@ -78,7 +79,12 @@ DgContext computeContext(const MPxNode& node) {
             MFnDependencyNode fn(node.thisMObject());
             ctx.axisOrTarget = fn.name().asChar();
         } catch (...) {
+            ctx.nameUnavailable = true;
         }
+    } else {
+        // 워커 스레드다. Maya에 이름을 물을 수 없다 -- 빈칸이지만 "관여
+        // 없음"이 아니라 "못 채움"이다.
+        ctx.nameUnavailable = true;
     }
     return ctx;
 }

@@ -251,6 +251,9 @@ MStatus MaroDiagQueryCommand::doIt(const MArgList& args) {
         // 위치로 참조하므로 그 사이에 끼워 넣지 않는다 -- 끝에만 붙여야 기존
         // 인덱스가 전부 그대로 유지된다.
         result.append(MString(rec.priorAnalysis.c_str()));
+        // 뒤에 붙인다 -- 기존 테스트들이 위치 인덱스로 읽으므로 0~9는 그대로 둔다.
+        result.append(MString(std::to_string(rec.sequence).c_str()));
+        result.append(MString(std::to_string(rec.timestampMs).c_str()));
         setResult(result);
         return MS::kSuccess;
     } catch (const std::exception& e) {

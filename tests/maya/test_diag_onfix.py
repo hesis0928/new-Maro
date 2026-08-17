@@ -33,10 +33,12 @@ print("record emitted OK")
 
 rec = cmds.maroDiagQuery(index=0)
 # 리뷰 Finding C1: maroDiagQuery는 이제 priorAnalysis를 10번째 필드로
-# 덧붙인다 (기존 0~8 인덱스는 그대로다). 여기서는 그 값 자체를 쓰지 않으므로
-# 이름 없이 풀어 둔다.
+# 덧붙인다 (기존 0~8 인덱스는 그대로다). Task 1에서 sequence, timestampMs를
+# 11, 12번째 필드로 더 덧붙였다 (기존 0~9 인덱스는 그대로다). 여기서는 그
+# 값들 자체를 쓰지 않으므로 이름 없이 풀어 둔다.
 (severity, message, errorHash, nodeType, attributeName, activeCommand,
- axisOrTarget, remedy, servedFromBook, _priorAnalysis) = rec
+ axisOrTarget, remedy, servedFromBook, _priorAnalysis, _sequence,
+ _timestampMs) = rec
 
 assert severity == "error", f"expected severity 'error', got {severity!r}"
 assert nodeType == "pointLight", f"expected nodeType 'pointLight', got {nodeType!r}"

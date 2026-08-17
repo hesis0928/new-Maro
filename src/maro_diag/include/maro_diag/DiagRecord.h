@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace maro {
@@ -20,6 +21,14 @@ struct DgContext {
     std::string attributeName;  // 관여한 어트리뷰트 롱네임. 예: "targetObject"
     std::string activeCommand;  // 진행 중이던 커맨드 클래스 이름. 예: "MaroBindAxisCommand"
     std::string axisOrTarget;   // 관여한 축 또는 대상 오브젝트의 이름.
+
+    // 위 네 필드가 비어 있는 것은 두 가지 뜻일 수 있다 -- 그 자리에 관여한
+    // 것이 애초에 없었거나(관여 없음), 관여는 했는데 그 시점에 알아낼 수
+    // 없었거나(못 채움). 후자가 실제로 있다: compute()가 워커 스레드에서
+    // 돌 때는 Maya에 노드 이름을 물을 수 없어 axisOrTarget을 비운다.
+    // 패널이 둘을 똑같이 빈칸으로 그리면 사용자는 "정보가 없다"와 "이
+    // 도구가 고장 났다"를 구분하지 못한다 (설계 스펙 §4.4).
+    bool nameUnavailable = false;
 };
 
 // boad의 인메모리 진단 스트림 한 칸. 진단 패널(Layer B)이 그대로 읽을 구조이므로
@@ -45,6 +54,13 @@ struct DiagRecord {
     // 문자열이다. message를 덮어쓰지 않는다 -- 이번 발생의 구체적 사실과
     // 과거 발생의 분석은 서로 다른 발생의 텍스트이므로 뒤섞이면 안 된다.
     std::string priorAnalysis;
+    // 1부터 시작해 레코드마다 1씩 오르는 순번. 정렬·접기의 유일한 기준이다.
+    std::uint64_t sequence = 0;
+    // Unix epoch 밀리초. 사람에게 보여주기 위한 값이며, 순서를 정하는 어떤
+    // 판단도 이것을 읽지 않는다 -- 벽시계는 NTP 보정이나 서머타임으로 뒤로
+    // 갈 수 있고, 그때 순서가 흔들리면 연쇄의 앞뒤가 뒤집혀 원인 분석이
+    // 통째로 반대가 된다. 형식화는 표시하는 쪽(Python)이 로컬 시간대로 한다.
+    std::uint64_t timestampMs = 0;
 };
 
 }  // namespace maro

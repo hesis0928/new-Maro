@@ -56,7 +56,12 @@ DgContext computeContext(const MPxNode& node, const char* nodeType) {
             MFnDependencyNode fn(node.thisMObject());
             ctx.axisOrTarget = fn.name().asChar();
         } catch (...) {
+            ctx.nameUnavailable = true;
         }
+    } else {
+        // 워커 스레드다. Maya에 이름을 물을 수 없다 -- 빈칸이지만 "관여
+        // 없음"이 아니라 "못 채움"이다.
+        ctx.nameUnavailable = true;
     }
     return ctx;
 }
