@@ -20,6 +20,20 @@ maro::DiagRecord makeRecord(std::uint64_t seq, std::uint64_t ms,
     return rec;
 }
 
+// errorHash가 비어 있는 레코드. DiagRecord.h의 계약대로 book 해시는 Error
+// 심각도에서만 채워지므로, info/warn 레코드는 운영에서 늘 이 모양으로
+// collapseKey의 "m:" 대체 경로(심각도 + 메시지 첫 줄)를 탄다.
+maro::DiagRecord makeHashlessRecord(std::uint64_t seq, std::uint64_t ms,
+                                     maro::DiagSeverity sev, const std::string& message) {
+    maro::DiagRecord rec;
+    rec.sequence = seq;
+    rec.timestampMs = ms;
+    rec.severity = sev;
+    rec.message = message;
+    // rec.errorHash left empty on purpose.
+    return rec;
+}
+
 }  // namespace
 
 // 병렬 평가에서는 서로 다른 노드의 경고가 번갈아 들어온다. "연속된 같은
@@ -60,6 +74,29 @@ TEST(PanelPresenter, RowOrderFollowsMostRecentOccurrence) {
     EXPECT_EQ(rows[0].sequence, 3u);
     EXPECT_EQ(rows[0].firstTimestampMs, 1000u);
     EXPECT_EQ(rows[0].lastTimestampMs, 1002u);
+    EXPECT_EQ(rows[0].summary, "old again")
+        << "summary must track the most recent occurrence, not freeze at the first";
+}
+
+// severity도 summary와 마찬가지로 최신 발생을 따라야 한다 (PanelView.h).
+// 같은 해시를 공유하는 두 발생의 심각도를 일부러 다르게 둬서 -- collapseKey
+// 계산과 무관하게 -- row 갱신 로직만 분리해 확인한다: hash 기반 키는
+// 심각도를 키에 포함하지 않으므로 두 발생이 한 행으로 접히고, 그 행의
+// severity 필드는 오직 "최근 발생이 무엇을 보고했는가"로만 결정돼야 한다.
+TEST(PanelPresenter, SeverityTracksMostRecentOccurrence) {
+    std::vector<maro::DiagRecord> stream;
+    stream.push_back(makeRecord(1, 1000, maro::DiagSeverity::Warn, "site", "warned first"));
+    stream.push_back(makeRecord(2, 1001, maro::DiagSeverity::Error, "site", "escalated"));
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].severity, "error")
+        << "the row must report the latest occurrence's severity, not the first one's";
+    EXPECT_EQ(rows[0].summary, "escalated");
 }
 
 // 벽시계가 뒤로 가도 순서는 순번을 따른다.
@@ -117,4 +154,130 @@ TEST(PanelPresenter, ReportsHiddenCountsSeparately) {
     ASSERT_EQ(rows.size(), 3u);
     EXPECT_EQ(hiddenByFilter, 1u);
     EXPECT_EQ(hiddenByCap, 2u);
+}
+
+// --- 해시 없는 접기 경로 (collapseKey의 "m:" 대체 분기) ---
+// 지금까지 모든 픽스처가 makeRecord로 errorHash를 채웠기 때문에 이 분기는
+// 한 번도 실행되지 않았다. 그런데 DiagRecord.h가 명시하듯 book 해시는
+// Error 심각도에서만 채워지므로, 운영에서 가장 많이 지나가는 info/warn
+// 레코드는 전부 이 분기를 탄다.
+
+// 해시가 없고 메시지가 같은 두 info는 한 행으로 접혀야 한다.
+TEST(PanelPresenter, HashlessSameMessageCollapsesToOneRow) {
+    std::vector<maro::DiagRecord> stream;
+    stream.push_back(makeHashlessRecord(1, 1000, maro::DiagSeverity::Info, "steady state"));
+    stream.push_back(makeHashlessRecord(2, 1001, maro::DiagSeverity::Info, "steady state"));
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    ASSERT_EQ(rows.size(), 1u)
+        << "two hashless info records with the same message must collapse into one row";
+    EXPECT_EQ(rows[0].occurrences, 2u);
+}
+
+// 해시가 없고 메시지가 다르면 두 행으로 남아야 한다.
+TEST(PanelPresenter, HashlessDifferentMessageStaysTwoRows) {
+    std::vector<maro::DiagRecord> stream;
+    stream.push_back(makeHashlessRecord(1, 1000, maro::DiagSeverity::Info, "steady state"));
+    stream.push_back(makeHashlessRecord(2, 1001, maro::DiagSeverity::Info, "different state"));
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    EXPECT_EQ(rows.size(), 2u)
+        << "hashless records with different messages must not collapse together";
+}
+
+// 해시가 없고 메시지는 같아도 심각도가 다르면 두 행으로 남아야 한다 --
+// 심각도는 키의 일부이며, 여기서 접히면 경고가 정보로 오보된다.
+TEST(PanelPresenter, HashlessSameMessageDifferentSeverityStaysTwoRows) {
+    std::vector<maro::DiagRecord> stream;
+    stream.push_back(makeHashlessRecord(1, 1000, maro::DiagSeverity::Info, "same text"));
+    stream.push_back(makeHashlessRecord(2, 1001, maro::DiagSeverity::Warn, "same text"));
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    EXPECT_EQ(rows.size(), 2u)
+        << "severity is part of the hashless key -- merging warn into info would misreport severity";
+}
+
+// --- knownBefore: "이 자리의 발생 중 하나라도 book에서 즉답됐는가" ---
+
+// 여러 발생 중 하나만 servedFromBook이어도 행 전체가 knownBefore여야 한다.
+TEST(PanelPresenter, KnownBeforeTrueWhenAnyOccurrenceServedFromBook) {
+    std::vector<maro::DiagRecord> stream;
+    maro::DiagRecord first = makeRecord(1, 1000, maro::DiagSeverity::Error, "site", "first");
+    maro::DiagRecord second = makeRecord(2, 1001, maro::DiagSeverity::Error, "site", "second");
+    second.servedFromBook = true;
+    maro::DiagRecord third = makeRecord(3, 1002, maro::DiagSeverity::Error, "site", "third");
+    stream.push_back(first);
+    stream.push_back(second);
+    stream.push_back(third);
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_TRUE(rows[0].knownBefore)
+        << "one occurrence served from the book must mark the whole row known";
+}
+
+// 어떤 발생도 book에서 즉답되지 않았다면 knownBefore는 false로 남아야 한다.
+TEST(PanelPresenter, KnownBeforeFalseWhenNoOccurrenceServedFromBook) {
+    std::vector<maro::DiagRecord> stream;
+    stream.push_back(makeRecord(1, 1000, maro::DiagSeverity::Error, "site", "first"));
+    stream.push_back(makeRecord(2, 1001, maro::DiagSeverity::Error, "site", "second"));
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_FALSE(rows[0].knownBefore);
+}
+
+// --- 경계: maxRows == 0, 빈 스트림 ---
+
+// maxRows가 0이면 접힌 행 전부가 상한에 가려져야 한다. 필터로는 아무것도
+// 빠지지 않았으므로 hiddenByFilter는 0, hiddenByCap이 전체를 담아야 한다.
+TEST(PanelPresenter, MaxRowsZeroHidesEverythingUnderCap) {
+    std::vector<maro::DiagRecord> stream;
+    stream.push_back(makeRecord(1, 1000, maro::DiagSeverity::Error, "a", "a failed"));
+    stream.push_back(makeRecord(2, 1001, maro::DiagSeverity::Error, "b", "b failed"));
+    stream.push_back(makeRecord(3, 1002, maro::DiagSeverity::Error, "c", "c failed"));
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 0, hiddenByFilter, hiddenByCap);
+
+    EXPECT_TRUE(rows.empty());
+    EXPECT_EQ(hiddenByFilter, 0u);
+    EXPECT_EQ(hiddenByCap, 3u)
+        << "everything is hidden by the cap, nothing by the filter";
+}
+
+// 빈 스트림은 빈 결과와 0/0 숨김 카운트를 내야 한다.
+TEST(PanelPresenter, EmptyStreamProducesNoRowsAndNoHiddenCounts) {
+    std::vector<maro::DiagRecord> stream;
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    EXPECT_TRUE(rows.empty());
+    EXPECT_EQ(hiddenByFilter, 0u);
+    EXPECT_EQ(hiddenByCap, 0u);
 }
