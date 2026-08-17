@@ -71,13 +71,26 @@ def _contextLine(label, value, state):
     return "{}: {}{}".format(label, value, suffix)
 
 
-def _onSelect(listControl, detailControl, severityControl):
+def _onSelect(listControl, detailControl, rowsHolder):
+    """목록에서 고른 자리를 refresh()가 마지막으로 그린 행의 sequence로
+    바꿔 상세를 받아 온다.
+
+    -index가 아니라 -sequence로 상세를 조회하는 것만으로는 부족하다 --
+    여기서 클릭된 *자리*를 여전히 지금 이 순간의 새 스냅샷에 대고 풀면
+    똑같은 문제가 재발한다. rowsHolder는 refresh()가 화면에 실제로 그린
+    행 목록을 그대로 들고 있으므로, 그 목록에서 클릭된 자리의 sequence를
+    읽어 커맨드에 넘긴다 -- refresh() 이후 새 진단이 들어와도 화면에 보이는
+    자리와 sequence의 대응은 다음 refresh() 전까지 바뀌지 않는다.
+    """
     selected = cmds.textScrollList(listControl, query=True, selectIndexedItem=True)
     if not selected:
         return
     index = selected[0] - 1  # Maya의 textScrollList는 1부터 센다
-    severity = cmds.optionMenu(severityControl, query=True, value=True)
-    detail = cmds.maroDiagPanelDetail(index=index, severity=severity)
+    rows = rowsHolder["rows"]
+    if index < 0 or index >= len(rows):
+        return
+    sequence = rows[index]["sequence"]
+    detail = cmds.maroDiagPanelDetail(sequence=sequence)
     if len(detail) != DETAIL_FIELDS:
         cmds.scrollField(detailControl, edit=True,
                          text="Maro: unexpected detail field count {}".format(len(detail)))
@@ -98,18 +111,26 @@ def _onSelect(listControl, detailControl, severityControl):
     cmds.scrollField(detailControl, edit=True, text="\n".join(lines))
 
 
-def refresh(listControl, detailControl, severityControl):
+def refresh(listControl, detailControl, severityControl, noteControl, rowsHolder):
     severity = cmds.optionMenu(severityControl, query=True, value=True)
     rows = sliceRows(cmds.maroDiagPanelRows(severity=severity))
+    rowsHolder["rows"] = rows
     cmds.textScrollList(listControl, edit=True, removeAll=True)
     for row in rows:
         cmds.textScrollList(listControl, edit=True, append=_rowLabel(row))
 
+    # 숨긴 개수 안내는 실제 행이 아니다 -- textScrollList에 같이 넣으면
+    # 선택 가능한 자리가 하나 더 생겨, 사용자가 그 줄을 클릭하는 순간
+    # _onSelect가 rowsHolder 범위 밖 자리를 받게 된다(리뷰 Finding). 별도
+    # text 컨트롤에 쓴다: 선택할 수 없으니 이 문제 자체가 성립하지 않는다.
+    # 필터로 빠진 것과 상한으로 잘린 것은 사용자에게 다른 사건이므로 숫자를
+    # 하나로 합치지 않고 계속 따로 보여준다.
     hidden = cmds.maroDiagPanelRows(severity=severity, hidden=True)
     byFilter, byCap = int(hidden[0]), int(hidden[1])
+    note = ""
     if byFilter or byCap:
         note = "필터로 {}개 제외, 상한으로 {}개 잘림".format(byFilter, byCap)
-        cmds.textScrollList(listControl, edit=True, append=note)
+    cmds.text(noteControl, edit=True, label=note)
 
 
 def buildUI():
@@ -120,18 +141,24 @@ def buildUI():
     cmds.menuItem(label="warn")
     cmds.menuItem(label="error")
     listControl = cmds.textScrollList(allowMultiSelection=False)
+    noteControl = cmds.text(label="", align="left")
     detailControl = cmds.scrollField(editable=False, wordWrap=True)
     refreshButton = cmds.button(label="새로 고침")
 
+    # refresh()가 화면에 그린 행을 _onSelect()가 다시 볼 수 있게 담아 두는
+    # 자리. 클로저로 두 콜백이 공유한다 -- 모듈 전역이면 패널을 두 개 띄웠을
+    # 때 서로의 선택을 밟는다.
+    rowsHolder = {"rows": []}
+
     cmds.textScrollList(
         listControl, edit=True,
-        selectCommand=lambda *_: _onSelect(listControl, detailControl, severityControl))
+        selectCommand=lambda *_: _onSelect(listControl, detailControl, rowsHolder))
     cmds.button(
         refreshButton, edit=True,
-        command=lambda *_: refresh(listControl, detailControl, severityControl))
+        command=lambda *_: refresh(listControl, detailControl, severityControl, noteControl, rowsHolder))
     cmds.optionMenu(
         severityControl, edit=True,
-        changeCommand=lambda *_: refresh(listControl, detailControl, severityControl))
+        changeCommand=lambda *_: refresh(listControl, detailControl, severityControl, noteControl, rowsHolder))
 
     cmds.formLayout(
         form, edit=True,
@@ -139,16 +166,18 @@ def buildUI():
             (severityControl, "top", 4), (severityControl, "left", 4),
             (refreshButton, "top", 4), (refreshButton, "right", 4),
             (listControl, "left", 4), (listControl, "right", 4),
+            (noteControl, "left", 4), (noteControl, "right", 4),
             (detailControl, "left", 4), (detailControl, "right", 4),
             (detailControl, "bottom", 4),
         ],
         attachControl=[
             (listControl, "top", 4, severityControl),
-            (listControl, "bottom", 4, detailControl),
+            (listControl, "bottom", 4, noteControl),
+            (noteControl, "bottom", 4, detailControl),
         ],
         attachPosition=[(detailControl, "top", 0, 60)])
 
-    refresh(listControl, detailControl, severityControl)
+    refresh(listControl, detailControl, severityControl, noteControl, rowsHolder)
     return form
 
 

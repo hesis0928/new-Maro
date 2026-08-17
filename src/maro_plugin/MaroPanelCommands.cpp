@@ -31,8 +31,8 @@ const char* kSeverityFlag = "-sv";
 const char* kSeverityFlagLong = "-severity";
 const char* kMaxRowsFlag = "-mr";
 const char* kMaxRowsFlagLong = "-maxRows";
-const char* kIndexFlag = "-i";
-const char* kIndexFlagLong = "-index";
+const char* kSequenceFlag = "-sq";
+const char* kSequenceFlagLong = "-sequence";
 const char* kHiddenFlag = "-hd";
 const char* kHiddenFlagLong = "-hidden";
 
@@ -140,9 +140,7 @@ void* MaroDiagPanelDetailCommand::creator() { return new MaroDiagPanelDetailComm
 
 MSyntax MaroDiagPanelDetailCommand::newSyntax() {
     MSyntax syntax;
-    syntax.addFlag(kIndexFlag, kIndexFlagLong, MSyntax::kLong);
-    syntax.addFlag(kSeverityFlag, kSeverityFlagLong, MSyntax::kString);
-    syntax.addFlag(kMaxRowsFlag, kMaxRowsFlagLong, MSyntax::kLong);
+    syntax.addFlag(kSequenceFlag, kSequenceFlagLong, MSyntax::kLong);
     return syntax;
 }
 
@@ -152,37 +150,29 @@ MStatus MaroDiagPanelDetailCommand::doIt(const MArgList& args) {
         MArgDatabase argData(newSyntax(), args, &status);
         if (!status) return status;
 
-        int index = 0;
-        MString severity = "all";
-        int maxRows = kDefaultMaxRows;
-        if (argData.isFlagSet(kIndexFlag)) {
-            argData.getFlagArgument(kIndexFlag, 0, index);
-        }
-        if (argData.isFlagSet(kSeverityFlag)) {
-            argData.getFlagArgument(kSeverityFlag, 0, severity);
-        }
-        if (argData.isFlagSet(kMaxRowsFlag)) {
-            argData.getFlagArgument(kMaxRowsFlag, 0, maxRows);
-        }
-        if (maxRows < 0) maxRows = 0;
-
-        const std::vector<DiagRecord> records = snapshot();
-        std::size_t hiddenByFilter = 0;
-        std::size_t hiddenByCap = 0;
-        const std::vector<PanelRow> rows =
-            buildPanelRows(records, parseFilter(severity),
-                            static_cast<std::size_t>(maxRows),
-                            hiddenByFilter, hiddenByCap);
-
-        if (index < 0 || static_cast<std::size_t>(index) >= rows.size()) {
-            MGlobal::displayError("Maro: maroDiagPanelDetail index out of range.");
+        if (!argData.isFlagSet(kSequenceFlag)) {
+            MGlobal::displayError("Maro: maroDiagPanelDetail requires -sequence.");
             return MS::kFailure;
         }
+        int sequenceArg = -1;
+        argData.getFlagArgument(kSequenceFlag, 0, sequenceArg);
+        if (sequenceArg < 0) {
+            MGlobal::displayError("Maro: maroDiagPanelDetail -sequence must not be negative.");
+            return MS::kFailure;
+        }
+        const std::uint64_t wanted = static_cast<std::uint64_t>(sequenceArg);
 
-        // 행이 대표하는 레코드는 그 태그의 가장 최근 발생이고, 행은 그
-        // 순번을 들고 있다. 순번으로 되찾는다 -- 시각으로 찾으면 벽시계가
-        // 뒤로 간 순간 엉뚱한 레코드를 집는다.
-        const std::uint64_t wanted = rows[static_cast<std::size_t>(index)].sequence;
+        // 리뷰 Finding: 예전에는 여기서 buildPanelRows로 화면과 같은
+        // 필터/상한을 다시 적용한 행 목록을 만들고, 그 안의 -index 자리를
+        // 순번으로 옮겨 찾았다. 화면이 그려진 시점과 지금(클릭 시점) 사이에
+        // 진단이 하나라도 더 들어오면 그 행 목록의 자리 배치가 바뀌어
+        // -index가 가리키는 레코드가 사용자가 실제로 클릭한 레코드와
+        // 달라진다. sequence는 세션 전역에서 유일하고 재사용되지 않으므로,
+        // 필터링/절단을 다시 거칠 필요 없이 스냅샷을 그대로 훑어 그 값과
+        // 일치하는 레코드 하나를 직접 찾는다 -- 화면이 그 사이에 어떻게
+        // 바뀌었든 결과는 항상 사용자가 클릭한 바로 그 레코드다. 이 덕분에
+        // 행 목록을 다시 만드는 작업도 통째로 사라진다.
+        const std::vector<DiagRecord> records = snapshot();
         const DiagRecord* chosen = nullptr;
         for (const DiagRecord& rec : records) {
             if (rec.sequence == wanted) {
@@ -191,7 +181,12 @@ MStatus MaroDiagPanelDetailCommand::doIt(const MArgList& args) {
             }
         }
         if (chosen == nullptr) {
-            MGlobal::displayError("Maro: maroDiagPanelDetail could not resolve the row.");
+            // 존재한 적 없는 순번(오타, 혹은 세션이 리셋된 뒤의 스테일 선택)
+            // 이면 엉뚱한 이웃 레코드를 대신 돌려주지 않고 실패로 끝낸다 --
+            // 스테일 선택을 잡아내는 것이 이 커맨드가 -sequence로 바뀐
+            // 이유이므로, 조용히 다른 것을 돌려주면 그 존재 이유 자체가
+            // 무너진다.
+            MGlobal::displayError("Maro: maroDiagPanelDetail could not resolve sequence.");
             return MS::kFailure;
         }
 

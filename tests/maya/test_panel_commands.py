@@ -87,8 +87,24 @@ assert hidden[1] == "0", (
 )
 print("hidden counts OK")
 
+# 상세는 이제 화면 자리(index)가 아니라 순번(sequence)으로 고른다 --
+# 위치는 클릭 시점에 새로 스냅샷을 뜬 행 목록이 바뀌면 함께 흔들리지만,
+# 순번은 세션 전역에서 유일하고 재사용되지 않으므로 흔들리지 않는다
+# (MaroPanelCommands.h/.cpp 리뷰 Finding). rows[i][3]이 그 행의 sequence다.
+def _detailFor(rowIndex):
+    return cmds.maroDiagPanelDetail(sequence=int(rows[rowIndex][3]))
+
+
+def _latestSequence(severity="error"):
+    """방금 만든 레코드가 최신(=가장 큰 sequence)이라고 가정하고 다시
+    조회한 행 목록의 맨 앞(rows[0])에서 그 순번을 읽어 온다."""
+    flatNow = cmds.maroDiagPanelRows(severity=severity)
+    assert len(flatNow) >= ROW_FIELDS, "expected at least one row to fetch a sequence from"
+    return int(flatNow[3])
+
+
 # 상세는 선택한 행을 가리킨다.
-detail = cmds.maroDiagPanelDetail(index=0, severity="error")
+detail = _detailFor(0)
 assert len(detail) == DETAIL_FIELDS, (
     f"expected {DETAIL_FIELDS} detail fields, got {len(detail)}"
 )
@@ -105,7 +121,7 @@ print("detail contract OK")
 # 아직 한 번도 값으로 확인되지 않았다. presenceName()이 무엇을 돌려주든
 # (예: 전부 "present"로 하드코딩) 그 단언들만으로는 절대 걸리지 않는다.
 #
-# index=0(위 detail)은 실제로는 maroConnectAxis(axis, axis)의
+# rows[0]의 순번으로 조회한 위 detail은 실제로는 maroConnectAxis(axis, axis)의
 # WrongArgCount다 -- 위쪽 주석의 의도("SelfParent")와 다르다: MSelectionList
 # 가 같은 노드 이름 두 번을 하나로 접어 selection.length() != 2가 되기
 # 때문이다(그래도 여전히 bind 거부와는 다른 사이트 태그의 에러 하나이므로
@@ -120,9 +136,9 @@ assert detail[5] == "present", f"activeCommandState should be 'present', got {de
 assert detail[7] == "notApplicable", f"axisOrTargetState should be 'notApplicable', got {detail[7]!r}"
 print("presence 'notApplicable' mapping OK")
 
-# index=1은 3번 반복된 bind 거부(TargetNotTransform)다: 살아있는 노드 조회를
+# rows[1]은 3번 반복된 bind 거부(TargetNotTransform)다: 살아있는 노드 조회를
 # 실제로 거쳤으므로 네 필드 모두 값이 채워져 있고 전부 present여야 한다.
-presentDetail = cmds.maroDiagPanelDetail(index=1, severity="error")
+presentDetail = _detailFor(1)
 assert presentDetail[0] == "pointLight", (
     f"nodeType value should survive, got {presentDetail[0]!r}"
 )
@@ -138,13 +154,17 @@ assert presentDetail[7] == "present", (
 )
 print("presence 'present' mapping OK")
 
-# 범위 밖 인덱스는 예외가 아니라 실패로 끝난다.
+# 존재한 적 없는 순번은 엉뚱한 이웃을 조용히 돌려주지 않고 실패로 끝난다
+# -- 이것이 바로 -index를 -sequence로 바꾼 이유(스테일 선택을 잡아내는
+# 것)이므로, 예전의 "범위 밖 인덱스" 테스트보다 이쪽이 더 강하게 계약을
+# 고정한다. 지금까지 발급된 순번은 전부 이 값보다 한참 작으므로 절대
+# 실제로 존재할 수 없다.
 try:
-    cmds.maroDiagPanelDetail(index=999, severity="error")
-    raise AssertionError("out-of-range index should have failed")
+    cmds.maroDiagPanelDetail(sequence=999999999)
+    raise AssertionError("unknown sequence should have failed")
 except RuntimeError:
     pass
-print("out-of-range rejected OK")
+print("unknown sequence rejected OK")
 
 # --- "관여했으나 못 채움"(notCaptured) -- 이 태스크가 처음 관측 가능하게 만드는 것
 # nameUnavailable/typeUnavailable은 실제로는 워커 스레드의 compute() 실패나
@@ -158,7 +178,7 @@ print("out-of-range rejected OK")
 cmds.maroDiagEmit(severity="error", siteTag="Test.PanelPresenceNameUnavailable",
                   message="name unavailable probe", nodeType="probeNodeType",
                   nameUnavailable=True)
-nameUnavailableDetail = cmds.maroDiagPanelDetail(index=0, severity="error")
+nameUnavailableDetail = cmds.maroDiagPanelDetail(sequence=_latestSequence())
 assert nameUnavailableDetail[0] == "probeNodeType", (
     f"nodeType value should survive, got {nameUnavailableDetail[0]!r}"
 )
@@ -177,7 +197,7 @@ print("presence 'notCaptured' mapping OK (name)")
 cmds.maroDiagEmit(severity="error", siteTag="Test.PanelPresenceTypeUnavailable",
                   message="type unavailable probe", axisOrTarget="probeTarget",
                   typeUnavailable=True)
-typeUnavailableDetail = cmds.maroDiagPanelDetail(index=0, severity="error")
+typeUnavailableDetail = cmds.maroDiagPanelDetail(sequence=_latestSequence())
 assert typeUnavailableDetail[0] == "", (
     f"nodeType value should be empty (type lookup failed), got {typeUnavailableDetail[0]!r}"
 )

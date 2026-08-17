@@ -210,6 +210,37 @@ TEST(PanelPresenter, HashlessSameMessageDifferentSeverityStaysTwoRows) {
         << "severity is part of the hashless key -- merging warn into info would misreport severity";
 }
 
+// 위 두 knownBefore 테스트는 픽스처를 순번 오름차순으로만 먹인다 -- 처리
+// 순서가 항상 "가장 최근 것이 마지막에 온다"와 일치하므로, buildPanelRows의
+// OR가 "이 레코드가 더 최근인가" 분기(순번을 기준으로 sequence/summary/
+// severity를 갱신하는 그 if) 안에 잘못 들어가 있어도(row.knownBefore =
+// row.knownBefore || rec.servedFromBook;를 그 if 블록 안으로 옮기는 변형)
+// 그 if는 처리 순서상 마지막 레코드에서 항상 참이 되므로 위 두 테스트는
+// 여전히 통과한다 -- 결함을 못 잡는다. 이 테스트는 벡터 순서를 일부러
+// 순번 오름차순이 아니게 먹여(순번이 더 큰, book에서 오지 않은 레코드를
+// 먼저, servedFromBook인 더 작은 순번의 레코드를 나중에) 그 if 조건이
+// false인 채로 servedFromBook 레코드가 처리되게 만든다: OR가 제자리(if
+// 밖)에 있으면 무조건 반영되지만, if 안에 있으면 조건이 false라 건너뛰어
+// knownBefore가 조용히 false로 남는다.
+TEST(PanelPresenter, KnownBeforeSurvivesWhenServedOccurrenceArrivesAfterANewerOne) {
+    std::vector<maro::DiagRecord> stream;
+    stream.push_back(makeRecord(2, 1001, maro::DiagSeverity::Error, "site", "newer, not served"));
+    maro::DiagRecord served = makeRecord(1, 1000, maro::DiagSeverity::Error, "site", "older, served");
+    served.servedFromBook = true;
+    stream.push_back(served);
+
+    std::size_t hiddenByFilter = 0;
+    std::size_t hiddenByCap = 0;
+    const std::vector<maro::PanelRow> rows = maro::buildPanelRows(
+        stream, maro::PanelSeverityFilter::All, 500, hiddenByFilter, hiddenByCap);
+
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_TRUE(rows[0].knownBefore)
+        << "a servedFromBook occurrence with a lower sequence must still mark the row known, "
+           "even though it is processed after a higher-sequence occurrence that already took "
+           "the 'is this record newer' branch";
+}
+
 // --- knownBefore: "이 자리의 발생 중 하나라도 book에서 즉답됐는가" ---
 
 // 여러 발생 중 하나만 servedFromBook이어도 행 전체가 knownBefore여야 한다.
