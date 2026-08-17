@@ -47,6 +47,10 @@ DgContext captureFromNode(const MObject& node) {
         ctx.nodeType = fn.typeName().asChar();
         ctx.axisOrTarget = fn.name().asChar();
     } catch (...) {
+        // 리뷰 Finding 2: 노드 이름을 원했지만 얻지 못한 경우다(손상된 노드라
+        // 조회 자체가 실패) -- "이 자리에 관여가 없었다"는 빈 문자열과
+        // 구분해야 패널이 "정보 없음"과 "도구 고장"을 헷갈리지 않는다.
+        ctx.nameUnavailable = true;
     }
     return ctx;
 }

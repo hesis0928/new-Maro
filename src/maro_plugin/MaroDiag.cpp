@@ -29,9 +29,28 @@ std::uint64_t nowMs() {
         duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
 }
 
-void stampRecord(DiagRecord& rec) {
-    rec.sequence = ++g_nextSequence;
+// 리뷰 Finding 1(2절): 시각만 찍는다. 이 값은 "언제 일어났는가"라는 질문에
+// 답할 뿐, "스트림의 어느 자리에 놓이는가"라는 질문과는 무관하다 -- 그래서
+// 락을 잡기 한참 전, 함수 진입 직후에 찍어도 안전하다. 순번은 더 이상 여기서
+// 찍지 않는다: assignSequenceAndPush() 참고.
+void stampTimestamp(DiagRecord& rec) {
     rec.timestampMs = nowMs();
+}
+
+// 리뷰 Finding 1(2절): 순번 배정과 스트림 삽입을 같은 락 스코프 안에서,
+// 항상 이 순서로 한다. error()는 스탬프와 push_back 사이에 해시/book I/O라는
+// 상당한 작업이 끼어 있고, Maya 2026 Parallel Evaluation Manager 아래에서는
+// error()가 워커 스레드에서도 불릴 수 있다 -- 그래서 두 번의 error() 호출이
+// 순번을 1, 2로 받고도 스트림에는 반대 순서로 들어갈 수 있었다(경합).
+// recordAt(0)이 "가장 최근"을 뜻한다는 계약과 패널이 스트림을 위치 순서대로
+// 훑으며 그것이 곧 순번 순서라고 가정하는 것, 둘 다 "삽입 위치 순서 ==
+// 순번 순서"를 전제하므로, 순번은 반드시 실제로 삽입되는 바로 그 순간(=이
+// 락을 쥔 채로) 배정해야 그 전제가 구조적으로 항상 참이 된다. std::atomic은
+// 그대로 유지한다 -- 이 락이 어느 경로에서 쥐어지는지와 무관하게 카운터
+// 자체의 원자성은 공짜이고, 그 논거에 기대지 않는다.
+void assignSequenceAndPush(DiagRecord&& rec, std::vector<DiagRecord>& s) {
+    rec.sequence = ++g_nextSequence;
+    s.push_back(std::move(rec));
 }
 
 // book(스필)에 한 번도 쓸 수 없게 되면 이 세션 동안 한 번만 알린다. devInfo는
@@ -155,7 +174,7 @@ std::unordered_map<std::string, BookEntry>& BoadMaro::bookCache() {
 
 void BoadMaro::info(const MString& message) {
     DiagRecord rec;
-    stampRecord(rec);
+    stampTimestamp(rec);
     rec.severity = DiagSeverity::Info;
     rec.message = message.asChar();
     // 워커 스레드에서는 화면 에코를 건너뛴다 -- 레코드는 그대로 남는다
@@ -164,32 +183,32 @@ void BoadMaro::info(const MString& message) {
         MGlobal::displayInfo(MString("[Maro-Info] ") + message);
     }
     std::lock_guard<std::mutex> lock(mutex());
-    stream().push_back(std::move(rec));
+    assignSequenceAndPush(std::move(rec), stream());
 }
 
 void BoadMaro::warn(const MString& message) {
     DiagRecord rec;
-    stampRecord(rec);
+    stampTimestamp(rec);
     rec.severity = DiagSeverity::Warn;
     rec.message = message.asChar();
     if (isMainThread()) {
         MGlobal::displayWarning(MString("[Maro-Warn] ") + message);
     }
     std::lock_guard<std::mutex> lock(mutex());
-    stream().push_back(std::move(rec));
+    assignSequenceAndPush(std::move(rec), stream());
 }
 
 void BoadMaro::devInfo(const MString& message) {
 #ifdef _DEBUG
     DiagRecord rec;
-    stampRecord(rec);
+    stampTimestamp(rec);
     rec.severity = DiagSeverity::DevInfo;
     rec.message = message.asChar();
     if (isMainThread()) {
         MGlobal::displayInfo(MString("[Maro-Dev] ") + message);
     }
     std::lock_guard<std::mutex> lock(mutex());
-    stream().push_back(std::move(rec));
+    assignSequenceAndPush(std::move(rec), stream());
 #else
     (void)message;
 #endif
@@ -198,7 +217,7 @@ void BoadMaro::devInfo(const MString& message) {
 void BoadMaro::error(const std::string& siteTag, const MString& message,
                       const DgContext& context) {
     DiagRecord rec;
-    stampRecord(rec);
+    stampTimestamp(rec);
     rec.severity = DiagSeverity::Error;
     rec.context = context;
 
@@ -370,7 +389,7 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         }
     }
     std::lock_guard<std::mutex> lock(mutex());
-    stream().push_back(std::move(rec));
+    assignSequenceAndPush(std::move(rec), stream());
 }
 
 std::size_t BoadMaro::freshAnalysisCount() { return g_freshAnalysisCount.load(); }
