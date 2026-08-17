@@ -14,6 +14,7 @@ set(SOURCE_FILES
     MaroCommandDeviceNode.cpp
     MaroDiag.cpp
     MaroDiagCommands.cpp
+    MaroPanelCommands.cpp
 )
 
 set(LIBRARIES

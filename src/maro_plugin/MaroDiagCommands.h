@@ -11,6 +11,17 @@ namespace maro {
 // 커맨드들을 쓰지 않고 BoadMaro를 C++에서 직접 부른다.
 
 // -severity <info|warn|devInfo|error> -message <string> [-siteTag <string>]
+// [-nodeType <string>] [-axisOrTarget <string>] [-nameUnavailable] [-typeUnavailable]
+//
+// 뒤의 네 플래그는 severity=error에서만 쓰이며, 지정하지 않으면 이전과
+// 바이트 단위로 동일하게 동작한다(capture("", "", "") + 두 플래그 false).
+// 존재 이유: DgContext::nameUnavailable/typeUnavailable("관여했으나 못
+// 채움")은 실제로는 워커 스레드의 compute() 실패나 손상된 노드의 삭제
+// 콜백(MaroDeleteWatcher.cpp)에서만 서는데, 그 경로들은 mayapy 테스트가
+// 결정적으로 유발할 방법이 없다. 패널 상세 커맨드(maroDiagPanelDetail)가
+// ContextPresence::NotCaptured를 올바른 문자열로 내놓는지 검증하려면 이
+// 상태를 직접 지정할 수 있는 도구가 필요하다 -- maroDiagEmitFromThread가
+// "워커 스레드에서 왔다"는 사실을 재현하기 위해 존재하는 것과 같은 이유다.
 class MaroDiagEmitCommand : public MPxCommand {
 public:
     static void* creator();

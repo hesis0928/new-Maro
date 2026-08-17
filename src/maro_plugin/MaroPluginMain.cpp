@@ -9,6 +9,7 @@
 #include "MaroDeleteWatcher.h"
 #include "MaroDiag.h"
 #include "MaroDiagCommands.h"
+#include "MaroPanelCommands.h"
 
 namespace {
 constexpr char kVendor[] = "Maro";
@@ -174,6 +175,22 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroDiagPanelRows",
+                                    maro::MaroDiagPanelRowsCommand::creator,
+                                    maro::MaroDiagPanelRowsCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagPanelRows");
+        return status;
+    }
+
+    status = plugin.registerCommand("maroDiagPanelDetail",
+                                    maro::MaroDiagPanelDetailCommand::creator,
+                                    maro::MaroDiagPanelDetailCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagPanelDetail");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -190,6 +207,8 @@ MStatus uninitializePlugin(MObject obj) {
     maro::shutdownBridge();
     maro::MaroDeleteWatcher::uninstall();
 
+    plugin.deregisterCommand("maroDiagPanelDetail");
+    plugin.deregisterCommand("maroDiagPanelRows");
     plugin.deregisterCommand("maroDiagEmitMarked");
     plugin.deregisterCommand("maroDiagRegisterRemedy");
     plugin.deregisterCommand("maroDiagAnalysisCount");

@@ -104,6 +104,12 @@ public:
     // 없는 에러는 ... 사용자가 등록할 수 있게 한다").
     static void registerRemedy(const std::string& errorHash, const MString& remedyText);
 
+    // 해시로 book 항목을 찾는다. 있으면 true. 패널이 상세를 열 때 쓴다 --
+    // 레코드가 남은 뒤에 등록된 해법을 반영하려면 지금 다시 봐야 한다.
+    // book을 못 읽어도 예외를 던지지 않고 false를 돌려준다: 진단 경로는
+    // 지식 저장소에 닿지 못해서 실패하지 않는다.
+    static bool lookupBook(const std::string& errorHash, BookEntry& out);
+
     // 테스트 전용. 프로덕션 코드는 부르지 않는다. boad 세션 상태(레코드
     // 스트림, 신규분석 카운터, book-불가 경고 래치, book 캐시) 전부를
     // 초기 상태로 되돌린다 -- 콜러가 없다고 절반만 리셋되는 상태로 방치하면

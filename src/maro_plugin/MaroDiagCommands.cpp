@@ -21,6 +21,15 @@ const char* kMessageFlag = "-msg";
 const char* kMessageFlagLong = "-message";
 const char* kSiteTagFlag = "-st";
 const char* kSiteTagFlagLong = "-siteTag";
+// maroDiagEmit(-severity error) 전용 테스트 확장. MaroDiagCommands.h 참고.
+const char* kNodeTypeFlag = "-nt";
+const char* kNodeTypeFlagLong = "-nodeType";
+const char* kAxisOrTargetFlag = "-ax";
+const char* kAxisOrTargetFlagLong = "-axisOrTarget";
+const char* kNameUnavailableFlag = "-nu";
+const char* kNameUnavailableFlagLong = "-nameUnavailable";
+const char* kTypeUnavailableFlag = "-tu";
+const char* kTypeUnavailableFlagLong = "-typeUnavailable";
 const char* kIndexFlag = "-i";
 const char* kIndexFlagLong = "-index";
 // "-h"는 Maya에서 관례상 도움말(-help) 짧은형으로 쓰인다. 실측 결과는 아래
@@ -50,6 +59,10 @@ MSyntax MaroDiagEmitCommand::newSyntax() {
     syntax.addFlag(kSeverityFlag, kSeverityFlagLong, MSyntax::kString);
     syntax.addFlag(kMessageFlag, kMessageFlagLong, MSyntax::kString);
     syntax.addFlag(kSiteTagFlag, kSiteTagFlagLong, MSyntax::kString);
+    syntax.addFlag(kNodeTypeFlag, kNodeTypeFlagLong, MSyntax::kString);
+    syntax.addFlag(kAxisOrTargetFlag, kAxisOrTargetFlagLong, MSyntax::kString);
+    syntax.addFlag(kNameUnavailableFlag, kNameUnavailableFlagLong, MSyntax::kNoArg);
+    syntax.addFlag(kTypeUnavailableFlag, kTypeUnavailableFlagLong, MSyntax::kNoArg);
     return syntax;
 }
 
@@ -84,7 +97,21 @@ MStatus MaroDiagEmitCommand::doIt(const MArgList& args) {
             // 살아 있는 커맨드 컨텍스트 스택을 있는 그대로 읽어 activeCommand를
             // 채운다. 스택이 비어 있으면 capture("", "", "")는 이전 기본값
             // DgContext{}와 바이트 단위로 동일한 결과를 낸다.
-            BoadMaro::error(siteTag.asChar(), message, onfix::capture("", "", ""));
+            MString nodeType;
+            MString axisOrTarget;
+            if (argData.isFlagSet(kNodeTypeFlag)) {
+                argData.getFlagArgument(kNodeTypeFlag, 0, nodeType);
+            }
+            if (argData.isFlagSet(kAxisOrTargetFlag)) {
+                argData.getFlagArgument(kAxisOrTargetFlag, 0, axisOrTarget);
+            }
+            DgContext ctx = onfix::capture(nodeType, "", axisOrTarget);
+            // NotCaptured 프레즌스를 결정적으로 재현하기 위한 테스트 전용
+            // 확장이다 (MaroDiagCommands.h 참고). 지정하지 않으면 둘 다
+            // false로 남아 이전 동작과 동일하다.
+            ctx.nameUnavailable = argData.isFlagSet(kNameUnavailableFlag);
+            ctx.typeUnavailable = argData.isFlagSet(kTypeUnavailableFlag);
+            BoadMaro::error(siteTag.asChar(), message, ctx);
         } else {
             MGlobal::displayError(MString("Maro: unknown severity '") + severity + "'.");
             return MS::kFailure;

@@ -443,6 +443,27 @@ void BoadMaro::registerRemedy(const std::string& errorHash, const MString& remed
     }
 }
 
+bool BoadMaro::lookupBook(const std::string& errorHash, BookEntry& out) {
+    try {
+        std::lock_guard<std::mutex> bookLock(bookMutex());
+        const auto cached = bookCache().find(errorHash);
+        if (cached != bookCache().end()) {
+            out = cached->second;
+            return true;
+        }
+        const BookPaths& paths = bookPaths();
+        const BookStore store = BookStore::loadMerged(paths.canonical, paths.spill);
+        BookEntry entry;
+        if (!store.query(errorHash, entry)) return false;
+        bookCache().emplace(errorHash, entry);
+        out = entry;
+        return true;
+    } catch (...) {
+        // book이 죽어도 패널은 죽지 않는다. 해법 없이 상세를 보여줄 뿐이다.
+        return false;
+    }
+}
+
 std::size_t BoadMaro::recordCount() {
     std::lock_guard<std::mutex> lock(mutex());
     return stream().size();
