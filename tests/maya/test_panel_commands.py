@@ -54,11 +54,14 @@ for r in rows:
     assert int(r[5]) >= int(r[4]), "last occurrence cannot precede the first"
 print("row fields OK")
 
-# 스냅샷이 스트림을 정확히 한 번, 레코드마다 한 번씩 걸었는지 핀으로 고정한다.
-# 순번(r[3])은 세션 전역에서 유일하게 증가하는 값이므로, 행들이 엄격히
-# 감소하는 순서로 오고 어느 값도 반복되지 않아야 한다 -- count-then-index
-# 루프가 레코드를 건너뛰거나 두 번 읽었다면(스냅샷이 아니었을 때) 이 자리가
-# 흔들린다.
+# buildPanelRows가 내놓는 행 순서 계약을 고정한다: 순번 내림차순, 값 중복 없음.
+#
+# 이 단언이 무엇을 못 잡는지 분명히 해 둔다 -- 스냅샷이 레코드를 건너뛰거나
+# 두 번 읽는 결함은 이걸로 안 잡힌다. buildPanelRows는 errorHash로 접은 뒤
+# 순번 내림차순으로 명시적으로 정렬하고, 순번은 세션 전역에서 유일하므로,
+# 입력 벡터가 잘리든 중복되든 뒤섞이든 행 수준의 이 불변식은 그대로 성립한다.
+# 스냅샷의 원자성은 테스트가 아니라 BoadMaro::snapshotRecords()가 락을 한 번만
+# 잡는다는 구조로 보장된다(단일 스레드 mayapy는 그 경합을 만들 수 없다).
 sequences = [int(r[3]) for r in rows]
 assert sequences == sorted(sequences, reverse=True), (
     f"rows must come back in strictly decreasing sequence order, got {sequences}"
