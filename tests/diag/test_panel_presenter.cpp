@@ -301,6 +301,27 @@ TEST(PanelPresenter, DistinguishesNotCapturedFromNotApplicable) {
     EXPECT_EQ(detail.attributeName.presence, maro::ContextPresence::NotApplicable);
 }
 
+// MaroDeleteWatcher.cpp의 captureFromNode는 nodeType과 axisOrTarget을 같은
+// try 블록 안에서, 같은 살아있는 MFnDependencyNode로 얻는다. 그 생성자가
+// 던지면(노드가 삭제 도중이라 손상됐을 때) 두 필드가 함께 비고 두 플래그가
+// 함께 선다 -- 이 경우를 "관여 없음"으로 그리면 손상된 노드를 다루다 실패한
+// 사실 자체가 지워진다.
+TEST(PanelPresenter, BothNodeTypeAndNameNotCapturedWhenNodeLookupFailedEntirely) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "hash", "delete callback failed");
+    rec.context.nodeType = "";
+    rec.context.axisOrTarget = "";
+    rec.context.typeUnavailable = true;
+    rec.context.nameUnavailable = true;
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, false);
+
+    EXPECT_EQ(detail.nodeType.presence, maro::ContextPresence::NotCaptured)
+        << "the MFnDependencyNode constructor itself threw -- the type was wanted but not obtained";
+    EXPECT_EQ(detail.axisOrTarget.presence, maro::ContextPresence::NotCaptured)
+        << "the same failure took the name with it";
+}
+
 // book 항목이 있으면 해법 설명이 나온다. 적용 가능 여부는 B-1b까지 항상 거짓이다.
 TEST(PanelPresenter, CarriesRemedyTextButOffersNoActionYet) {
     maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
@@ -328,6 +349,37 @@ TEST(PanelPresenter, PrefersTheCurrentBookAnalysisOverTheRecordedOne) {
     const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
 
     EXPECT_EQ(detail.priorAnalysis, "그 뒤에 갱신된 분석");
+}
+
+// book 항목이 존재하지만 analysis가 빈 문자열이면(예: remedy만 등록되고
+// 분석은 아직 안 채워진 경우) 레코드 자신의 priorAnalysis로 돌아가야 한다.
+// "!empty()" 가드를 빼면 이 경우 레코드가 들고 있던 분석까지 지워진다.
+TEST(PanelPresenter, FallsBackToRecordAnalysisWhenBookEntryAnalysisIsEmpty) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "hash", "failed");
+    rec.priorAnalysis = "레코드가 남을 때의 분석";
+    maro::BookEntry entry;  // entry.analysis left empty on purpose
+    entry.remedy = "해법은 있다";
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+
+    EXPECT_EQ(detail.priorAnalysis, "레코드가 남을 때의 분석")
+        << "a present-but-empty book analysis must not blank out the record's own analysis";
+}
+
+// 같은 이야기를 remedy에 대해서도: book 항목은 있는데 remedy가 비어 있으면
+// 레코드의 remedy로 돌아가야 한다.
+TEST(PanelPresenter, FallsBackToRecordRemedyWhenBookEntryRemedyIsEmpty) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "hash", "failed");
+    rec.remedy = "레코드에 실려 온 해법";
+    maro::BookEntry entry;  // entry.remedy left empty on purpose
+    entry.analysis = "분석은 있다";
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+
+    EXPECT_EQ(detail.remedyText, "레코드에 실려 온 해법")
+        << "a present-but-empty book remedy must not blank out a remedy the record was carrying";
 }
 
 // book을 못 읽어도 상세는 나온다 -- 진단 경로는 지식 저장소 때문에 죽지 않는다.

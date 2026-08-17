@@ -129,10 +129,15 @@ PanelDetail buildPanelDetail(const DiagRecord& record,
     (void)targetNodeExists;  // B-1b가 적용 가능 여부를 판단할 때 쓴다.
 
     PanelDetail detail;
-    detail.nodeType = makeField(record.context.nodeType, false);
+    // nodeType과 axisOrTarget은 MaroDeleteWatcher.cpp의 captureFromNode에서
+    // 살아있는 Maya 조회로 채워지므로 둘 다 실패할 수 있다 -- 각자의 플래그를
+    // 그대로 전달한다. attributeName과 activeCommand는 어떤 경로에서도
+    // 실패할 수 있는 조회를 거치지 않는다: compute()/selfContext 계열은
+    // nodeType을 컴파일타임 리터럴로 채우고, attributeName·activeCommand는
+    // 애초에 실패 가능한 룩업의 결과가 아니다 -- 그래서 이 둘은 항상 false다.
+    detail.nodeType = makeField(record.context.nodeType, record.context.typeUnavailable);
     detail.attributeName = makeField(record.context.attributeName, false);
     detail.activeCommand = makeField(record.context.activeCommand, false);
-    // 이름 조회를 못 한 자리는 axisOrTarget 하나다.
     detail.axisOrTarget = makeField(record.context.axisOrTarget,
                                      record.context.nameUnavailable);
 

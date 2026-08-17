@@ -28,7 +28,19 @@ struct DgContext {
     // 돌 때는 Maya에 노드 이름을 물을 수 없어 axisOrTarget을 비운다.
     // 패널이 둘을 똑같이 빈칸으로 그리면 사용자는 "정보가 없다"와 "이
     // 도구가 고장 났다"를 구분하지 못한다 (설계 스펙 §4.4).
-    bool nameUnavailable = false;
+    //
+    // 플래그가 둘인 이유: 이름 조회와 타입 조회는 서로 다른 실패 지점이다.
+    // MaroDeleteWatcher.cpp의 captureFromNode는 둘 다 같은 try 블록 안에서
+    // 살아있는 MFnDependencyNode로 얻는다 -- 그 생성자가 던지면(노드가
+    // 삭제 도중이라 너무 손상돼 이름을 붙일 수 없는, 바로 이 기능이
+    // 존재하는 이유가 되는 경우) nodeType과 axisOrTarget이 함께 비게
+    // 된다. 하나의 플래그로 둘을 같이 표시하면 "타입은 원래 없었는데
+    // 이름만 못 채운" 경우(예: compute() 워커 스레드 경로, nodeType은
+    // 컴파일타임 리터럴이라 실패할 수 없다)와 "둘 다 못 채운" 경우를
+    // 구분할 수 없다. 그래서 각 필드가 자신의 조회 실패만 표시하도록
+    // 나눈다.
+    bool nameUnavailable = false;  // axisOrTarget을 원했지만 얻지 못했다.
+    bool typeUnavailable = false;  // nodeType을 원했지만 얻지 못했다.
 };
 
 // boad의 인메모리 진단 스트림 한 칸. 진단 패널(Layer B)이 그대로 읽을 구조이므로
