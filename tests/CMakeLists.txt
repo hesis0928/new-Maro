@@ -17,6 +17,7 @@ add_executable(maro_diag_tests
     diag/test_error_hash.cpp
     diag/test_book_store.cpp
     diag/test_panel_presenter.cpp
+    diag/test_journal_writer.cpp
 )
 
 target_link_libraries(maro_diag_tests PRIVATE

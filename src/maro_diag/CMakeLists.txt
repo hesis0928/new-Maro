@@ -4,6 +4,7 @@ add_library(maro_diag STATIC
     src/ErrorHash.cpp
     src/BookStore.cpp
     src/PanelPresenter.cpp
+    src/JournalWriter.cpp
 )
 
 target_include_directories(maro_diag PUBLIC
