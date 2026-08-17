@@ -193,6 +193,57 @@ assert typeUnavailableDetail[7] == "present", (
 )
 print("presence 'notCaptured' mapping OK (type)")
 
+# 패널 UI 모듈의 순수 함수만 검증한다. 위젯 자체는 배치 모드에 UI가 없어
+# 만들 수 없으므로 수동 체크리스트로 남긴다(docs/maro-panel-manual-checklist.md).
+pluginDir = os.path.dirname(plugin)
+sys.path.insert(0, pluginDir)
+import maroDiagPanel  # noqa: E402
+
+# 계약 상수 자체를 값으로 고정한다.
+#
+# 왜 필요한가: DETAIL_FIELDS는 maroDiagPanel.py 안에서 _onSelect() 하나에만
+# 쓰이는데, 그건 UI 콜백이라 mayapy 배치 테스트가 절대 부르지 못한다. 아래의
+# flatSample 검증도 sliceRows()를 통해 ROW_FIELDS만 우연히 건드릴 뿐
+# DETAIL_FIELDS는 전혀 지나가지 않는다. 실측으로 확인했다: DETAIL_FIELDS를
+# 13에서 12로 바꾸고 이 단언 없이 스위트를 돌려 보면 전부 통과한다 -- 계약이
+# 어긋나도 아무도 못 잡는다는 뜻이다. 이 두 줄이 그 구멍을 막는다: 값은 이
+# 파일 위쪽의 ROW_FIELDS/DETAIL_FIELDS(실제 커맨드 출력을 상대로 이미
+# 검증됨)와 MaroPanelCommands.h의 필드 개수 주석에서 가져왔다.
+assert maroDiagPanel.ROW_FIELDS == ROW_FIELDS, (
+    f"maroDiagPanel.ROW_FIELDS ({maroDiagPanel.ROW_FIELDS}) must match the "
+    f"maroDiagPanelRows contract ({ROW_FIELDS} fields/row, MaroPanelCommands.h)"
+)
+assert maroDiagPanel.DETAIL_FIELDS == DETAIL_FIELDS, (
+    f"maroDiagPanel.DETAIL_FIELDS ({maroDiagPanel.DETAIL_FIELDS}) must match "
+    f"the maroDiagPanelDetail contract ({DETAIL_FIELDS} fields, MaroPanelCommands.h)"
+)
+print("field count constants pinned OK")
+
+flatSample = [
+    "hashA", "error", "first summary", "7", "1000", "1200", "3", "1",
+    "hashB", "warn", "second summary", "5", "900", "900", "1", "0",
+]
+sliced = maroDiagPanel.sliceRows(flatSample)
+assert len(sliced) == 2, f"expected 2 rows from 16 fields, got {len(sliced)}"
+assert sliced[0]["errorHash"] == "hashA"
+assert sliced[0]["occurrences"] == 3
+assert sliced[0]["knownBefore"] is True
+assert sliced[1]["knownBefore"] is False
+print("sliceRows OK")
+
+# 잘못 잘린 배열은 조용히 잘못된 행을 만들지 않고 거절한다.
+try:
+    maroDiagPanel.sliceRows(flatSample[:-1])
+    raise AssertionError("a ragged array should have been rejected")
+except ValueError:
+    pass
+print("ragged array rejected OK")
+
+# 시각 형식화는 표시하는 쪽이 로컬 시간대로 한다 -- C++는 epoch ms만 낸다.
+assert maroDiagPanel.formatLocalTime(0) != "", "formatLocalTime must produce something"
+assert ":" in maroDiagPanel.formatLocalTime(1700000000000)
+print("formatLocalTime OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()

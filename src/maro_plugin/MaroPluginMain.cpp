@@ -191,6 +191,13 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroDiagPanel",
+                                    maro::MaroDiagPanelCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagPanel");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -206,6 +213,13 @@ MStatus uninitializePlugin(MObject obj) {
 
     maro::shutdownBridge();
     maro::MaroDeleteWatcher::uninstall();
+
+    // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
+    // devkit의 workspaceControlCmd 샘플이 같은 이유로 같은 일을 한다.
+    MGlobal::executeCommand(
+        "if (`workspaceControl -exists maroDiagPanelControl`) "
+        "workspaceControl -e -close maroDiagPanelControl;");
+    plugin.deregisterCommand("maroDiagPanel");
 
     plugin.deregisterCommand("maroDiagPanelDetail");
     plugin.deregisterCommand("maroDiagPanelRows");

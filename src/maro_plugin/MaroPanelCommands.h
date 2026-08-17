@@ -39,4 +39,14 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
+// 인자 없음. workspaceControl을 띄운다(이미 있으면 복원한다).
+// 파이썬 모듈은 플러그인 .mll 옆에 배포되며, 이 커맨드가 그 경로를
+// sys.path에 넣는다 -- MAYA_SCRIPT_PATH 설정을 사용자에게 요구하지 않기
+// 위해서다.
+class MaroDiagPanelCommand : public MPxCommand {
+public:
+    static void* creator();
+    MStatus doIt(const MArgList& args) override;
+};
+
 }  // namespace maro

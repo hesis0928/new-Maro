@@ -93,3 +93,11 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             "${ROS2_INSTALL}/opt/console_bridge_vendor/bin" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
     COMMENT "Maro: staging ROS 2 runtime DLLs next to the plugin"
 )
+
+# 패널 UI 모듈은 플러그인 .mll 옆에 둔다. maroDiagPanel 커맨드가 그
+# 디렉터리를 sys.path에 넣으므로 사용자가 MAYA_SCRIPT_PATH를 손댈 필요가 없다.
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/python/maroDiagPanel.py"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/maroDiagPanel.py"
+    COMMENT "Copying maroDiagPanel.py next to the plug-in")
