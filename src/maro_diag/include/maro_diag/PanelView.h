@@ -31,4 +31,32 @@ struct PanelRow {
     bool knownBefore = false;  // 이 자리의 발생 중 하나라도 book에서 즉답됐는가
 };
 
+// 컨텍스트 한 칸의 표시 상태. 빈 문자열 하나로는 두 사실을 구분할 수 없다.
+enum class ContextPresence {
+    Present,        // 값이 있다
+    NotApplicable,  // 이 자리에 관여한 것이 애초에 없었다
+    NotCaptured,    // 관여는 했으나 그 시점에 알아낼 수 없었다
+};
+
+struct ContextField {
+    std::string value;
+    ContextPresence presence = ContextPresence::NotApplicable;
+};
+
+// 선택된 행의 상세. 필드 개수는 지금 확정한다 -- Python이 필드 수로 잘라
+// 재조립하므로 B-1b에서 개수가 바뀌면 UI가 조용히 어긋난다. B-1a에서
+// applyAvailable은 항상 false, applyUnavailableReason은 항상
+// "NoActionRecorded"다: 자리는 있고 내용만 나중에 채워진다.
+struct PanelDetail {
+    ContextField nodeType;
+    ContextField attributeName;
+    ContextField activeCommand;
+    ContextField axisOrTarget;
+    std::string message;
+    std::string priorAnalysis;
+    std::string remedyText;
+    bool applyAvailable = false;
+    std::string applyUnavailableReason;
+};
+
 }  // namespace maro

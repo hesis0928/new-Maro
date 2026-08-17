@@ -42,6 +42,21 @@ std::string collapseKey(const DiagRecord& rec) {
     return std::string("m:") + severityName(rec.severity) + ":" + firstLine(rec.message);
 }
 
+// 빈 문자열의 뜻을 레코드가 아는 사실로 가른다. nameUnavailable은 이름
+// 조회를 시도했으나 못 했다는 표시이므로, 그 경우의 빈 이름은 "관여 없음"이
+// 아니라 "못 채움"이다 (설계 스펙 §4.4).
+ContextField makeField(const std::string& value, bool unavailable) {
+    ContextField field;
+    if (!value.empty()) {
+        field.value = value;
+        field.presence = ContextPresence::Present;
+        return field;
+    }
+    field.presence = unavailable ? ContextPresence::NotCaptured
+                                  : ContextPresence::NotApplicable;
+    return field;
+}
+
 }  // namespace
 
 std::vector<PanelRow> buildPanelRows(const std::vector<DiagRecord>& stream,
@@ -106,6 +121,39 @@ std::vector<PanelRow> buildPanelRows(const std::vector<DiagRecord>& stream,
         rows.resize(maxRows);
     }
     return rows;
+}
+
+PanelDetail buildPanelDetail(const DiagRecord& record,
+                              const BookEntry* bookEntry,
+                              bool targetNodeExists) {
+    (void)targetNodeExists;  // B-1b가 적용 가능 여부를 판단할 때 쓴다.
+
+    PanelDetail detail;
+    detail.nodeType = makeField(record.context.nodeType, false);
+    detail.attributeName = makeField(record.context.attributeName, false);
+    detail.activeCommand = makeField(record.context.activeCommand, false);
+    // 이름 조회를 못 한 자리는 axisOrTarget 하나다.
+    detail.axisOrTarget = makeField(record.context.axisOrTarget,
+                                     record.context.nameUnavailable);
+
+    detail.message = record.message;
+
+    // book에서 지금 읽어 온 것이 있으면 그쪽이 최신이다.
+    if (bookEntry != nullptr && !bookEntry->analysis.empty()) {
+        detail.priorAnalysis = bookEntry->analysis;
+    } else {
+        detail.priorAnalysis = record.priorAnalysis;
+    }
+    if (bookEntry != nullptr && !bookEntry->remedy.empty()) {
+        detail.remedyText = bookEntry->remedy;
+    } else {
+        detail.remedyText = record.remedy;
+    }
+
+    // B-1a에는 구조화된 동작이 없다. 자리만 지키고 내용은 B-1b가 채운다.
+    detail.applyAvailable = false;
+    detail.applyUnavailableReason = "NoActionRecorded";
+    return detail;
 }
 
 }  // namespace maro

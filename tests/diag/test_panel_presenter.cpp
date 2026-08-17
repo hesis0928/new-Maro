@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "maro_diag/BookStore.h"
 #include "maro_diag/DiagRecord.h"
 #include "maro_diag/PanelView.h"
 #include "maro_diag/PanelPresenter.h"
@@ -280,4 +281,64 @@ TEST(PanelPresenter, EmptyStreamProducesNoRowsAndNoHiddenCounts) {
     EXPECT_TRUE(rows.empty());
     EXPECT_EQ(hiddenByFilter, 0u);
     EXPECT_EQ(hiddenByCap, 0u);
+}
+
+// 관여가 없어서 빈 것과, 관여는 했는데 못 채운 것은 다른 사실이다.
+TEST(PanelPresenter, DistinguishesNotCapturedFromNotApplicable) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "hash", "compute failed");
+    rec.context.nodeType = "maroAxis";
+    rec.context.axisOrTarget = "";       // 워커 스레드라 이름을 못 물었다
+    rec.context.nameUnavailable = true;
+    rec.context.attributeName = "";      // 이 실패에는 관여한 어트리뷰트가 없다
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, false);
+
+    EXPECT_EQ(detail.nodeType.presence, maro::ContextPresence::Present);
+    EXPECT_EQ(detail.nodeType.value, "maroAxis");
+    EXPECT_EQ(detail.axisOrTarget.presence, maro::ContextPresence::NotCaptured)
+        << "the worker thread could not ask Maya for the name -- that is not 'nothing involved'";
+    EXPECT_EQ(detail.attributeName.presence, maro::ContextPresence::NotApplicable);
+}
+
+// book 항목이 있으면 해법 설명이 나온다. 적용 가능 여부는 B-1b까지 항상 거짓이다.
+TEST(PanelPresenter, CarriesRemedyTextButOffersNoActionYet) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "hash", "bind rejected");
+    maro::BookEntry entry;
+    entry.analysis = "이 축은 이미 다른 오브젝트에 묶여 있다";
+    entry.remedy = "먼저 기존 바인딩을 끊으세요";
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+
+    EXPECT_EQ(detail.remedyText, "먼저 기존 바인딩을 끊으세요");
+    EXPECT_FALSE(detail.applyAvailable);
+    EXPECT_EQ(detail.applyUnavailableReason, "NoActionRecorded");
+}
+
+// 레코드의 priorAnalysis와 book의 현재 analysis는 다를 수 있다 -- 레코드가
+// 남은 뒤에 등록된 것을 반영하는 것이 상세 조회의 목적이다.
+TEST(PanelPresenter, PrefersTheCurrentBookAnalysisOverTheRecordedOne) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "hash", "failed");
+    rec.priorAnalysis = "레코드가 남을 때의 분석";
+    maro::BookEntry entry;
+    entry.analysis = "그 뒤에 갱신된 분석";
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+
+    EXPECT_EQ(detail.priorAnalysis, "그 뒤에 갱신된 분석");
+}
+
+// book을 못 읽어도 상세는 나온다 -- 진단 경로는 지식 저장소 때문에 죽지 않는다.
+TEST(PanelPresenter, WorksWithoutABookEntry) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "hash", "failed");
+    rec.priorAnalysis = "레코드에 실려 온 분석";
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, true);
+
+    EXPECT_EQ(detail.message, "failed");
+    EXPECT_EQ(detail.priorAnalysis, "레코드에 실려 온 분석");
+    EXPECT_EQ(detail.remedyText, "");
 }
