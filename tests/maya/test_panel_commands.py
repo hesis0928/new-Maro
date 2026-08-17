@@ -54,6 +54,20 @@ for r in rows:
     assert int(r[5]) >= int(r[4]), "last occurrence cannot precede the first"
 print("row fields OK")
 
+# 스냅샷이 스트림을 정확히 한 번, 레코드마다 한 번씩 걸었는지 핀으로 고정한다.
+# 순번(r[3])은 세션 전역에서 유일하게 증가하는 값이므로, 행들이 엄격히
+# 감소하는 순서로 오고 어느 값도 반복되지 않아야 한다 -- count-then-index
+# 루프가 레코드를 건너뛰거나 두 번 읽었다면(스냅샷이 아니었을 때) 이 자리가
+# 흔들린다.
+sequences = [int(r[3]) for r in rows]
+assert sequences == sorted(sequences, reverse=True), (
+    f"rows must come back in strictly decreasing sequence order, got {sequences}"
+)
+assert len(set(sequences)) == len(sequences), (
+    f"no sequence value may repeat across rows, got {sequences}"
+)
+print("row sequence order OK")
+
 # -hidden 경로도 값으로 확인한다. 지금까지 기록된 것은 정보 레코드
 # ("plugin loaded") 하나 + 에러 5건(3+1로 접힘)이다: severity=error
 # 필터는 그 정보 레코드 딱 하나만 제외하고, 행은 둘뿐이라 기본 상한(500)

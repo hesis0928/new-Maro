@@ -95,6 +95,26 @@ public:
     // push_back(재할당 포함)과 경합하는 매달린 참조가 될 수 있다.
     static DiagRecord recordAt(std::size_t indexFromEnd);
 
+    // 스트림 전체를 락 한 번으로 복사한다 (리뷰 Finding: snapshot()이 스냅샷이
+    // 아니었다). recordCount()로 개수를 얻고 recordAt()을 그 개수만큼 반복
+    // 호출하는 루프는 매 호출이 독립적으로 락을 잡았다 놓으므로 스냅샷이
+    // 아니다 -- 루프 도중 다른 스레드가 push_back하면(Maya 2026 Parallel
+    // Evaluation Manager 아래 워커의 error()/warn()/info()가 그럴 수 있다)
+    // recordAt(indexFromEnd)은 루프 시작 시점에 캡처해 둔 count가 아니라
+    // *지금 이 순간의* stream().size()를 기준으로 인덱스를 계산하므로, 그
+    // 시점 이후의 모든 반복이 한 칸씩 밀린 자리를 읽는다 -- 레코드 하나를
+    // 조용히 건너뛰거나 다른 레코드를 두 번 읽는다. 스트림이 줄어들지 않으니
+    // 예외나 크래시로는 드러나지 않고, 그 갱신 한 번의 패널 출력만 조용히
+    // 어긋난 채 다음 갱신에서 저절로 맞아떨어진다.
+    //
+    // 이 메서드는 그 경합이 성립할 자리가 없다: 락을 쥔 채로 벡터 전체를
+    // 한 번에 복사하므로 다른 스레드가 끼어들 틈이 없다. 반환값은 스트림에
+    // 저장된 순서 그대로(오래된 것부터, sequence 오름차순)다 -- 순번 배정이
+    // 이미 push_back과 같은 락 스코프 안에서 일어나므로(assignSequenceAndPush,
+    // MaroDiag.cpp) 삽입 순서와 순번 순서는 언제나 같다. 호출부가 뒤집을
+    // 필요가 없다.
+    static std::vector<DiagRecord> snapshotRecords();
+
     // book에서 실제로 새로 분석한(캐시 미스) 횟수. "기지 에러 즉답" 검증에 쓴다.
     static std::size_t freshAnalysisCount();
 

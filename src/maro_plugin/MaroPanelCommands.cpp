@@ -45,16 +45,19 @@ const char* presenceName(ContextPresence p) {
 
 // boad의 스트림을 통째로 복사해 온다. 프레젠터는 순수해야 하므로 살아있는
 // 상태를 들여다보지 않고 스냅샷만 본다 (설계 스펙 §3.3).
+//
+// 리뷰 Finding: 예전에는 recordCount()로 개수를 얻은 뒤 recordAt()을 그
+// 개수만큼 반복 호출하며 뒤에서부터 채웠다. 그 두 함수는 각자 독립적으로
+// 락을 잡았다 놓으므로, 루프 도중 다른 스레드가 push_back하면(Maya 2026
+// Parallel Evaluation Manager 아래 워커에서 error()/warn()/info()가 그럴 수
+// 있다) recordAt(indexFromEnd)의 인덱스 산법이 루프 시작 시점의 count가 아닌
+// 지금 이 순간의 크기를 기준으로 계산돼, 남은 반복 전부가 한 칸씩 밀려
+// 레코드를 건너뛰거나 두 번 읽었다 -- 스냅샷이 아니었다. BoadMaro::
+// snapshotRecords()는 락을 한 번만 잡고 그 안에서 전체를 복사하므로 그
+// 경합이 없고, 이미 오래된 것부터 순번 순서로 저장돼 있으므로(순번 배정이
+// push_back과 같은 락 스코프 안에서 일어난다) 뒤집을 필요도 없다.
 std::vector<DiagRecord> snapshot() {
-    const std::size_t count = BoadMaro::recordCount();
-    std::vector<DiagRecord> records;
-    records.reserve(count);
-    // recordAt은 0 = 가장 최근이다. 프레젠터는 시간순(오래된 것부터) 입력을
-    // 기대하므로 뒤에서부터 채운다.
-    for (std::size_t i = count; i > 0; --i) {
-        records.push_back(BoadMaro::recordAt(i - 1));
-    }
-    return records;
+    return BoadMaro::snapshotRecords();
 }
 
 }  // namespace

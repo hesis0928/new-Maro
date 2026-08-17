@@ -474,6 +474,15 @@ DiagRecord BoadMaro::recordAt(std::size_t indexFromEnd) {
     return stream().at(stream().size() - 1 - indexFromEnd);
 }
 
+std::vector<DiagRecord> BoadMaro::snapshotRecords() {
+    // 락을 한 번만 잡고 그 안에서 전체를 복사한다 -- recordCount()+recordAt()
+    // 루프처럼 락을 반복해 여닫지 않으므로, 다른 스레드의 push_back이 이
+    // 복사 도중에 끼어들 수 없다. 벡터 복사 대입 자체가 이미 오래된 것부터
+    // 순서대로다.
+    std::lock_guard<std::mutex> lock(mutex());
+    return stream();
+}
+
 void BoadMaro::resetForTest() {
     // carried-forward Minor finding: 예전에는 레코드 스트림과
     // freshAnalysisCount만 리셋하고 g_bookUnwritableWarned 래치와(이 배치가
