@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <unordered_map>
 
 #include "maro_diag/DiagRecord.h"
 
@@ -31,11 +32,32 @@ public:
                       DiagSeverity severity, const std::string& siteTag,
                       const std::string& message);
 
+    // 최근 N 세션만 남기고 오래된 것부터 버린다. 파일이 없으면 아무 일도
+    // 하지 않는다 -- 첫 실행이 그 상태다. 열려 있는 writer와 무관하게
+    // 부를 수 있도록 정적이다: 플러그인은 이번 세션의 open 줄을 쓰기
+    // **전에** 회전을 돌린다.
+    static void rotate(const std::filesystem::path& path);
+
     JournalWriter(const JournalWriter&) = delete;
     JournalWriter& operator=(const JournalWriter&) = delete;
 
 private:
     void writeLine(const std::string& json);
+
+    // 태그별 억제 예산. 창의 시작 시각과 그 창에서 이미 쓴 줄 수를 함께
+    // 들고 있다. 서로 다른 태그가 서로의 예산을 잡아먹지 않는 것이
+    // 핵심이다 -- 병렬 평가에서는 여러 노드의 경고가 번갈아 들어오므로
+    // "연속된 같은 태그"를 기준으로 삼으면 억제가 한 번도 안 걸린다.
+    struct TagBudget {
+        std::uint64_t windowStartMs = 0;
+        std::size_t written = 0;
+        std::size_t suppressed = 0;
+    };
+
+    void flushSuppressed(const std::string& siteTag, TagBudget& budget,
+                          std::uint64_t timestampMs);
+
+    std::unordered_map<std::string, TagBudget> budgets_;
 
     std::ofstream out_;
 };

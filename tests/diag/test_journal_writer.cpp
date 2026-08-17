@@ -208,3 +208,133 @@ TEST(JournalWriter, InvalidUtf8InRecordDoesNotThrowAndLeavesJournalParseable) {
     EXPECT_EQ(after.at("tag"), "Site.After");
     EXPECT_EQ(after.at("msg"), "after");
 }
+
+// 같은 태그가 창 안에서 예산을 넘기면 더 쓰지 않고, 창이 닫힐 때 몇 개를
+// 생략했는지 한 줄로 남긴다.
+TEST(JournalWriter, SuppressesOneTagBeyondItsBudget) {
+    const std::filesystem::path dir = freshDir("suppress");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        writer.writeSessionOpen(1000);
+        // 같은 창(1000~1999) 안에서 같은 태그로 20번.
+        for (std::uint64_t i = 0; i < 20; ++i) {
+            writer.writeRecord(i + 1, 1000 + i, maro::DiagSeverity::Warn,
+                                "Site.Spam", "spam");
+        }
+        // 창을 넘겨 다음 줄을 쓰면 생략 개수가 나온다.
+        writer.writeRecord(100, 3000, maro::DiagSeverity::Warn, "Site.Spam", "after");
+        writer.writeSessionClose(3001);
+    }
+
+    const std::string text = readAll(file);
+    // open + 예산 5줄 + suppressed 1줄 + 창 밖 1줄 + close = 9
+    EXPECT_EQ(countLines(text), 9u)
+        << "twenty hits on one tag inside one window must not become twenty lines";
+    EXPECT_NE(text.find("\"kind\":\"suppressed\""), std::string::npos);
+    EXPECT_NE(text.find("\"count\":15"), std::string::npos)
+        << "fifteen of the twenty were dropped";
+}
+
+// 서로 다른 태그는 서로의 예산을 잡아먹지 않는다. 병렬 평가에서 여러 노드의
+// 경고가 번갈아 들어오는 것이 실제 입력이므로, 이것이 깨지면 억제를 넣은
+// 이유가 통째로 무너진다.
+TEST(JournalWriter, TagsDoNotSpendEachOthersBudget) {
+    const std::filesystem::path dir = freshDir("interleaved");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        writer.writeSessionOpen(1000);
+        // 두 태그를 번갈아 4번씩 -- 각자 예산(5) 안이므로 전부 쓰여야 한다.
+        for (std::uint64_t i = 0; i < 4; ++i) {
+            writer.writeRecord(i * 2 + 1, 1000 + i, maro::DiagSeverity::Warn,
+                                "Site.A", "a");
+            writer.writeRecord(i * 2 + 2, 1000 + i, maro::DiagSeverity::Warn,
+                                "Site.B", "b");
+        }
+        writer.writeSessionClose(1500);
+    }
+
+    const std::string text = readAll(file);
+    EXPECT_EQ(countLines(text), 10u) << "open + 4 A + 4 B + close";
+    EXPECT_EQ(text.find("\"kind\":\"suppressed\""), std::string::npos)
+        << "neither tag exceeded its own budget, so nothing was suppressed";
+}
+
+// 창이 지나면 예산이 되살아난다.
+TEST(JournalWriter, BudgetRefillsAfterTheWindow) {
+    const std::filesystem::path dir = freshDir("refill");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        writer.writeSessionOpen(1000);
+        for (std::uint64_t i = 0; i < 5; ++i) {
+            writer.writeRecord(i + 1, 1000, maro::DiagSeverity::Warn, "Site.A", "a");
+        }
+        // 창을 훌쩍 넘긴 시각 -- 예산이 되살아나 다시 5줄이 쓰여야 한다.
+        for (std::uint64_t i = 0; i < 5; ++i) {
+            writer.writeRecord(i + 10, 9000, maro::DiagSeverity::Warn, "Site.A", "a");
+        }
+        writer.writeSessionClose(9500);
+    }
+
+    const std::string text = readAll(file);
+    EXPECT_EQ(countLines(text), 12u) << "open + 5 + 5 + close, with nothing suppressed";
+}
+
+// 회전은 최근 N 세션만 남긴다. 오래된 세션이 통째로 사라지고 최근 것은
+// 온전히 남아야 한다.
+TEST(JournalWriter, RotateKeepsOnlyTheMostRecentSessions) {
+    const std::filesystem::path dir = freshDir("rotate");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        // 보관 한도보다 5개 많은 세션을 쓴다. 각 세션은 자기 번호를 담은
+        // 레코드를 하나씩 갖는다.
+        for (std::uint64_t s = 0; s < maro::kJournalSessionsKept + 5; ++s) {
+            writer.writeSessionOpen(1000 + s * 10);
+            writer.writeRecord(s + 1, 1001 + s * 10, maro::DiagSeverity::Error,
+                                "Site.S" + std::to_string(s), "session marker");
+            writer.writeSessionClose(1002 + s * 10);
+        }
+    }
+
+    maro::JournalWriter::rotate(file);
+
+    const std::string text = readAll(file);
+    EXPECT_EQ(text.find("Site.S0"), std::string::npos)
+        << "the oldest session must be gone";
+    EXPECT_EQ(text.find("Site.S4"), std::string::npos)
+        << "everything beyond the keep limit must be gone";
+    EXPECT_NE(text.find("Site.S5"), std::string::npos)
+        << "the tenth-from-last session must survive";
+    EXPECT_NE(text.find("Site.S14"), std::string::npos)
+        << "the newest session must survive";
+    EXPECT_EQ(countLines(text), maro::kJournalSessionsKept * 3)
+        << "each kept session contributes open + record + close";
+}
+
+// 보관 한도보다 적으면 아무것도 버리지 않는다.
+TEST(JournalWriter, RotateLeavesAShortJournalAlone) {
+    const std::filesystem::path dir = freshDir("rotate_short");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        writer.writeSessionOpen(1000);
+        writer.writeRecord(1, 1001, maro::DiagSeverity::Error, "Site.Only", "only");
+        writer.writeSessionClose(1002);
+    }
+    const std::string before = readAll(file);
+
+    maro::JournalWriter::rotate(file);
+
+    EXPECT_EQ(readAll(file), before) << "nothing to drop, so nothing may change";
+}
+
+// 저널이 아예 없어도 회전이 죽지 않는다 -- 첫 실행이 그 상태다.
+TEST(JournalWriter, RotateOnAMissingFileIsHarmless) {
+    const std::filesystem::path dir = freshDir("rotate_missing");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    maro::JournalWriter::rotate(file);
+    SUCCEED() << "rotating a journal that does not exist must not throw";
+}
