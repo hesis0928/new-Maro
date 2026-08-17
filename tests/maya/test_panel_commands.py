@@ -226,8 +226,32 @@ flatSample = [
 sliced = maroDiagPanel.sliceRows(flatSample)
 assert len(sliced) == 2, f"expected 2 rows from 16 fields, got {len(sliced)}"
 assert sliced[0]["errorHash"] == "hashA"
+assert sliced[0]["severity"] == "error", f"expected severity 'error', got {sliced[0]['severity']!r}"
+assert sliced[0]["summary"] == "first summary", (
+    f"expected summary 'first summary', got {sliced[0]['summary']!r}"
+)
+assert sliced[0]["sequence"] == 7, f"expected sequence 7, got {sliced[0]['sequence']!r}"
+assert sliced[0]["firstTimestampMs"] == 1000, (
+    f"expected firstTimestampMs 1000, got {sliced[0]['firstTimestampMs']!r}"
+)
+assert sliced[0]["lastTimestampMs"] == 1200, (
+    f"expected lastTimestampMs 1200, got {sliced[0]['lastTimestampMs']!r}"
+)
 assert sliced[0]["occurrences"] == 3
 assert sliced[0]["knownBefore"] is True
+assert sliced[1]["errorHash"] == "hashB"
+assert sliced[1]["severity"] == "warn", f"expected severity 'warn', got {sliced[1]['severity']!r}"
+assert sliced[1]["summary"] == "second summary", (
+    f"expected summary 'second summary', got {sliced[1]['summary']!r}"
+)
+assert sliced[1]["sequence"] == 5, f"expected sequence 5, got {sliced[1]['sequence']!r}"
+assert sliced[1]["firstTimestampMs"] == 900, (
+    f"expected firstTimestampMs 900, got {sliced[1]['firstTimestampMs']!r}"
+)
+assert sliced[1]["lastTimestampMs"] == 900, (
+    f"expected lastTimestampMs 900, got {sliced[1]['lastTimestampMs']!r}"
+)
+assert sliced[1]["occurrences"] == 1
 assert sliced[1]["knownBefore"] is False
 print("sliceRows OK")
 

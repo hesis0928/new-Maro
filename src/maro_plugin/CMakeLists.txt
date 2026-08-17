@@ -96,8 +96,33 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 
 # 패널 UI 모듈은 플러그인 .mll 옆에 둔다. maroDiagPanel 커맨드가 그
 # 디렉터리를 sys.path에 넣으므로 사용자가 MAYA_SCRIPT_PATH를 손댈 필요가 없다.
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+#
+# I9: POST_BUILD는 ${PROJECT_NAME}의 relink 엣지에 묶여 있다 -- .py만 고쳐서
+# 빌드하면 C++ 쪽에 변경이 없어 relink가 안 일어나고, 그러면 이 COMMAND도
+# 조용히 스킵되어 스테일 모듈이 그대로 배포된 채 테스트가 통과해 버린다.
+# 대신 OUTPUT 기반 add_custom_command로 python/maroDiagPanel.py 자체를
+# 빌드 입력으로 만든다: DEPENDS가 소스 파일을 직접 가리키므로 Ninja가 그
+# mtime을 보고 재실행 여부를 판단하고, .py만 바뀌어도 다시 복사된다.
+# $<TARGET_FILE_DIR:...> in OUTPUT would be the tidier spelling, but it fails
+# here at generate time ("No target maro") even though the target plainly
+# exists at configure time -- build_plugin() (devkit's pluginEntry.cmake)
+# creates it via add_library() from inside a function(), and CMake's
+# generate-time target lookup for OUTPUT-position genexes doesn't resolve it
+# in this setup. This project is single-config (Ninja, not Ninja Multi-Config),
+# so the target's runtime output directory is just CMAKE_CURRENT_BINARY_DIR
+# with no per-config subfolder -- confirmed on disk (maro.mll sits directly
+# in out/build/src/maro_plugin). Using that plain variable for OUTPUT sidesteps
+# the genex-resolution issue entirely; TARGET_FILE_DIR genex still works fine
+# inside COMMAND (as used elsewhere in this file) since that path is resolved
+# per-build-rule, not at OUTPUT-parsing time.
+set(MARO_DIAG_PANEL_PY_SRC "${CMAKE_SOURCE_DIR}/python/maroDiagPanel.py")
+set(MARO_DIAG_PANEL_PY_OUT "${CMAKE_CURRENT_BINARY_DIR}/maroDiagPanel.py")
+add_custom_command(
+    OUTPUT "${MARO_DIAG_PANEL_PY_OUT}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/python/maroDiagPanel.py"
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/maroDiagPanel.py"
+            "${MARO_DIAG_PANEL_PY_SRC}" "${MARO_DIAG_PANEL_PY_OUT}"
+    DEPENDS "${MARO_DIAG_PANEL_PY_SRC}"
     COMMENT "Copying maroDiagPanel.py next to the plug-in")
+add_custom_target(maro_diag_panel_py ALL DEPENDS "${MARO_DIAG_PANEL_PY_OUT}")
+add_dependencies(${PROJECT_NAME} maro_diag_panel_py)
