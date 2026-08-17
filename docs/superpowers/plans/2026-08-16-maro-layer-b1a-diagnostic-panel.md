@@ -429,6 +429,9 @@ struct PanelRow {
     std::string summary;     // 한 줄 요약 (가장 최근 발생의 message 첫 줄)
     // 이 행이 대표하는 가장 최근 발생의 순번. 정렬 기준이자 상세 조회 키다.
     std::uint64_t sequence = 0;
+    // 이 행의 가장 이른 발생의 순번. 최초 시각을 고를 때 쓴다 -- 시각끼리
+    // 비교하면 벽시계가 뒤로 간 순간 나중 것이 "최초"로 뽑힌다.
+    std::uint64_t firstSequence = 0;
     std::uint64_t firstTimestampMs = 0;  // 형식화는 표시하는 쪽이 로컬 시간대로 한다
     std::uint64_t lastTimestampMs = 0;
     std::size_t occurrences = 1;
@@ -548,6 +551,7 @@ std::vector<PanelRow> buildPanelRows(const std::vector<DiagRecord>& stream,
             row.severity = severityName(rec.severity);
             row.summary = firstLine(rec.message);
             row.sequence = rec.sequence;
+            row.firstSequence = rec.sequence;
             row.firstTimestampMs = rec.timestampMs;
             row.lastTimestampMs = rec.timestampMs;
             row.occurrences = 1;
@@ -560,16 +564,18 @@ std::vector<PanelRow> buildPanelRows(const std::vector<DiagRecord>& stream,
         PanelRow& row = rows[found->second];
         ++row.occurrences;
         row.knownBefore = row.knownBefore || rec.servedFromBook;
-        // 행의 자리는 가장 최근 발생을 따른다. 순번으로만 비교한다 --
-        // 벽시계는 뒤로 갈 수 있어 순서 판단에 쓰지 않는다.
-        if (rec.sequence >= row.sequence) {
+        // 최초·최근은 **순번**으로 고른다. 타임스탬프끼리 min/max를 하면
+        // 벽시계가 뒤로 간 순간 나중 발생의 시각이 "최초"로 뽑힌다 --
+        // 순서를 정하는 어떤 판단도 시각을 읽지 않는다는 규칙 그대로다.
+        if (rec.sequence > row.sequence) {
             row.sequence = rec.sequence;
             row.lastTimestampMs = rec.timestampMs;
             row.summary = firstLine(rec.message);
             row.severity = severityName(rec.severity);
         }
-        if (rec.sequence < row.sequence) {
-            row.firstTimestampMs = std::min(row.firstTimestampMs, rec.timestampMs);
+        if (rec.sequence < row.firstSequence) {
+            row.firstSequence = rec.sequence;
+            row.firstTimestampMs = rec.timestampMs;
         }
     }
 
@@ -1013,14 +1019,15 @@ namespace maro {
 // 읽는 유일한 경로이므로 이름과 필드 개수가 계약이다 (설계 스펙 §3.5.1).
 // 반면 maroDiagCount/maroDiagQuery/maroDiagEmit 계열은 테스트 전용으로 남는다.
 
-// [-severity <all|warn|error>] [-maxRows <int, 기본 500>]
+// [-severity <all|warn|error>] [-maxRows <int, 기본 500>] [-hidden]
 // 접힌 행들을 평탄한 문자열 배열로 돌려준다. 행마다 8필드:
 //   errorHash, severity, summary, sequence, firstTimestampMs,
 //   lastTimestampMs, occurrences, knownBefore("0"/"1")
-// 마지막에 숨겨진 개수 2필드가 따로 붙지 않는다 -- 그것은
-// maroDiagPanelHidden이 아니라 이 커맨드의 -query 형태가 아니므로, 개수는
-// 행 배열 길이와 별개로 Python이 다시 묻지 않아도 되게 UI가 요약 줄로만
-// 쓴다. 숨김 개수가 필요하면 -hidden 플래그로 요청한다.
+//
+// 숨겨진 개수는 이 배열에 섞지 않는다 -- 섞으면 배열 길이가 더 이상 8의
+// 배수가 아니게 되어 Python의 재조립이 조용히 어긋난다. 대신 -hidden을
+// 주면 행 대신 2필드만 돌려준다: 필터로 빠진 개수, 상한으로 잘린 개수.
+// 둘을 나누는 이유는 사용자에게 다른 사건이기 때문이다.
 class MaroDiagPanelRowsCommand : public MPxCommand {
 public:
     static void* creator();
