@@ -1,4 +1,10 @@
 find_package(GTest CONFIG REQUIRED)
+# test_journal_writer.cpp parses journal lines back into JSON to assert
+# field values (Finding 2). find_package's imported target is scoped to the
+# directory tree it's called in, and src/maro_diag's call
+# (src/maro_diag/CMakeLists.txt) doesn't reach this sibling directory, so it
+# is repeated here rather than relying on that one.
+find_package(nlohmann_json CONFIG REQUIRED)
 
 add_executable(maro_transform_tests
     transform/test_convert.cpp
@@ -24,6 +30,11 @@ target_link_libraries(maro_diag_tests PRIVATE
     maro_diag
     GTest::gtest
     GTest::gtest_main
+    # test_journal_writer.cpp parses emitted lines back into JSON to assert
+    # field values. maro_diag keeps nlohmann PRIVATE (its header isn't part
+    # of the library's public interface), so the test target links it
+    # directly rather than making it public on the library.
+    nlohmann_json::nlohmann_json
 )
 
 gtest_discover_tests(maro_diag_tests)

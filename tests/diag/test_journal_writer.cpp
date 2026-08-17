@@ -4,6 +4,9 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "maro_diag/DiagRecord.h"
 #include "maro_diag/Journal.h"
@@ -38,6 +41,24 @@ std::size_t countLines(const std::string& text) {
     return n;
 }
 
+// text를 개행 기준으로 줄 목록으로 쪼갠다 (각 줄 자체는 한 JSON 값이므로
+// 필드 단위로 파싱해 단언하려면 줄을 먼저 떼어내야 한다). 끝의 빈 조각은
+// 버린다 -- writeLine이 항상 개행으로 끝내므로 마지막 split 결과는 늘 "".
+std::vector<std::string> splitLines(const std::string& text) {
+    std::vector<std::string> lines;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t pos = text.find('\n', start);
+        if (pos == std::string::npos) {
+            if (start < text.size()) lines.push_back(text.substr(start));
+            break;
+        }
+        lines.push_back(text.substr(start, pos - start));
+        start = pos + 1;
+    }
+    return lines;
+}
+
 }  // namespace
 
 TEST(JournalWriter, WritesOneLinePerRecord) {
@@ -58,6 +79,27 @@ TEST(JournalWriter, WritesOneLinePerRecord) {
     EXPECT_NE(text.find("\"event\":\"open\""), std::string::npos);
     EXPECT_NE(text.find("\"event\":\"close\""), std::string::npos);
     EXPECT_NE(text.find("Site.A"), std::string::npos);
+
+    // 부분 문자열 검색은 tag와 msg가 뒤바뀌거나 sev가 하드코딩돼도 못 잡는다
+    // (Finding 2) -- 각 레코드 줄을 JSON으로 파싱해 필드 값을 직접 확인한다.
+    const std::vector<std::string> lines = splitLines(text);
+    ASSERT_EQ(lines.size(), 4u);
+
+    const nlohmann::json rec1 = nlohmann::json::parse(lines[1]);
+    EXPECT_EQ(rec1.at("kind"), "record");
+    EXPECT_EQ(rec1.at("seq"), 1u);
+    EXPECT_EQ(rec1.at("t"), 1001u);
+    EXPECT_EQ(rec1.at("sev"), "error");
+    EXPECT_EQ(rec1.at("tag"), "Site.A");
+    EXPECT_EQ(rec1.at("msg"), "first");
+
+    const nlohmann::json rec2 = nlohmann::json::parse(lines[2]);
+    EXPECT_EQ(rec2.at("kind"), "record");
+    EXPECT_EQ(rec2.at("seq"), 2u);
+    EXPECT_EQ(rec2.at("t"), 1002u);
+    EXPECT_EQ(rec2.at("sev"), "warn");
+    EXPECT_EQ(rec2.at("tag"), "");
+    EXPECT_EQ(rec2.at("msg"), "second");
 }
 
 // 진단 경로는 저널을 못 열어서 실패하지 않는다. 쓸 수 없는 경로를 줘도
@@ -116,4 +158,53 @@ TEST(JournalWriter, KeepsOneLinePerEntryWhenTheMessageHasNewlines) {
     const std::string text = readAll(file);
     EXPECT_EQ(countLines(text), 3u)
         << "a newline inside the message must be escaped, not split the entry";
+}
+
+// siteTag/message are caller-supplied strings that can originate from
+// Windows APIs or ROS payloads -- nothing guarantees they are valid UTF-8.
+// nlohmann::json::dump() defaults to strict error handling and throws on
+// invalid UTF-8. That throw must never reach the caller: JournalWriter's
+// callers are eventually Maya callbacks, and an exception escaping one of
+// those ends the user's session. The invalid byte is constructed explicitly
+// (a lone 0x80 continuation byte with no lead byte) rather than written as a
+// literal, since an editor or the build's source encoding could silently
+// "fix" a literal invalid byte sequence.
+TEST(JournalWriter, InvalidUtf8InRecordDoesNotThrowAndLeavesJournalParseable) {
+    const std::filesystem::path dir = freshDir("invalid_utf8");
+    const std::filesystem::path file = dir / "journal.jsonl";
+
+    std::string invalidUtf8Tag = "bad-";
+    invalidUtf8Tag.push_back(static_cast<char>(0x80));  // lone continuation byte
+    invalidUtf8Tag += "-tag";
+
+    {
+        maro::JournalWriter writer(file);
+        ASSERT_TRUE(writer.isOpen());
+        writer.writeRecord(1, 1000, maro::DiagSeverity::Info, "Site.Before", "before");
+        // Must return normally even though dump() rejects the invalid UTF-8
+        // inside siteTag -- losing this one line is fine, an escaping
+        // exception is not.
+        EXPECT_NO_THROW(writer.writeRecord(2, 1001, maro::DiagSeverity::Error,
+                                            invalidUtf8Tag, "poisoned"));
+        writer.writeRecord(3, 1002, maro::DiagSeverity::Info, "Site.After", "after");
+    }
+
+    const std::string text = readAll(file);
+    const std::vector<std::string> lines = splitLines(text);
+
+    // The poisoned record must simply be absent, not present as a broken or
+    // partially-written line that would corrupt parsing of what follows.
+    ASSERT_EQ(lines.size(), 2u)
+        << "the record whose serialization failed must be dropped whole, "
+           "not partially written";
+
+    const nlohmann::json before = nlohmann::json::parse(lines[0]);
+    EXPECT_EQ(before.at("seq"), 1u);
+    EXPECT_EQ(before.at("tag"), "Site.Before");
+    EXPECT_EQ(before.at("msg"), "before");
+
+    const nlohmann::json after = nlohmann::json::parse(lines[1]);
+    EXPECT_EQ(after.at("seq"), 3u);
+    EXPECT_EQ(after.at("tag"), "Site.After");
+    EXPECT_EQ(after.at("msg"), "after");
 }

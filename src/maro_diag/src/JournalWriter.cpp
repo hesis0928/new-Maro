@@ -48,33 +48,48 @@ void JournalWriter::writeLine(const std::string& json) {
 }
 
 void JournalWriter::writeSessionOpen(std::uint64_t timestampMs) {
-    nlohmann::json j;
-    j["kind"] = "session";
-    j["event"] = "open";
-    j["t"] = timestampMs;
-    writeLine(j.dump());
+    // BookStore.cpp의 appendToSpill과 같은 모양: 직렬화까지 포함해 함수
+    // 전체를 하나의 try로 감싼다. dump()는 기본적으로 잘못된 UTF-8에서
+    // 던지는데, 그 예외가 여기서 새 나가면 (나중 과제에서) Maya 콜백까지
+    // 뚫고 올라가 세션을 죽인다. 줄 하나를 잃는 것은 괜찮다.
+    try {
+        nlohmann::json j;
+        j["kind"] = "session";
+        j["event"] = "open";
+        j["t"] = timestampMs;
+        writeLine(j.dump());
+    } catch (...) {
+    }
 }
 
 void JournalWriter::writeSessionClose(std::uint64_t timestampMs) {
-    nlohmann::json j;
-    j["kind"] = "session";
-    j["event"] = "close";
-    j["t"] = timestampMs;
-    writeLine(j.dump());
+    try {
+        nlohmann::json j;
+        j["kind"] = "session";
+        j["event"] = "close";
+        j["t"] = timestampMs;
+        writeLine(j.dump());
+    } catch (...) {
+    }
 }
 
 void JournalWriter::writeRecord(std::uint64_t sequence, std::uint64_t timestampMs,
                                  DiagSeverity severity, const std::string& siteTag,
                                  const std::string& message) {
-    nlohmann::json j;
-    j["kind"] = "record";
-    j["seq"] = sequence;
-    j["t"] = timestampMs;
-    j["sev"] = severityToJournalName(severity);
-    j["tag"] = siteTag;
-    j["msg"] = message;
-    // dump()가 개행과 따옴표를 이스케이프하므로 한 줄 = 한 항목이 유지된다.
-    writeLine(j.dump());
+    // siteTag와 message는 호출자가 주는 임의의 문자열이다 -- Windows API나
+    // ROS 페이로드에서 그대로 올 수 있어 유효한 UTF-8이라는 보장이 없다.
+    try {
+        nlohmann::json j;
+        j["kind"] = "record";
+        j["seq"] = sequence;
+        j["t"] = timestampMs;
+        j["sev"] = severityToJournalName(severity);
+        j["tag"] = siteTag;
+        j["msg"] = message;
+        // dump()가 개행과 따옴표를 이스케이프하므로 한 줄 = 한 항목이 유지된다.
+        writeLine(j.dump());
+    } catch (...) {
+    }
 }
 
 }  // namespace maro
