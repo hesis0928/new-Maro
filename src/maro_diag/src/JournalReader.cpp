@@ -1,6 +1,5 @@
 #include "maro_diag/JournalReader.h"
 
-#include <algorithm>
 #include <sstream>
 #include <unordered_set>
 
@@ -19,33 +18,36 @@ std::vector<JournalSession> parseJournal(const std::string& text) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
 
+        // 리뷰 Finding (세 개의 경쟁하는 정의): 이 줄이 세션 시작/종료/레코드/
+        // 억제 안내/알 수 없음 중 무엇인지는 classifyJournalLine(Journal.h/
+        // .cpp) 하나로 판정한다 -- JournalWriter::rotate()/countSessionOpens()
+        // 도 정확히 같은 함수로 같은 판정을 내린다. 예전에는 이 판정 로직이
+        // 여기 따로(실제 JSON 파싱으로) 있었고 라이터 쪽은 부분 문자열
+        // 검색으로 독립적으로 있었다 -- 우연히 일치했을 뿐, 둘 중 하나만
+        // 바뀌어도 조용히 어긋날 수 있었다.
+        const JournalLineKind kind = classifyJournalLine(line);
+        if (kind == JournalLineKind::SessionOpen) {
+            sessions.emplace_back();
+            continue;
+        }
+        if (kind == JournalLineKind::SessionClose) {
+            if (!sessions.empty()) sessions.back().endedCleanly = true;
+            continue;
+        }
+        if (kind != JournalLineKind::Record) continue;  // suppressed/Unknown은 레코드가 아니다
+        if (sessions.empty()) continue;                 // open 줄 앞의 레코드는 버린다
+
         nlohmann::json j;
         try {
             j = nlohmann::json::parse(line);
         } catch (...) {
-            // 깨진 줄 하나가 나머지를 포기시키지 않는다.
+            // classifyJournalLine이 이미 한 번 파싱했지만, 필드 값을 꺼내려면
+            // 다시 파싱해야 한다(그쪽은 종류만 돌려주고 파싱된 객체 자체는
+            // 넘기지 않는다 -- Journal.h가 nlohmann을 모르는 공개 헤더이기
+            // 때문이다). 여기서 실패할 리는 없다(방금 성공적으로 분류됐으므로)
+            // 지만, 방어적으로 그대로 건너뛴다.
             continue;
         }
-
-        std::string kind;
-        try {
-            kind = j.value("kind", std::string());
-            if (kind == "session") {
-                const std::string event = j.value("event", std::string());
-                if (event == "open") {
-                    sessions.emplace_back();
-                } else if (event == "close" && !sessions.empty()) {
-                    sessions.back().endedCleanly = true;
-                }
-            }
-        } catch (...) {
-            // kind나 event가 기대한 타입이 아니거나 (예: 숫자) 줄 자체가
-            // 객체가 아니면(예: 알몸 스칼라 줄) 이 줄만 버리고 계속한다.
-            continue;
-        }
-        if (kind == "session") continue;
-        if (kind != "record") continue;   // suppressed 줄은 레코드가 아니다
-        if (sessions.empty()) continue;   // open 줄 앞의 레코드는 버린다
 
         try {
             JournalRecord rec;

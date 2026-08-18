@@ -142,21 +142,35 @@ public:
     // 로드 시점에 읽어 둔 지난 세션들의 관측. 인과가 아니라 상관이다.
     //
     // 뮤텍스로 지키지 않는다 -- 이래도 안전한 이유: 이 값은
-    // initializePlugin() 중 openJournal()이 메인 스레드에서 딱 한 번 쓰고
-    // 그 뒤로는 다시 쓰이지 않는다. 이 값을 읽는 쪽은 전부 MPxCommand::doIt
-    // (MaroDiagCommands.cpp의 디버그 커맨드, MaroPanelCommands.cpp의 패널
-    // 상세 커맨드)이며, Maya는 doIt을 메인 스레드에서만 부른다. 즉 쓰기와
-    // 읽기가 겹칠 스레드 경합이 애초에 존재하지 않는다. 이 불변식이 깨지는
-    // 경우: (1) openJournal() 이후에 이 저장소를 다시 쓰는 코드가 생기거나,
-    // (2) doIt이 아닌 경로(예: compute()류 워커 스레드)에서 crashAdjacency()를
-    // 부르게 되는 경우 -- 그때는 journalMutex()처럼 전용 뮤텍스가 필요해진다.
+    // initializePlugin() 중 openJournal()이 메인 스레드에서 쓰고 그 뒤로는
+    // (resetForTest() 밖에서는) 다시 쓰이지 않는다. 이 값을 읽는 쪽은 전부
+    // MPxCommand::doIt(MaroDiagCommands.cpp의 디버그 커맨드,
+    // MaroPanelCommands.cpp의 패널 상세 커맨드)이며, Maya는 doIt을 메인
+    // 스레드에서만 부른다. 즉 쓰기와 읽기가 겹칠 스레드 경합이 애초에
+    // 존재하지 않는다.
+    //
+    // 두 번째 쓰기: resetForTest()도 이 값을 기본값으로 되돌린다(테스트
+    // 전용 훅이 boad 세션 상태를 전부 되돌려야 하므로 -- resetForTest()
+    // 주석 참고). 그래도 위의 안전 논거는 그대로 성립한다: resetForTest()
+    // 역시 언제나 메인 스레드에서, 테스트 셋업/해체 코드가 다른 doIt 호출과
+    // 절대 겹치지 않게 순차적으로만 부른다 -- "쓰기가 정확히 한 번"이라는
+    // 문장은 더 이상 참이 아니지만 "쓰기와 읽기가 동시에 겹치지 않는다"는
+    // 실제 불변식은 그대로다.
+    //
+    // 이 불변식이 깨지는 경우: (1) 위 두 곳(openJournal(), resetForTest())
+    // 이외에 이 저장소를 다시 쓰는 코드가 생기되 그 호출이 doIt/테스트
+    // 셋업과 겹칠 수 있게 되거나, (2) doIt이 아닌 경로(예: compute()류
+    // 워커 스레드)에서 crashAdjacency()를 부르게 되는 경우 -- 그때는
+    // journalMutex()처럼 전용 뮤텍스가 필요해진다.
     static const CrashAdjacency& crashAdjacency();
 
     // 테스트 전용. 프로덕션 코드는 부르지 않는다. boad 세션 상태(레코드
-    // 스트림, 신규분석 카운터, book-불가 경고 래치, book 캐시) 전부를
-    // 초기 상태로 되돌린다 -- 콜러가 없다고 절반만 리셋되는 상태로 방치하면
-    // "테스트 전용 리셋 훅"이라는 이름이 거짓말이 된다 (carried-forward
-    // Minor finding).
+    // 스트림, 신규분석 카운터, book-불가 경고 래치, book 캐시, 저널
+    // writer, crashAdjacency 저장소) 전부를 초기 상태로 되돌린다 -- 콜러가
+    // 없다고 절반만 리셋되는 상태로 방치하면 "테스트 전용 리셋 훅"이라는
+    // 이름이 거짓말이 된다 (carried-forward Minor finding -- 이 배치가
+    // 저널 writer/crashAdjacency 저장소를 새로 더했는데도 여기 반영하지
+    // 않았다면 정확히 같은 함정이 재발했을 것이다).
     static void resetForTest();
 
 private:

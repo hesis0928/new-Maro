@@ -110,7 +110,12 @@ private:
         std::size_t suppressed = 0;
     };
 
-    void flushSuppressed(const std::string& siteTag, TagBudget& budget,
+    // budgetKey는 budgets_의 키다 -- 태그가 있는 레코드는 사이트 태그
+    // 원문이지만, 태그 없는 레코드는 심각도+메시지 첫 줄이다(writeRecord
+    // 참고). 이름을 siteTag가 아니라 budgetKey로 둔 것 자체가 계약이다:
+    // 이 값을 record 줄의 "tag" 필드와 같은 JSON 키로 실으면(예전에 실제로
+    // "tag"였다) 두 서로 다른 뜻이 같은 이름을 쓰게 된다.
+    void flushSuppressed(const std::string& budgetKey, TagBudget& budget,
                           std::uint64_t timestampMs);
 
     // budgets_가 kJournalMaxBudgetKeys에 닿으면 호출된다. 창이 이미 닫힌
@@ -128,6 +133,14 @@ private:
     // 창이 닫힌 항목부터 정리한다. 그래도 동시에 활성 상태(창이 아직 열린)인
     // 키가 상한보다 많으면 그 순간만큼은 맵이 상한을 넘을 수 있다 -- 활성
     // 예산을 지우는 것은 억제 자체를 무너뜨리므로 그 경우엔 지우지 않는다.
+    //
+    // 이 초과는 시간으로 유계다: 상한 위로 맵을 밀어올린 그 활성 키들도
+    // 각자 자신의 창(kJournalSuppressionWindowMs, 1초) 하나가 닫히고 나면
+    // "창이 닫힌 항목"이 되어 다음 sweepStaleBudgets 기회(=다음 새 키가
+    // 다시 상한을 건드리는 시점)에서 정리 대상이 된다 -- 즉 맵이 상한 위에
+    // 머무는 기간은 그 초과를 만든 키들의 억제 창 하나만큼이 최대치다.
+    // MaroDiag.h가 기록 벡터에 대해 안고 있는, 시간과 무관하게 계속 자라는
+    // 무한 성장과는 다른 종류의(그리고 훨씬 얌전한) 초과다.
     std::unordered_map<std::string, TagBudget> budgets_;
 
     // Finding I2: 소멸자가 마지막으로 흘리는 억제 줄에 쓸 "t"값. 소멸자는

@@ -44,6 +44,22 @@ PanelSeverityFilter parseFilter(const MString& text) {
     return PanelSeverityFilter::All;
 }
 
+// 리뷰 Finding (모지바케): MString(const char*) 기본 생성자는 "로케일의
+// 네이티브 멀티바이트 인코딩"을 가정한다(Maya SDK의 MString.h 자체 문서) --
+// UTF-8이 아니다. 이 파일이 MStringArray에 담아 돌려주는 자유 텍스트 필드
+// (요약, 메시지, 과거 분석, 해법, crashAdjacencyNote 등)는 C++ 쪽에서 언제나
+// UTF-8이다(이 프로젝트 소스 전체가 UTF-8이고, 최상위 CMakeLists.txt가
+// /utf-8 컴파일 옵션까지 켜 둔다). 로케일 코드페이지가 UTF-8(CP65001)이
+// 아닌 Windows에서는 기본 생성자로 만들면 그 UTF-8 바이트열을 다른
+// 코드페이지로 잘못 해석해, Maya 커맨드 결과가 Python 문자열로 넘어올 때
+// 이미 깨진 채로(모지바케) 도착한다 -- setUTF8()로 명시해야 그 변환이
+// 올바르게 유니코드로 이어진다.
+MString utf8(const std::string& s) {
+    MString result;
+    result.setUTF8(s.c_str());
+    return result;
+}
+
 const char* presenceName(ContextPresence p) {
     switch (p) {
         case ContextPresence::Present: return "present";
@@ -118,7 +134,7 @@ MStatus MaroDiagPanelRowsCommand::doIt(const MArgList& args) {
         for (const PanelRow& row : rows) {
             result.append(MString(row.errorHash.c_str()));
             result.append(MString(row.severity.c_str()));
-            result.append(MString(row.summary.c_str()));
+            result.append(utf8(row.summary));
             result.append(MString(std::to_string(row.sequence).c_str()));
             result.append(MString(std::to_string(row.firstTimestampMs).c_str()));
             result.append(MString(std::to_string(row.lastTimestampMs).c_str()));
@@ -200,20 +216,20 @@ MStatus MaroDiagPanelDetailCommand::doIt(const MArgList& args) {
                               BoadMaro::crashAdjacency());
 
         MStringArray result;
-        result.append(MString(detail.nodeType.value.c_str()));
+        result.append(utf8(detail.nodeType.value));
         result.append(presenceName(detail.nodeType.presence));
-        result.append(MString(detail.attributeName.value.c_str()));
+        result.append(utf8(detail.attributeName.value));
         result.append(presenceName(detail.attributeName.presence));
-        result.append(MString(detail.activeCommand.value.c_str()));
+        result.append(utf8(detail.activeCommand.value));
         result.append(presenceName(detail.activeCommand.presence));
-        result.append(MString(detail.axisOrTarget.value.c_str()));
+        result.append(utf8(detail.axisOrTarget.value));
         result.append(presenceName(detail.axisOrTarget.presence));
-        result.append(MString(detail.message.c_str()));
-        result.append(MString(detail.priorAnalysis.c_str()));
-        result.append(MString(detail.remedyText.c_str()));
+        result.append(utf8(detail.message));
+        result.append(utf8(detail.priorAnalysis));
+        result.append(utf8(detail.remedyText));
         result.append(detail.applyAvailable ? "1" : "0");
         result.append(MString(detail.applyUnavailableReason.c_str()));
-        result.append(MString(detail.crashAdjacencyNote.c_str()));
+        result.append(utf8(detail.crashAdjacencyNote));
         setResult(result);
         return MS::kSuccess;
     } catch (const std::exception& e) {

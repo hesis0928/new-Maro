@@ -34,6 +34,23 @@ enum class JournalLineKind {
     Unknown,     // 파싱 실패. 버리되 그 줄 때문에 나머지를 포기하지 않는다
 };
 
+// 리뷰 Finding (세 개의 경쟁하는 정의): 저널 한 줄이 어떤 종류인지 판정하는
+// 유일한 정의. 예전에는 이 판정을 두 곳이 각자 따로 했다 -- JournalWriter::
+// rotate()/countSessionOpens()(회전이 세션 경계를 찾을 때)는 리터럴 부분
+// 문자열 "\"event\":\"open\""을 줄에서 찾았고, JournalReader::parseJournal()은
+// 실제로 JSON을 파싱해 kind/event 필드를 봤다. 이 둘이 지금까지 일치했던
+// 것은 dump()를 인자 없이 호출하면(JournalWriter.cpp) nlohmann의 기본 객체
+// 타입(std::map)이 키를 항상 같은 순서로, 공백 없이 내놓기 때문일 뿐이다 --
+// 그 우연이 깨지면(공백이 하나라도 섞이는 pretty-print, 혹은 필드 이름 자체가
+// 바뀌는 변경) 회전 쪽은 세션 시작을 하나도 못 찾아 조용히 일찍 반환하고,
+// 저널은 회전이 막으려는 바로 그 무한 성장에 빠진다. 이 함수 하나를 양쪽이
+// 공유하면 그런 우연에 기대지 않는다 -- 구현은 Journal.cpp에 있다(nlohmann
+// 의존은 .cpp 전용이며 이 헤더는 여전히 nlohmann을 모른다).
+//
+// 세션 id가 없는 이유는 여전히 위 문단(회전과 무관)과 같다: 세션의 경계는
+// open 줄 자체다.
+JournalLineKind classifyJournalLine(const std::string& rawLine);
+
 // 저널이 보관하는 세션 수. 무한히 자라면 안 되고(Layer A가 인메모리
 // 스트림에서 그 함정에 빠졌다), 동시에 크래시 인접 신호가 이 위에서 도므로
 // 분모가 될 세션이 몇 개는 남아 있어야 한다. 10이면 최근 작업 맥락 안에

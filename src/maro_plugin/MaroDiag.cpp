@@ -320,6 +320,21 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
     rec.severity = DiagSeverity::Error;
     rec.context = context;
 
+    // 리뷰 Finding (해시보다 먼저): siteTag는 여기, 아직 아무것도 던질 수
+    // 없는 자리에서 바로 채운다. 예전에는 이 대입이 아래 try 블록 안,
+    // hashError(siteTag) 호출 *뒤*에 있었다 -- hashError()가 예외를 던지면
+    // (지금은 순수 바이트 연산이라 실질적으로 안 던지지만, string 생성/대입
+    // 자체는 std::bad_alloc처럼 이론상 던질 수 있는 연산이다) catch 경로가
+    // rec.siteTag를 채우지 못한 채로 pushAndJournal()까지 흘러간다. 그러면
+    // 이 레코드의 저널 "tag" 필드가 영원히 빈 문자열로 남고, 크래시 인접
+    // 집계(JournalReader::countCrashAdjacentTags)는 태그 없는 레코드를
+    // 신호 대상에서 제외하므로(사이트 태그로 지목되는 실패에만 신호가
+    // 붙는다) 이 진단은 그 뒤로 다시는 크래시 인접 후보가 될 수 없다 --
+    // 정확히 이 서브시스템이 잡으려는 종류의 실패인데도. siteTag를 던질
+    // 수 있는 어떤 연산보다도 먼저 대입해 두면 이후 무엇이 던지든(book
+    // 조회/기록, hashError) rec.siteTag는 이미 채워져 있다.
+    rec.siteTag = siteTag;
+
     // 리뷰 Finding 1: activeCommand는 여기서 항상 채운다. capture()를 거친
     // context는 이미 채워져 있으니 손대지 않는다 -- 이 조건은 호출부가
     // 컨텍스트를 통째로 생략했거나(기본 인자 DgContext{}) capture() 없이
@@ -345,7 +360,9 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         // 다이제스트일 뿐이라 crashAdjacency(저널이 원문으로 키를 잡아 둔
         // 관측, JournalReader.h)에 대고 조회할 수 없다 -- 그 조회는
         // rec.siteTag로 해야 한다(DiagRecord.h 계약, PanelPresenter.cpp).
-        rec.siteTag = siteTag;
+        // (rec.siteTag 자체의 대입은 이제 이 try 블록보다 앞, hashError()를
+        // 포함해 아무것도 아직 던질 수 없는 자리에서 끝나 있다 -- 위 리뷰
+        // Finding "해시보다 먼저" 참고.)
 
         // Finding I4/M3: book 파일(정본+스필) I/O와 그것을 거울처럼 비추는
         // 세션 캐시를 하나의 book 뮤텍스로 직렬화한다. Task 7 이후
@@ -612,6 +629,34 @@ void BoadMaro::resetForTest() {
     }
     g_freshAnalysisCount = 0;
     g_bookUnwritableWarned = false;
+
+    // 리뷰 Finding (다시 반쪽 리셋으로 퇴행): 이 배치가 저널 writer와
+    // crashAdjacency 저장소라는 boad 세션 상태 두 조각을 새로 더했는데,
+    // 위의 것들만 리셋하고 이 둘을 그대로 남겨 두면 바로 위 문단이 경고하는
+    // 그 함정이 문자 그대로 재발한다 -- "테스트 전용 리셋 훅"이라는 이름이
+    // 다시 거짓말이 된다.
+    //
+    // journalWriter()를 닫는 것은 closeJournal()이 하는 "정상 종료 줄을
+    // 쓰고 닫는다"와는 다르다: closeJournal()은 이 세션이 정상적으로
+    // 끝났다는 사실 자체를 저널에 남기지만, resetForTest()는 "세션이
+    // 있었는데 정상 종료했다"를 흉내 내는 게 아니라 "아무 세션도 없었던
+    // 것처럼(정적 초기 상태처럼) 되돌린다"이다 -- 그래서 종료 줄을 쓰지
+    // 않고 그냥 버린다. unique_ptr::reset()이 부르는 ~JournalWriter()가
+    // 남은 억제 카운트를 스스로 흘리므로(JournalWriter.h Finding I2) 여기서
+    // 따로 흘릴 필요는 없다.
+    {
+        std::lock_guard<std::mutex> journalLock(journalMutex());
+        journalWriter().reset();
+    }
+    // crashAdjacency()는 이 값에 락 없이 접근해도 안전하다는 것을
+    // "openJournal()이 메인 스레드에서 딱 한 번 쓴다"는 불변식에 기대고
+    // 있었다(MaroDiag.h 클래스 주석) -- 이 대입이 그 딱 한 번을 두 번으로
+    // 만든다. 그래도 안전한 이유는 같다: resetForTest()는 테스트 셋업/해체
+    // 코드에서만, 언제나 메인 스레드에서, 다른 doIt 호출과 겹치지 않게
+    // 순차적으로만 불린다 -- "동시에 읽고 쓰지 않는다"는 진짜 불변식은
+    // 그대로 성립하므로 별도 락 없이도 안전하다(MaroDiag.h의 해당 주석에
+    // 이 두 번째 쓰기를 함께 적어 뒀다).
+    crashAdjacencyStorage() = CrashAdjacency{};
 }
 
 void BoadMaro::openJournal() {

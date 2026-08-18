@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <sstream>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -34,35 +33,25 @@ bool isPerProcessJournalFile(const std::filesystem::path& path) {
 
 // rotate()와 같은 "open 줄 찾기" 규칙을 쓰지만, 위치가 아니라 개수만
 // 필요하다(rotateAll()이 파일 전체를 통째로 지울지 판단할 때 쓴다).
+//
+// 리뷰 Finding (세 개의 경쟁하는 정의): classifyJournalLine(Journal.h/.cpp)을
+// 쓴다 -- 예전에는 여기도 rotate()와 마찬가지로 리터럴 부분 문자열
+// "\"event\":\"open\""을 찾았다. 그 방식이 지금까지 맞아떨어진 것은 순전히
+// nlohmann의 기본 dump() 서식(공백 없는 알파벳 순 키)의 우연이었을 뿐이라,
+// JournalReader::parseJournal()의 실제 JSON 파싱과 독립적으로 관리되는 두
+// 번째 정의였다. 공유 함수 하나로 합쳐 그 우연에 다시는 기대지 않는다.
 std::size_t countSessionOpens(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) return 0;
     std::size_t count = 0;
     std::string line;
     while (std::getline(in, line)) {
-        if (line.find("\"event\":\"open\"") != std::string::npos) ++count;
+        if (classifyJournalLine(line) == JournalLineKind::SessionOpen) ++count;
     }
     return count;
 }
 
 }  // namespace
-
-const char* severityToJournalName(DiagSeverity severity) {
-    switch (severity) {
-        case DiagSeverity::Info: return "info";
-        case DiagSeverity::Warn: return "warn";
-        case DiagSeverity::DevInfo: return "devInfo";
-        case DiagSeverity::Error: return "error";
-    }
-    return "unknown";
-}
-
-DiagSeverity severityFromJournalName(const std::string& name) {
-    if (name == "warn") return DiagSeverity::Warn;
-    if (name == "devInfo") return DiagSeverity::DevInfo;
-    if (name == "error") return DiagSeverity::Error;
-    return DiagSeverity::Info;
-}
 
 JournalWriter::JournalWriter(const std::filesystem::path& path) {
     try {
@@ -142,16 +131,25 @@ void JournalWriter::writeSessionClose(std::uint64_t timestampMs) {
     }
 }
 
-void JournalWriter::flushSuppressed(const std::string& siteTag, TagBudget& budget,
+void JournalWriter::flushSuppressed(const std::string& budgetKey, TagBudget& budget,
                                      std::uint64_t timestampMs) {
     if (budget.suppressed == 0) return;
-    // 이 dump()도 writeRecord의 try 안에서만 불린다 -- siteTag(여기서는 억제
-    // 키)가 유효하지 않은 UTF-8이면 여기서 던질 수 있고, 그 예외는 writeRecord
-    // 전체를 감싸는 catch로 흡수되어야 Maya 콜백까지 새 나가지 않는다.
+    // 이 dump()도 writeRecord의 try 안에서만 불린다 -- budgetKey가 유효하지
+    // 않은 UTF-8이면 여기서 던질 수 있고, 그 예외는 writeRecord 전체를
+    // 감싸는 catch로 흡수되어야 Maya 콜백까지 새 나가지 않는다.
+    //
+    // 리뷰 Finding (필드 이름 충돌): JSON 필드는 "tag"가 아니라 "key"다.
+    // budgetKey는 실제 사이트 태그일 수도 있지만(에러), 태그 없는 레코드는
+    // 심각도+메시지 첫 줄("warn:some message" 같은 모양)을 예산 키로 쓴다
+    // (writeRecord 참고) -- record 줄의 "tag" 필드는 언제나 사이트 태그
+    // 원문인데, 이 suppressed 줄에 같은 필드 이름으로 그 둘을 뭉개면 나중에
+    // suppressed 줄을 읽는 코드가 그 값을 사이트 태그로 착각하기 쉽다.
+    // 오늘은 JournalReader::parseJournal이 suppressed 줄을 아예 버리므로
+    // 무해하지만, 두 의미가 같은 이름을 쓰지 않게 지금 갈라 둔다.
     nlohmann::json j;
     j["kind"] = "suppressed";
     j["t"] = timestampMs;
-    j["tag"] = siteTag;
+    j["key"] = budgetKey;
     j["count"] = budget.suppressed;
     writeLine(j.dump());
     budget.suppressed = 0;
@@ -258,7 +256,7 @@ void JournalWriter::rotate(const std::filesystem::path& path) {
         // 찾고, 그 앞을 전부 버린다.
         std::vector<std::size_t> openAt;
         for (std::size_t i = 0; i < lines.size(); ++i) {
-            if (lines[i].find("\"event\":\"open\"") != std::string::npos) {
+            if (classifyJournalLine(lines[i]) == JournalLineKind::SessionOpen) {
                 openAt.push_back(i);
             }
         }

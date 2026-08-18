@@ -374,7 +374,12 @@ TEST(JournalWriter, SweepFlushesPendingSuppressedCountBeforeDroppingAStaleEntry)
         << "the victim's pending suppressed count must be flushed exactly "
            "once by the sweep, since victim is never written to again and "
            "so has no other chance to be flushed";
-    EXPECT_EQ(suppressedLines[0].at("tag"), "warn:victim message")
+    // Item 4 -- this field is "key", not "tag": a record line's "tag" field
+    // is always a genuine site tag, but a suppressed line's budget key can
+    // be a synthetic "severity:message" string for untagged records (as it
+    // is here). Spelling the two the same would let a future reader of
+    // suppressed lines mistake this for a real site tag.
+    EXPECT_EQ(suppressedLines[0].at("key"), "warn:victim message")
         << "the flushed line must name the evicted key, not some other entry";
     EXPECT_EQ(suppressedLines[0].at("count"), 1u)
         << "exactly one write beyond victim's budget of 5 was suppressed";
@@ -464,6 +469,51 @@ TEST(JournalWriter, RotateKeepsOnlyTheMostRecentSessions) {
         << "the newest session must survive";
     EXPECT_EQ(countLines(text), maro::kJournalSessionsKept * 3)
         << "each kept session contributes open + record + close";
+}
+
+// 리뷰 Finding (세 개의 경쟁하는 정의): rotate()(라이터)와 parseJournal()
+// (리더)는 같은 바이트를 놓고 "세션 경계가 어디인가"를 각자 판단한다. 이
+// 파일의 다른 테스트들은 라이터만, test_journal_reader.cpp의 다른 테스트들은
+// 리더만 손으로 만든 픽스처로 검증한다 -- 그래서 어느 쪽도 "다른 쪽의 판단"과
+// 맞대어 확인된 적이 없다. 이 테스트는 실제 JournalWriter로 세션을 여럿
+// 쓰고, JournalWriter::rotate()로 회전한 뒤, 그 회전된 결과를 그대로
+// parseJournal()로 읽어 -- 라이터가 "유지하기로 정한 세션 수"와 리더가
+// "실제로 파싱해 낸 세션 수"가 정확히 일치하는지를 확인한다. 둘이 서로 다른
+// "세션 시작 줄" 정의를 쓰기 시작하면(예: 한쪽만 classifyJournalLine을 쓰고
+// 다른 쪽은 여전히 손으로 만든 판정을 쓰면) 이 테스트가 가장 먼저 깨진다.
+TEST(JournalWriter, RotatedOutputAgreesWithTheReaderAboutSessionBoundaries) {
+    const std::filesystem::path dir = freshDir("cross_check_rotate");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        // 보관 한도보다 5개 많은 세션을 쓴다. 각 세션은 자기 번호를 담은
+        // 레코드를 하나씩 갖는다 -- RotateKeepsOnlyTheMostRecentSessions와
+        // 같은 모양이지만, 여기서는 결과를 리더에 대고도 확인한다.
+        for (std::uint64_t s = 0; s < maro::kJournalSessionsKept + 5; ++s) {
+            writer.writeSessionOpen(1000 + s * 10);
+            writer.writeRecord(s + 1, 1001 + s * 10, maro::DiagSeverity::Error,
+                                "Site.S" + std::to_string(s), "session marker");
+            writer.writeSessionClose(1002 + s * 10);
+        }
+    }
+
+    maro::JournalWriter::rotate(file);
+
+    const std::vector<maro::JournalSession> sessions = maro::parseJournal(readAll(file));
+
+    ASSERT_EQ(sessions.size(), maro::kJournalSessionsKept)
+        << "the reader must see exactly as many sessions as rotate() decided to keep -- "
+           "if the writer's and reader's ideas of a session boundary ever diverged, this "
+           "count would be the first thing to disagree";
+    for (const maro::JournalSession& session : sessions) {
+        EXPECT_TRUE(session.endedCleanly);
+        ASSERT_EQ(session.records.size(), 1u);
+    }
+    EXPECT_EQ(sessions.front().records[0].siteTag, "Site.S5")
+        << "the tenth-from-last session (rotate()'s oldest survivor) must be the reader's "
+           "first parsed session";
+    EXPECT_EQ(sessions.back().records[0].siteTag, "Site.S14")
+        << "the newest session must be the reader's last parsed session";
 }
 
 // 보관 한도보다 적으면 아무것도 버리지 않는다.

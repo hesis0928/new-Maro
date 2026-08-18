@@ -255,6 +255,25 @@ TEST(JournalReader, AccumulatesAcrossAbnormalSessions) {
     EXPECT_EQ(adj.appearancesByTag.at("OnceOnly"), 1u);
 }
 
+// 레코드가 하나도 없는 비정상 세션(예: 열리자마자, 진단 하나 남기기 전에
+// 죽은 경우)도 분모에는 들어가야 한다 -- 그 분모(abnormalSessionCount)는
+// 사용자에게 보여주는 모든 비율(N회 중 M회)의 아래쪽 숫자이므로, 여기서
+// 빠뜨리면 모든 비율이 실제보다 높게 보인다. countCrashAdjacentTags의
+// 루프는 이미 레코드 개수와 무관하게 continue 없이 abnormalSessionCount를
+// 먼저 올리므로 이 값 자체는 오늘도 맞게 나온다 -- 그런데 그 결정을 실제로
+// 값으로 고정한 테스트가 지금까지 없었다.
+TEST(JournalReader, AnAbnormalSessionWithNoRecordsStillCountsInTheDenominator) {
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(false, {}));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.abnormalSessionCount, 1u)
+        << "an abnormal session with zero records must still count in the denominator";
+    EXPECT_TRUE(adj.appearancesByTag.empty())
+        << "no records means no tag can have appeared in the tail";
+}
+
 // 태그가 없는 레코드(에러가 아닌 것)는 신호의 대상이 아니다 -- 신호는
 // 사이트 태그로 지목되는 실패에 붙는다.
 TEST(JournalReader, RecordsWithoutASiteTagAreIgnored) {
