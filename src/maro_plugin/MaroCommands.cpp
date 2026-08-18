@@ -7,6 +7,7 @@
 #include <maya/MAngle.h>
 #include <maya/MArgList.h>
 #include <maya/MDagPath.h>
+#include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
 #include <maya/MIntArray.h>
@@ -67,10 +68,13 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
 
         MFnDependencyNode axisFn(axisObj);
         if (axisFn.typeId() != MaroAxisNode::id) {
+            maro::RemedyAction remedy;
+            remedy.kind = maro::RemedyActionKind::SelectNode;
+            remedy.nodeName = axisFn.name().asChar();
             maro::BoadMaro::error(
                 "MaroBindAxisCommand.NotMaroAxisNode",
                 MString("Maro: '") + axisFn.name() + "' is not a maroAxis node.",
-                maro::onfix::capture(axisFn.typeName(), "", axisFn.name()));
+                maro::onfix::capture(axisFn.typeName(), "", axisFn.name()), remedy);
             return MS::kFailure;
         }
 
@@ -79,12 +83,31 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
         if (!MDagPath::getAPathTo(targetObj, targetPath) ||
             !targetPath.hasFn(MFn::kTransform)) {
             MFnDependencyNode targetFn(targetObj);
+
+            // 선택된 노드가 shape이면(가장 흔한 경우) 그 부모 transform을
+            // 골라 선택 대상으로 삼는다 -- shape 자체를 선택해도 사용자가
+            // "transform을 대신 선택하라"는 말의 대상을 못 찾는다. 부모를
+            // 못 구하면(예: targetObj가 DAG 객체가 아니어서 targetPath 자체가
+            // 무효) 해법 없이 분석만 제공한다 -- 억지로 잘못된 노드를
+            // 고르는 것보다 정직하다.
+            maro::RemedyAction remedy;
+            if (targetPath.isValid() && targetPath.length() > 0) {
+                MDagPath parentPath = targetPath;
+                parentPath.pop();
+                if (parentPath.isValid()) {
+                    MFnDagNode parentFn(parentPath);
+                    remedy.kind = maro::RemedyActionKind::SelectNode;
+                    remedy.nodeName = parentFn.fullPathName().asChar();
+                }
+            }
+
             maro::BoadMaro::error(
                 "MaroBindAxisCommand.TargetNotTransform",
                 MString("Maro: '") + targetFn.name() +
                 "' is not a transform, so an axis cannot drive it. "
                 "Select the transform node instead of its shape.",
-                maro::onfix::capture(targetFn.typeName(), "targetObject", axisFn.name()));
+                maro::onfix::capture(targetFn.typeName(), "targetObject", axisFn.name()),
+                remedy);
             return MS::kFailure;
         }
 
@@ -109,12 +132,17 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
             }
 
             MFnDependencyNode boundFn(boundObj);
+            maro::RemedyAction remedy;
+            remedy.kind = maro::RemedyActionKind::Disconnect;
+            remedy.sourcePlug = axisSources[0].name().asChar();
+            remedy.destPlug = axisTarget.name().asChar();
             maro::BoadMaro::error(
                 "MaroBindAxisCommand.AxisAlreadyBound",
                 MString("Maro: '") + axisFn.name() + "' is already bound to '" +
                 boundFn.name() + "'. Disconnect it first before binding it to '" +
                 targetFn.name() + "'.",
-                maro::onfix::capture(targetFn.typeName(), "targetObject", axisFn.name()));
+                maro::onfix::capture(targetFn.typeName(), "targetObject", axisFn.name()),
+                remedy);
             return MS::kFailure;
         }
 
@@ -126,13 +154,18 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
             for (unsigned int i = 0; i < destinations.length(); ++i) {
                 MFnDependencyNode otherFn(destinations[i].node());
                 if (otherFn.typeId() == MaroAxisNode::id) {
+                    maro::RemedyAction remedy;
+                    remedy.kind = maro::RemedyActionKind::Disconnect;
+                    remedy.sourcePlug = targetMessage.name().asChar();
+                    remedy.destPlug = destinations[i].name().asChar();
                     maro::BoadMaro::error(
                         "MaroBindAxisCommand.ObjectAlreadyHasAxis",
                         MString("Maro: '") + targetFn.name() +
                         "' is already bound to axis '" + otherFn.name() +
                         "'. One object carries exactly one axis.",
                         maro::onfix::capture(targetFn.typeName(), "targetObject",
-                                             axisFn.name()));
+                                             axisFn.name()),
+                        remedy);
                     return MS::kFailure;
                 }
             }
@@ -269,21 +302,33 @@ MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
             // book 항목이 고아가 된다.
             const bool childIsOffender = childFn.typeId() != MaroAxisNode::id;
             const MFnDependencyNode& offenderFn = childIsOffender ? childFn : parentFn;
+            maro::RemedyAction remedy;
+            remedy.kind = maro::RemedyActionKind::SelectNode;
+            remedy.nodeName = offenderFn.name().asChar();
             maro::BoadMaro::error(
                 "MaroConnectAxisCommand.NotMaroAxisNode",
                 "Maro: maroConnectAxis expects two maroAxis nodes.",
-                maro::onfix::capture(offenderFn.typeName(), "", offenderFn.name()));
+                maro::onfix::capture(offenderFn.typeName(), "", offenderFn.name()), remedy);
             return MS::kFailure;
         }
 
         if (childObj == parentObj) {
+            maro::RemedyAction remedy;
+            remedy.kind = maro::RemedyActionKind::SelectNode;
+            remedy.nodeName = childFn.name().asChar();
             maro::BoadMaro::error(
                 "MaroConnectAxisCommand.SelfParent",
                 MString("Maro: '") + childFn.name() + "' cannot be its own parent.",
-                maro::onfix::capture(childFn.typeName(), "parentAxis", childFn.name()));
+                maro::onfix::capture(childFn.typeName(), "parentAxis", childFn.name()),
+                remedy);
             return MS::kFailure;
         }
 
+        // 이 실패에는 구조화된 해법을 달지 않는다 (플랜
+        // 2026-08-19-maro-layer-b1b2-remedy.md "범위 밖" 참고): 이 검사는
+        // 연결이 만들어지기 *전에* 거부하므로 끊을 기존 엣지가 없고,
+        // wouldCreateCycle()의 내부 탐색은 순환의 어느 지점을 끊어야
+        // 하는지 돌려주지 않는다. 분석까지만 제공한다.
         if (wouldCreateCycle(childObj, parentObj)) {
             maro::BoadMaro::error(
                 "MaroConnectAxisCommand.WouldCreateCycle",
@@ -746,10 +791,18 @@ MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
         if (!status) return status;
 
         if (mode != 0 && mode != 1) {
+            // 안전한 기본값은 Manual(0)이다 -- 잘못된 모드로 인해 사용자가
+            // 의도하지 않은 ROS 제어가 걸리는 쪽보다, 아무것도 안 하던
+            // Manual로 떨어지는 쪽이 덜 놀랍다.
+            maro::RemedyAction remedy;
+            remedy.kind = maro::RemedyActionKind::SetAttribute;
+            remedy.nodeName = axisName.asChar();
+            remedy.attributeName = "controlMode";
+            remedy.value = 0.0;
             maro::BoadMaro::error(
                 "MaroSetControlModeCommand.InvalidControlMode",
                 "Maro: control mode must be 0 (Manual) or 1 (ROS).",
-                maro::onfix::capture("", "controlMode", axisName));
+                maro::onfix::capture("", "controlMode", axisName), remedy);
             return MS::kFailure;
         }
 
