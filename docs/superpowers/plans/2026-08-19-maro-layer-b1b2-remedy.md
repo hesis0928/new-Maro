@@ -1025,7 +1025,9 @@ except RuntimeError:
 assert raised, "binding a shape must fail"
 seq = int(cmds.maroDiagQuery(index=0)[10])
 kind, nodeName, _, _, _, _ = cmds.maroDiagQueryRemedyAction(sequence=seq)
-assert kind == "selectNode" and nodeName == cube, (kind, nodeName)
+# MFnDagNode::fullPathName()이 낸 값이라 선행 "|"가 붙는다 -- 짧은 이름
+# 그대로("pCube1")가 아니라 정규 전체 경로("|pCube1")와 비교해야 한다.
+assert kind == "selectNode" and nodeName == cmds.ls(cube, long=True)[0], (kind, nodeName)
 print("TargetNotTransform remedy OK")
 
 # AxisAlreadyBound: axisA를 cube에 바인딩한 뒤 또 다른 오브젝트에 바인딩
@@ -1073,8 +1075,14 @@ assert float(value) == 0.0, value
 print("InvalidControlMode remedy OK")
 
 # SelfParent / NotMaroAxisNode(둘째 자리): maroConnectAxis 경유.
+# 같은 이름을 두 번 그대로 주면(cmds.maroConnectAxis(axisA, axisA)) 안 된다 --
+# MSelectionList::add()는 문자열이 아니라 풀린 노드 정체성으로 중복을
+# 걸러내므로 선택 목록이 길이 1로 줄고, doIt의 length() != 2 검사(WrongArgCount,
+# 이 여섯 자리에 안 든다)가 SelfParent 비교보다 먼저 걸려 버린다. 같은
+# 노드를 가리키되 문자열이 다른 두 번째 참조(플러그 한정 이름)를 써야
+# 선택 목록이 진짜 2개로 남아 SelfParent 분기까지 도달한다.
 try:
-    cmds.maroConnectAxis(axisA, axisA)
+    cmds.maroConnectAxis(axisA + ".message", axisA)
     raised = False
 except RuntimeError:
     raised = True
