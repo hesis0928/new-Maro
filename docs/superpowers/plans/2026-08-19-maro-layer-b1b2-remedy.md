@@ -334,12 +334,15 @@ git commit -m "feat: give a diagnostic a structured, describable fix"
 찾아지는지 확인한다. maroDiagEmit의 테스트 전용 확장(-remedyAction 등)만
 쓴다 -- 실제 실패 자리 배선은 Task 3에서 별도로 검증한다.
 """
+import os
+
 import maya.standalone
 maya.standalone.initialize(name="python")
 
 import maya.cmds as cmds  # noqa: E402
 
-cmds.loadPlugin("maro")
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
 
 # 1) None(기본값) -- 아무 remedy 플래그도 안 주면 이전과 동일해야 한다.
 cmds.maroDiagEmit(severity="error", message="m1", siteTag="T.None")
@@ -392,7 +395,7 @@ assert raised, "an unknown sequence must fail, not silently return a neighbor"
 print("unknown sequence fails OK")
 
 cmds.file(new=True, force=True)
-cmds.unloadPlugin("maro")
+cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
 print("test_remedy_capture OK")
 ```
@@ -407,7 +410,7 @@ print("test_remedy_capture OK")
 
 기대: `AttributeError` 또는 `RuntimeError` — `maroDiagQueryRemedyAction`도 `maroDiagEmit`의 `remedyAction` 플래그도 아직 없다.
 
-(플랜의 다른 mayapy 태스크들과 마찬가지로 `MARO_PLUGIN_PATH`/`PATH`/`MARO_DIAG_BOOK_DIR`는 Step 8에서 CTest가 설정해 준다. 직접 실행 시 `MARO_PLUGIN_PATH` 환경변수를 플러그인 빌드 출력 디렉터리로 설정해야 `loadPlugin("maro")`가 찾는다 — 다른 `tests/maya/*.py`가 이미 이 관례를 따른다.)
+(플랜의 다른 mayapy 태스크들과 마찬가지로 `MARO_PLUGIN_PATH`/`PATH`/`MARO_DIAG_BOOK_DIR`는 Step 8에서 CTest가 설정해 준다. 직접 실행 시에는 `MARO_PLUGIN_PATH` 환경변수를 `.mll` 전체 경로로 미리 설정해야 위 스크립트의 `cmds.loadPlugin(plugin)`이 찾는다 — 다른 `tests/maya/*.py`가 이미 이 관례를 따른다. 플러그인 이름 `"maro"`로 바로 부르지 않는 이유는 `MAYA_PLUG_IN_PATH`가 이 저장소 어디서도 설정되지 않기 때문이다.)
 
 - [ ] **Step 3: `MaroDiag.h`에 `error()` 확장과 `findRecordBySequence` 선언 추가**
 
@@ -1326,12 +1329,15 @@ git commit -m "feat: let the presenter decide whether a fix can actually be appl
 """maroDiagPanelDetail의 applyAvailable/applyUnavailableReason이 대상
 노드의 실제 존재 여부를 반영하는지 확인한다.
 """
+import os
+
 import maya.standalone
 maya.standalone.initialize(name="python")
 
 import maya.cmds as cmds  # noqa: E402
 
-cmds.loadPlugin("maro")
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
 
 axisA = cmds.createNode("maroAxis", name="axisA")
 
@@ -1373,7 +1379,7 @@ assert detail[12] == "TargetNodeMissing", detail[12]
 print("disconnect availability OK")
 
 cmds.file(new=True, force=True)
-cmds.unloadPlugin("maro")
+cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
 print("test_remedy_availability OK")
 ```
@@ -1505,6 +1511,7 @@ git commit -m "feat: check whether a remedy's targets actually still exist"
 """MaroMainThreadQueue가 상시로 돌며, enqueue한 작업이 doIt 호출 안이
 아니라 다음 타이머 틱에서 실행되는지 확인한다.
 """
+import os
 import time
 
 import maya.standalone
@@ -1519,7 +1526,8 @@ except ImportError:
 
 _qapp = QApplication.instance() or QApplication([])
 
-cmds.loadPlugin("maro")
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
 
 assert cmds.maroQueueTestCounter() == 0, "counter must start at zero"
 
@@ -1554,7 +1562,7 @@ assert cmds.maroQueueTestCounter() == 3, cmds.maroQueueTestCounter()
 print("multiple tasks OK")
 
 cmds.file(new=True, force=True)
-cmds.unloadPlugin("maro")
+cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
 print("test_main_thread_queue OK")
 ```
@@ -1902,6 +1910,7 @@ git commit -m "feat: run a queue that outlives the publish pump, for safe-timing
 고치고, Ctrl+Z로 되돌아가는지 확인한다. 세 동작 종류를 각각 하나씩,
 그리고 클릭과 실행 사이에 씬이 바뀌는 경계 조건 하나를 확인한다.
 """
+import os
 import time
 
 import maya.standalone
@@ -1916,7 +1925,8 @@ except ImportError:
 
 _qapp = QApplication.instance() or QApplication([])
 
-cmds.loadPlugin("maro")
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
 
 
 def _pumpUntil(predicate, timeoutSeconds=5):
@@ -2005,7 +2015,7 @@ assert raised, "applying a remedy whose target vanished must fail cleanly"
 print("vanished target fails cleanly OK")
 
 cmds.file(new=True, force=True)
-cmds.unloadPlugin("maro")
+cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
 print("test_remedy_apply OK")
 ```
