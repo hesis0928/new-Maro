@@ -21,6 +21,7 @@ kill()하고 wait()까지 마친 뒤에야 예외를 던진다 -- 각 세션 호
 == 2와 maroDiagPanelDetail의 crashAdjacencyNote가 프레젠터가 2/2에 대해
 만드는 바로 그 문장인지를 값으로 확인한다."""
 import glob
+import json
 import os
 import subprocess
 import sys
@@ -42,6 +43,10 @@ TARGET_TAG = "MaroBindAxisCommand.TargetNotTransform"
 # ReportsTheObservedCountsAboveTheThreshold가 같은 형식을 고정한다)을 그대로
 # 옮겨 적는다.
 EXPECTED_NOTE = "지난 비정상 종료 2회 중 2회에서 이 진단이 마지막 순간에 있었습니다."
+
+# 리뷰 Finding C1(리브니스)이 쓰는 태그. 아직 살아 있는 인스턴스의 저널에만
+# 나타나며, 크래시 인접 집계에는 절대 나와서는 안 된다.
+LIVE_TAG = "MaroLivenessProbe.StillRunningSession"
 
 
 def run_session(label, env):
@@ -68,6 +73,40 @@ def journal_paths(bookDir):
     # invocation (MARO_TEST_BOOK_ROOT), so any per-process file found here
     # belongs to one of this test's own mayapy subprocesses.
     return sorted(glob.glob(os.path.join(bookDir, "maro_journal.*.jsonl")))
+
+
+def write_live_process_journal(bookDir):
+    """살아 있는 프로세스가 세션 한가운데에 있는 저널을 하나 만든다.
+
+    리뷰 Finding C1(리브니스): 아티스트가 Maya 창을 두 개 띄우면 두 번째
+    창의 openJournal()이 첫 번째 창의 저널을 읽는데, 그 파일에는 아직 close
+    줄이 없다 -- 첫 번째 창이 멀쩡히 돌고 있기 때문이다. 그것을 크래시로
+    세면 아무도 죽지 않았는데 문턱이 넘어간다.
+
+    "살아 있는 프로세스"로 이 오케스트레이터 자신(os.getpid())을 쓴다.
+    저널의 주인이 누구인지를 정하는 것은 파일 이름에 박힌 pid 하나뿐이고
+    (JournalWriter::pathForProcess), 이 프로세스는 아래 세션들이 도는 내내
+    확실히 살아 있다. 진짜 Maya 인스턴스를 하나 더 띄워 세션 내내 붙들고
+    있는 것보다 훨씬 싸고 훨씬 덜 불안정하면서, 확인하려는 것 -- 플러그인이
+    OS에 "이 pid 살아 있나"를 실제로 물어보고 그 답대로 집계하는가 -- 은
+    똑같이 실제 경로로 확인된다(MaroDiag.cpp의 isProcessRunning ->
+    JournalReader::countCrashAdjacencyAcrossJournalFiles).
+
+    파일 내용은 crash1/crash2가 남긴 것과 형태가 같다(open + record, close
+    없음) -- 파일만 보면 구분할 수 없다는 것이 이 finding의 핵심이므로,
+    구분을 만드는 것은 오직 pid의 생사여야 한다.
+    """
+    path = os.path.join(bookDir, "maro_journal.%d.jsonl" % os.getpid())
+    lines = [
+        {"kind": "session", "event": "open", "t": 1000},
+        {"kind": "record", "seq": 1, "t": 1001, "sev": "error",
+         "tag": LIVE_TAG, "msg": "this session is still running"},
+        # close 줄은 일부러 없다.
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        for line in lines:
+            f.write(json.dumps(line) + "\n")
+    return path
 
 
 def orchestrate():
@@ -129,6 +168,14 @@ def orchestrate():
           "carrying the same tag OK -- confirmed by reading each file directly, "
           "not by trusting session 3's aggregate below")
 
+    # Finding C1(리브니스): 이 시점에 "아직 도는 중인 인스턴스"의 저널을
+    # 하나 더 놓는다. 남은 두 세션(verify/recount)은 이 파일을 반드시 읽게
+    # 되며, 그것을 세 번째 크래시로 세면 안 된다 -- 그 파일의 주인(이
+    # 오케스트레이터 프로세스)은 지금 살아 있기 때문이다.
+    live_path = write_live_process_journal(bookDir)
+    print("planted a still-running instance's journal at %s (owner pid %d, alive)"
+          % (live_path, os.getpid()))
+
     rc3, out3 = run_session("verify", env)
     print("---- session 3 (reads both crashes' journals, sees the 2-of-2 signal) ----")
     print(out3)
@@ -182,7 +229,9 @@ def run_as_session(label):
         count = cmds.maroJournalAbnormalSessions()
         assert count == 2, (
             f"two previous sessions died without closing, so exactly two "
-            f"abnormal sessions should be on record, got {count}"
+            f"abnormal sessions should be on record, got {count} -- if this is 3, the "
+            f"still-running instance's journal (planted by the orchestrator, owner pid "
+            f"alive) was counted as a crash even though nothing crashed there"
         )
         print("abnormal session count == 2 OK")
 
@@ -190,7 +239,14 @@ def run_as_session(label):
         assert TARGET_TAG in tags, (
             f"the tag raised just before both crashes must be counted, got {tags}"
         )
-        print("crash-adjacent tag counted OK")
+        # Finding C1(리브니스): 살아 있는 인스턴스의 저널에만 있는 태그다.
+        # 그 세션은 아직 안 끝났을 뿐이므로 크래시에 인접할 수가 없다.
+        assert LIVE_TAG not in tags, (
+            f"{LIVE_TAG} belongs to a session whose owning process is still running -- "
+            f"it has no close line yet, not no close line ever. Counting it means every "
+            f"second Maya window an artist opens fabricates a crash, got {tags}"
+        )
+        print("crash-adjacent tag counted OK, and the live instance's tag stayed out")
 
         # 저널만으로는 부족하다 -- maroDiagPanelDetail은 *이번 세션*의
         # 인메모리 레코드 하나를 골라 그 record.siteTag로 crashAdjacency를
@@ -223,7 +279,8 @@ def run_as_session(label):
         count = cmds.maroJournalAbnormalSessions()
         assert count == 2, (
             f"only the first two sessions died without closing; session 3 (verify) "
-            f"exited cleanly and must not be counted as abnormal, got {count}"
+            f"exited cleanly and must not be counted as abnormal, and the planted "
+            f"still-running instance's journal must stay excluded here too, got {count}"
         )
         print("clean exit not counted as abnormal OK")
     else:

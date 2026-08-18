@@ -1,11 +1,13 @@
 #include "maro_diag/JournalReader.h"
 
+#include <fstream>
 #include <sstream>
 #include <unordered_set>
 
 #include <nlohmann/json.hpp>
 
 #include "maro_diag/Journal.h"
+#include "maro_diag/JournalWriter.h"
 
 namespace maro {
 
@@ -95,6 +97,47 @@ void mergeCrashAdjacency(CrashAdjacency& target, const CrashAdjacency& addition)
     for (const auto& [tag, count] : addition.appearancesByTag) {
         target.appearancesByTag[tag] += count;
     }
+}
+
+CrashAdjacency countCrashAdjacencyAcrossJournalFiles(
+    const std::filesystem::path& directory, const ProcessLivenessFn& isProcessAlive) {
+    CrashAdjacency aggregate;
+    // 파일 하나가 안 읽혀도 나머지를 포기하지 않는다 -- parseJournal이 깨진
+    // 줄 하나 때문에 나머지를 버리지 않는 것과 같은 규율이다. 던지지도
+    // 않는다: 이 함수의 호출자는 플러그인 로드 경로(BoadMaro::openJournal)다.
+    for (const std::filesystem::path& file : JournalWriter::listJournalFiles(directory)) {
+        try {
+            std::ifstream in(file, std::ios::binary);
+            if (!in.is_open()) continue;
+            std::ostringstream ss;
+            ss << in.rdbuf();
+
+            std::vector<JournalSession> sessions = parseJournal(ss.str());
+
+            // Finding C1(리브니스): 주인이 아직 살아 있으면 이 파일의 마지막
+            // 미종료 세션은 크래시가 아니라 진행 중인 세션이다 -- 세지
+            // 않는다(JournalReader.h의 자세한 논거 참고). 그 앞의 미종료
+            // 세션들은 그대로 둔다: 한 파일에서 "아직 도는 중"일 수 있는
+            // 세션은 마지막 하나뿐이다.
+            //
+            // 이 프로세스 자신의 파일도 같은 규칙이 그대로 적용된다 -- 자기
+            // pid는 당연히 살아 있으므로 자기 파일의 마지막 미종료 세션은
+            // 자동으로 빠진다. 지금은 그 자리에 (이번 세션의 open 줄을 아직
+            // 쓰기 전이라) 아무것도 없는 것이 보통이지만, pid가 재사용되어
+            // 옛 화신이 남긴 파일에 이어 쓰는 경우에는 그 옛 크래시 하나를
+            // 놓친다 -- 위 pid 재사용 문단이 말하는, 지어내지 않고 놓치는
+            // 쪽의 안전한 실패다.
+            std::uint64_t ownerPid = 0;
+            if (!sessions.empty() && !sessions.back().endedCleanly && isProcessAlive &&
+                JournalWriter::processIdFromPath(file, ownerPid) && isProcessAlive(ownerPid)) {
+                sessions.pop_back();
+            }
+
+            mergeCrashAdjacency(aggregate, countCrashAdjacentTags(sessions));
+        } catch (...) {
+        }
+    }
+    return aggregate;
 }
 
 }  // namespace maro

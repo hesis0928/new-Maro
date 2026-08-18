@@ -12,23 +12,15 @@ namespace maro {
 
 namespace {
 
-// Finding C1: "<stem>.<pid>.jsonl" 모양인지 확인한다. 가운데 조각이 전부
-// 숫자여야 한다 -- 그래야 이 디렉터리에 있을 수 있는 다른 파일들
-// (maro_knowledge.jsonl류, 임의의 사용자 파일)을 실수로 저널로 집계하거나
-// 지우지 않는다.
+// Finding C1: "<stem>.<pid>.jsonl" 모양인지 확인한다. 판정 자체는
+// processIdFromPath()가 한다 -- 가운데 조각이 전부 숫자여야 한다는 그 규칙이
+// 곧 "저널 파일인가"의 정의이므로, 두 질문이 서로 다른 규칙을 갖지 않도록
+// 한 함수에서 나온다(JournalWriter.h의 processIdFromPath 주석 참고). 그래야
+// 이 디렉터리에 있을 수 있는 다른 파일들(maro_knowledge.jsonl류, 임의의
+// 사용자 파일)을 실수로 저널로 집계하거나 지우지 않는다.
 bool isPerProcessJournalFile(const std::filesystem::path& path) {
-    const std::string name = path.filename().string();
-    const std::string prefix = std::string(kJournalFileStem) + ".";
-    const std::string suffix = ".jsonl";
-    if (name.size() <= prefix.size() + suffix.size()) return false;
-    if (name.compare(0, prefix.size(), prefix) != 0) return false;
-    if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) return false;
-
-    const std::string middle =
-        name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
-    if (middle.empty()) return false;
-    return std::all_of(middle.begin(), middle.end(),
-                        [](unsigned char c) { return std::isdigit(c) != 0; });
+    std::uint64_t ignored = 0;
+    return JournalWriter::processIdFromPath(path, ignored);
 }
 
 // rotate()와 같은 "open 줄 찾기" 규칙을 쓰지만, 위치가 아니라 개수만
@@ -280,6 +272,34 @@ std::filesystem::path JournalWriter::pathForProcess(const std::filesystem::path&
            (std::string(kJournalFileStem) + "." + std::to_string(processId) + ".jsonl");
 }
 
+bool JournalWriter::processIdFromPath(const std::filesystem::path& path,
+                                       std::uint64_t& processIdOut) {
+    const std::string name = path.filename().string();
+    const std::string prefix = std::string(kJournalFileStem) + ".";
+    const std::string suffix = ".jsonl";
+    if (name.size() <= prefix.size() + suffix.size()) return false;
+    if (name.compare(0, prefix.size(), prefix) != 0) return false;
+    if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) return false;
+
+    const std::string middle =
+        name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+    if (middle.empty()) return false;
+    if (!std::all_of(middle.begin(), middle.end(),
+                      [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        return false;
+    }
+
+    try {
+        processIdOut = std::stoull(middle);
+    } catch (...) {
+        // 숫자이긴 하지만 uint64에 안 들어간다(누가 손으로 만든 이름). 저널
+        // 파일로 치지 않는다 -- 우리가 만든 이름이 아니므로 집계도 삭제도
+        // 하지 않는 편이 안전하다.
+        return false;
+    }
+    return true;
+}
+
 std::vector<std::filesystem::path> JournalWriter::listJournalFiles(
     const std::filesystem::path& directory) {
     std::vector<std::filesystem::path> files;
@@ -299,7 +319,8 @@ std::vector<std::filesystem::path> JournalWriter::listJournalFiles(
     return files;
 }
 
-void JournalWriter::rotateAll(const std::filesystem::path& directory) {
+void JournalWriter::rotateAll(const std::filesystem::path& directory,
+                                std::uint64_t ownProcessId) {
     try {
         struct Entry {
             std::filesystem::path path;
@@ -307,13 +328,26 @@ void JournalWriter::rotateAll(const std::filesystem::path& directory) {
         };
         std::vector<Entry> files;
         for (const std::filesystem::path& p : listJournalFiles(directory)) {
-            // 파일 하나는 이제 프로세스 하나만 썼다는 전제가 성립하므로,
-            // 기존 rotate()를 그대로 재사용해 그 파일 스스로의 세션 상한을
-            // 먼저 지킨다.
-            rotate(p);
+            // 리뷰 Finding I1: 마지막 수정 시각을 rotate() **앞에서** 읽는다.
+            // rotate()가 실제로 다시 쓰는 파일(세션이 상한을 넘은 파일)은 그
+            // 순간 mtime이 "지금"이 되므로, 뒤에서 읽으면 그 오래된 파일이
+            // 모든 파일 중 가장 최신으로 정렬된다 -- 그리고 아래 삭제 패스는
+            // 그 파일을 살리고 진짜 최신 파일을 대신 지운다.
             std::error_code mtimeEc;
             const auto mtime = std::filesystem::last_write_time(p, mtimeEc);
             files.push_back({p, mtimeEc ? std::filesystem::file_time_type::min() : mtime});
+
+            // 리뷰 Finding I2: 트렁케이트 후 재작성은 자기 파일에만 한다.
+            // 남의 파일에 이것을 부르면(예전 동작) 그 주인이 살아서 append
+            // 하는 중일 때 읽기와 트렁케이트 사이에 들어온 줄이 통째로
+            // 사라진다 -- 파일을 프로세스별로 나눈 이유(한 파일을 자르는
+            // 것은 그 주인뿐)를 이 함수가 스스로 무너뜨리고 있었다.
+            // JournalWriter.h의 rotateAll 계약 참고: 남의 파일에는 읽기와
+            // 통째 삭제만 한다.
+            std::uint64_t filePid = 0;
+            if (processIdFromPath(p, filePid) && filePid == ownProcessId) {
+                rotate(p);
+            }
         }
 
         // 최신 수정 순으로 정렬한다 -- "오래됨"을 고르는 이 자리의 의미는

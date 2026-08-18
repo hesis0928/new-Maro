@@ -1,10 +1,29 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "maro_diag/Journal.h"
 #include "maro_diag/JournalReader.h"
+#include "maro_diag/JournalWriter.h"
+
+namespace {
+
+// Finding C1(리브니스) 테스트들이 쓰는 빈 디렉터리 -- 이전 실행이 남긴
+// 저널 파일이 다음 실행의 집계를 바꾸면 안 된다
+// (test_journal_writer.cpp의 freshDir과 같은 이유, 같은 모양).
+std::filesystem::path freshDir(const std::string& name) {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("maro_journal_reader_test_" + name);
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    return dir;
+}
+
+}  // namespace
 
 TEST(JournalReader, SplitsSessionsAtOpenLines) {
     const std::string text =
@@ -360,4 +379,82 @@ TEST(JournalReader, TwoIndependentJournalFilesAreReadAsTwoIndependentSessionSets
     maro::mergeCrashAdjacency(adjacency, maro::countCrashAdjacentTags(sessionsB));
     EXPECT_EQ(adjacency.abnormalSessionCount, 0u)
         << "neither process crashed, and neither's file can fabricate the other's crash";
+}
+
+// 리뷰 Finding C1(리브니스) -- 파일을 프로세스별로 나눈 것은 오귀속을
+// 닫았지만, 그 자체로는 이것을 닫지 못한다: 파일 내용만 보면 "아직 close를
+// 안 썼다(도는 중)"와 "끝내 close를 못 썼다(크래시)"가 완전히 같은 모양이다.
+// 아티스트가 Maya 창을 두 개 띄우면, 두 번째 창의 openJournal()이 첫 번째
+// 창의(멀쩡히 살아 있는) 저널을 읽고 그 미종료 세션을 크래시로 센다 --
+// 아무도 크래시하지 않았는데 문턱이 넘어간다.
+//
+// 그래서 집계는 파일 이름의 pid가 지금 살아 있는지를 파일 밖에 물어본다.
+// 그 질문은 OS를 아는 계층(MaroDiag.cpp의 isProcessRunning, OpenProcess +
+// WaitForSingleObject)이 답하고 여기 seam으로 주입되므로, 이 테스트는 진짜
+// 프로세스를 띄우지 않고도 산 pid와 죽은 pid 양쪽 가지를 모두 돌린다.
+//
+// 두 파일은 내용이 글자 그대로 같은 모양(open + record, close 없음)이다 --
+// 판정을 가르는 것은 오직 주인이 살아 있는가뿐이라는 것이 요점이다.
+TEST(JournalReader, AStillRunningProcessesUnfinishedSessionIsNotCountedAsACrash) {
+    const std::filesystem::path dir = freshDir("liveness");
+    const std::uint64_t livePid = 31001;
+    const std::uint64_t deadPid = 31002;
+
+    {
+        maro::JournalWriter live(maro::JournalWriter::pathForProcess(dir, livePid));
+        ASSERT_TRUE(live.isOpen());
+        live.writeSessionOpen(1000);
+        live.writeRecord(1, 1001, maro::DiagSeverity::Error, "Site.StillRunning", "still working");
+        // close 줄이 없다 -- 이 인스턴스는 아직 도는 중이다.
+    }
+    {
+        maro::JournalWriter dead(maro::JournalWriter::pathForProcess(dir, deadPid));
+        ASSERT_TRUE(dead.isOpen());
+        dead.writeSessionOpen(2000);
+        dead.writeRecord(1, 2001, maro::DiagSeverity::Error, "Site.ReallyCrashed", "last words");
+        // close 줄이 없다 -- 이 인스턴스는 정말로 죽었다.
+    }
+
+    const maro::CrashAdjacency adjacency = maro::countCrashAdjacencyAcrossJournalFiles(
+        dir, [livePid](std::uint64_t pid) { return pid == livePid; });
+
+    EXPECT_EQ(adjacency.abnormalSessionCount, 1u)
+        << "only the dead process crashed -- the live one's session is unfinished, not lost";
+    EXPECT_EQ(adjacency.appearancesByTag.count("Site.StillRunning"), 0u)
+        << "a diagnostic from a session that is still running must not be reported as "
+           "crash-adjacent -- there is no crash to be adjacent to";
+    ASSERT_EQ(adjacency.appearancesByTag.count("Site.ReallyCrashed"), 1u)
+        << "the genuinely crashed process's tag must still be counted -- the liveness check "
+           "must not swallow real crashes along with the false ones";
+    EXPECT_EQ(adjacency.appearancesByTag.at("Site.ReallyCrashed"), 1u);
+}
+
+// 살아 있는 주인이라도 봐주는 것은 그 파일의 **마지막** 미종료 세션 하나
+// 뿐이다. 한 파일 안에서 아직 도는 중일 수 있는 세션은 정의상 그 하나이고,
+// 그 앞의 미종료 세션은 그 pid의 이전 화신이 실제로 죽었기 때문에 남은
+// 것이므로 진짜 크래시다 (pid가 재사용되어 같은 이름의 파일에 이어 쓰는
+// 경우가 정확히 이 모양이다).
+TEST(JournalReader, ALiveProcessesEarlierUnfinishedSessionsAreStillRealCrashes) {
+    const std::filesystem::path dir = freshDir("liveness_only_the_tail");
+    const std::uint64_t livePid = 31003;
+
+    {
+        maro::JournalWriter writer(maro::JournalWriter::pathForProcess(dir, livePid));
+        ASSERT_TRUE(writer.isOpen());
+        // 이전 화신: 죽었다(close 없이 다음 open에 밀려 끊긴다).
+        writer.writeSessionOpen(1000);
+        writer.writeRecord(1, 1001, maro::DiagSeverity::Error, "Site.OldCrash", "died here");
+        // 지금 도는 세션: 아직 안 끝났을 뿐이다.
+        writer.writeSessionOpen(2000);
+        writer.writeRecord(2, 2001, maro::DiagSeverity::Error, "Site.StillRunning", "working");
+    }
+
+    const maro::CrashAdjacency adjacency = maro::countCrashAdjacencyAcrossJournalFiles(
+        dir, [livePid](std::uint64_t pid) { return pid == livePid; });
+
+    EXPECT_EQ(adjacency.abnormalSessionCount, 1u)
+        << "the earlier unterminated session really did crash and must still count";
+    EXPECT_EQ(adjacency.appearancesByTag.count("Site.OldCrash"), 1u);
+    EXPECT_EQ(adjacency.appearancesByTag.count("Site.StillRunning"), 0u)
+        << "only the trailing session is spared, and only because its owner is alive";
 }

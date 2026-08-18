@@ -636,6 +636,7 @@ TEST(JournalWriter, RotateAllBoundsTheTotalSessionCountAcrossManyProcessFiles) {
     // 보관 한도보다 5개 많은 "프로세스"를 만든다. 각자 세션 하나, 레코드
     // 하나짜리 파일.
     const std::size_t totalFiles = maro::kJournalSessionsKept + 5;
+    const std::uint64_t ownProcessId = 10000 + totalFiles - 1;  // 마지막(=가장 최신) 파일이 이 호출자의 것
     for (std::size_t i = 0; i < totalFiles; ++i) {
         const std::filesystem::path p = maro::JournalWriter::pathForProcess(dir, 10000 + i);
         maro::JournalWriter writer(p);
@@ -649,7 +650,7 @@ TEST(JournalWriter, RotateAllBoundsTheTotalSessionCountAcrossManyProcessFiles) {
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
 
-    maro::JournalWriter::rotateAll(dir);
+    maro::JournalWriter::rotateAll(dir, ownProcessId);
 
     const std::vector<std::filesystem::path> remaining = maro::JournalWriter::listJournalFiles(dir);
     EXPECT_EQ(remaining.size(), maro::kJournalSessionsKept)
@@ -670,4 +671,138 @@ TEST(JournalWriter, RotateAllBoundsTheTotalSessionCountAcrossManyProcessFiles) {
     }
     EXPECT_TRUE(newestSurvived) << "the most recently written process's journal must survive";
     EXPECT_TRUE(oldestGone) << "the oldest process's journal must be the one dropped";
+}
+
+// 한 파일에 세션을 여럿 쓴다 (rotateAll 관련 테스트들이 공유하는 픽스처 --
+// 위의 RotateAllBounds...는 파일마다 세션 하나만 쓰므로 rotate()가 언제나
+// 일찍 반환해, "rotate()가 실제로 파일을 다시 쓸 때" 벌어지는 일을 한 번도
+// 건드리지 못했다).
+namespace {
+void writeSessions(const std::filesystem::path& path, std::size_t sessionCount,
+                    const std::string& tag) {
+    maro::JournalWriter writer(path);
+    for (std::size_t s = 0; s < sessionCount; ++s) {
+        // 세션마다 억제 창(kJournalSuppressionWindowMs) 하나보다 멀리 떨어진
+        // 시각을 준다 -- 안 그러면 같은 태그가 창 예산을 넘겨 뒤쪽 세션들의
+        // 레코드가 "N줄 생략" 줄로 바뀌고, 이 픽스처가 확인하려는 것(세션
+        // 경계와 파일 내용)이 억제 동작과 뒤섞인다.
+        const std::uint64_t base = 1000 + static_cast<std::uint64_t>(s) * 2000;
+        writer.writeSessionOpen(base);
+        writer.writeRecord(s + 1, base + 1, maro::DiagSeverity::Error, tag, "marker");
+        writer.writeSessionClose(base + 2);
+    }
+}
+}  // namespace
+
+// 리뷰 Finding I1 -- rotateAll은 파일의 마지막 수정 시각을 rotate()를 부르기
+// **전에** 읽어야 한다. rotate()가 실제로 다시 쓰는 파일(세션이 상한을 넘은
+// 파일)은 그 순간 mtime이 "지금"이 되므로, 뒤에서 읽으면 방금 잘린 그 오래된
+// 파일이 모든 파일 중 가장 최신으로 정렬된다 -- 그리고 삭제 패스는 그 파일을
+// 살리고 진짜 최신 파일(실제 크래시 기록일 수 있다)을 대신 지운다.
+//
+// 이 함정은 파일마다 세션이 하나뿐인 기존 테스트로는 절대 드러나지 않는다:
+// 그때 rotate()는 아무것도 다시 쓰지 않고 일찍 반환하므로 mtime이 바뀌지
+// 않고, 샘플링 순서가 결과에 영향을 주지 않는다. 그래서 여기서는 자기 파일에
+// 상한을 넘는 세션을 실제로 채워 rotate()가 정말로 다시 쓰게 만든다.
+TEST(JournalWriter, RotateAllSamplesTheModifiedTimeBeforeRotatingSoARewrittenFileCannotLookNewest) {
+    const std::filesystem::path dir = freshDir("rotate_all_mtime_order");
+    const std::uint64_t ownProcessId = 21000;
+    const std::filesystem::path ownPath = maro::JournalWriter::pathForProcess(dir, ownProcessId);
+    const std::filesystem::path newerPath = maro::JournalWriter::pathForProcess(dir, 21001);
+
+    // 자기 파일: 상한보다 한 세션 많다 -> rotateAll 안에서 rotate()가 실제로
+    // 트렁케이트 후 재작성한다.
+    writeSessions(ownPath, maro::kJournalSessionsKept + 1, "Site.Own");
+
+    // Windows 기본 타이머 해상도(~15.6ms)보다 넉넉히 기다려, 아래 파일이
+    // 확실히 더 최신 mtime을 갖게 한다.
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    // 진짜로 더 최신인 남의 파일. 세션 하나뿐이므로 그 자체로는 아무 한도도
+    // 건드리지 않는다.
+    writeSessions(newerPath, 1, "Site.GenuinelyNewest");
+
+    maro::JournalWriter::rotateAll(dir, ownProcessId);
+
+    EXPECT_TRUE(std::filesystem::exists(newerPath))
+        << "the genuinely newest journal must survive -- if the mtime were sampled after "
+           "rotate() rewrote the older file, that rewritten file would sort ahead of this "
+           "one and this real, more recent crash history would be deleted in its place";
+    EXPECT_NE(readAll(newerPath).find("Site.GenuinelyNewest"), std::string::npos)
+        << "and it must survive with its contents, not as an emptied file";
+
+    // 자기 파일은 여전히 자기 세션 상한을 지켜야 한다 -- 이 테스트가 확인하는
+    // 것은 "언제 mtime을 읽는가"이지 "회전을 하는가"가 아니므로, 회전 자체가
+    // 조용히 사라지면 그것도 여기서 걸려야 한다.
+    ASSERT_TRUE(std::filesystem::exists(ownPath));
+    EXPECT_EQ(maro::parseJournal(readAll(ownPath)).size(), maro::kJournalSessionsKept)
+        << "the caller's own file is still rotated down to the per-file session cap";
+}
+
+// 리뷰 Finding I2 -- rotateAll이 남의 파일에 하는 일은 읽기와 통째 삭제뿐이다.
+// 트렁케이트 후 재작성(rotate())은 절대 하지 않는다: 그 파일의 주인이 살아서
+// append하는 중이면, 읽기와 트렁케이트 사이에 들어온 줄이 조용히 사라진다
+// (MSVC의 ofstream 공유 모드는 그 동시 열기를 막지 않는다). 파일을 프로세스
+// 별로 나눈 이유가 바로 "한 파일을 자르는 것은 그 주인뿐"이었는데, 예전
+// rotateAll은 목록의 모든 파일에 rotate()를 불러 그 보장을 스스로 무너뜨리고
+// 있었다.
+//
+// 그래서 세션 상한을 넘긴 남의 파일도 여기서는 글자 하나 바뀌지 않아야 한다.
+// (그 파일은 다음에 그 주인이 스스로 자르고, 주인이 안 돌아오면 아래
+// RotateAllDeletes...가 확인하는 총량 한도가 통째로 지운다.)
+TEST(JournalWriter, RotateAllNeverRewritesAForeignFileEvenWhenItExceedsThePerFileSessionCap) {
+    const std::filesystem::path dir = freshDir("rotate_all_foreign_intact");
+    const std::uint64_t ownProcessId = 22000;
+    const std::filesystem::path foreignPath = maro::JournalWriter::pathForProcess(dir, 22001);
+    const std::filesystem::path ownPath = maro::JournalWriter::pathForProcess(dir, ownProcessId);
+
+    // 남의 파일: 파일 하나의 세션 상한을 훌쩍 넘긴다.
+    writeSessions(foreignPath, maro::kJournalSessionsKept + 5, "Site.Foreign");
+    const std::string foreignBefore = readAll(foreignPath);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    // 자기 파일은 세션 하나뿐 -- 총량 한도(10)에 아직 한참 못 미치므로 남의
+    // 파일이 삭제 대상이 될 이유가 없다. 그러니 이 테스트에서 남의 파일에
+    // 일어날 수 있는 유일한 변화는 "잘렸는가"뿐이다.
+    writeSessions(ownPath, 1, "Site.Own");
+
+    maro::JournalWriter::rotateAll(dir, ownProcessId);
+
+    ASSERT_TRUE(std::filesystem::exists(foreignPath))
+        << "the total session cap was not reached, so nothing should have been deleted";
+    EXPECT_EQ(readAll(foreignPath), foreignBefore)
+        << "a foreign process's journal must come out of rotateAll byte-for-byte unchanged -- "
+           "read-only or whole-file-delete, never read-truncate-rewrite, because its owner "
+           "may be appending to it right now";
+}
+
+// 리뷰 Finding I2의 나머지 절반: 남의 파일을 자르지 않는다고 해서 보관
+// 총량이 유계가 아니게 되면 안 된다. 총량 한도를 넘기는 순간 남의 파일은
+// (잘리는 게 아니라) 통째로 지워진다 -- 그 연산은 살아 있는 주인에 대해
+// 안전하다(Windows에서 주인이 그 파일을 열어 둔 채면 remove()가 그냥
+// 실패하고, 반쯤 지워진 중간 상태가 없다).
+TEST(JournalWriter, RotateAllDeletesAnOverCapForeignFileWholeInsteadOfRewritingIt) {
+    const std::filesystem::path dir = freshDir("rotate_all_foreign_delete");
+    const std::uint64_t ownProcessId = 23000;
+    const std::filesystem::path foreignPath = maro::JournalWriter::pathForProcess(dir, 23001);
+    const std::filesystem::path ownPath = maro::JournalWriter::pathForProcess(dir, ownProcessId);
+
+    // 오래된 남의 파일: 상한을 넘긴 세션 수.
+    writeSessions(foreignPath, maro::kJournalSessionsKept + 5, "Site.Foreign");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    // 더 최신인 자기 파일 하나로 총량 한도를 정확히 채운다 -- 그다음
+    // (더 오래된) 남의 파일은 한 세션도 더 들어갈 자리가 없다.
+    writeSessions(ownPath, maro::kJournalSessionsKept, "Site.Own");
+
+    maro::JournalWriter::rotateAll(dir, ownProcessId);
+
+    EXPECT_FALSE(std::filesystem::exists(foreignPath))
+        << "once the total cap is exceeded the foreign file goes away whole -- it must not "
+           "instead be trimmed in place, which is the operation that can race its owner";
+    ASSERT_TRUE(std::filesystem::exists(ownPath));
+    EXPECT_EQ(maro::parseJournal(readAll(ownPath)).size(), maro::kJournalSessionsKept)
+        << "the caller's own file is the one that survives, whole";
 }

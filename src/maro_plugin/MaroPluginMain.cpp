@@ -244,11 +244,6 @@ MStatus uninitializePlugin(MObject obj) {
     // 이 지역 객체는 아래에서 정상 반환이 나든 catch(...)로 되감기든 함수를
     // 빠져나가는 순간 항상 소멸자가 불린다. closeJournal()을 이 함수 끝에서
     // 직접 부르는 대신 이 가드 하나로 옮긴 이유가 그것이다.
-    // 리뷰 Finding I1: 이 함수가 무엇을 하든(그 밑의 모든 deregisterX 호출,
-    // executeCommand, 맨 아래의 info() 호출) closeJournal()은 반드시 돈다 --
-    // 이 지역 객체는 아래에서 정상 반환이 나든 catch(...)로 되감기든 함수를
-    // 빠져나가는 순간 항상 소멸자가 불린다. closeJournal()을 이 함수 끝에서
-    // 직접 부르는 대신 이 가드 하나로 옮긴 이유가 그것이다.
     const JournalCloseGuard closeJournalOnExit;
 
     try {
@@ -300,9 +295,6 @@ MStatus uninitializePlugin(MObject obj) {
         // 가드가 이 함수를 벗어나는 순간(정상 반환이든 아래 catch로의 되감김
         // 이든) 항상 부른다.
         maro::BoadMaro::info("Maro: plugin unloaded.");
-        // closeJournal()은 여기서 직접 부르지 않는다 -- 위 closeJournalOnExit
-        // 가드가 이 함수를 벗어나는 순간(정상 반환이든 아래 catch로의 되감김
-        // 이든) 항상 부른다.
         return status;
     } catch (...) {
         // 리뷰 Finding I1: 예외가 이 언로드 콜백 경계를 넘으면 안 된다

@@ -5,12 +5,25 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
+#include <limits>
 #include <memory>
 #include <process.h>  // _getpid() -- Finding C1, see currentProcessId() below
-#include <sstream>
 #include <thread>
 #include <utility>
+
+// 리뷰 Finding C1(리브니스): OpenProcess/WaitForSingleObject를 쓰려면
+// windows.h가 필요하다(isProcessRunning() 참고). 아래 currentProcessId()의
+// 주석이 말하는 "windows.h를 안 끌어오는 편이 낫다"는 판단은 _getpid()로
+// 같은 값을 얻을 수 있었기 때문에 성립했다 -- 프로세스 생존 확인에는 CRT
+// 대체재가 없으므로 여기서는 그 선택지가 없다. NOMINMAX는 이 타깃 전역으로
+// 이미 정의되어 있고(src/maro_plugin/CMakeLists.txt), WIN32_LEAN_AND_MEAN으로
+// 나머지 표면을 줄인다. maro_diag(순수 로직)에는 이 헤더가 절대 들어가지
+// 않는다 -- 그래서 리브니스 판정 자체가 ProcessLivenessFn이라는 seam으로
+// 주입된다(JournalReader.h).
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 
 #include <maya/MGlobal.h>
 
@@ -167,6 +180,57 @@ std::filesystem::path journalDirectory() {
 // 돌려주면서도 NOMINMAX류의 매크로 오염 걱정이 없다.
 std::uint64_t currentProcessId() {
     return static_cast<std::uint64_t>(_getpid());
+}
+
+// 핸들 하나짜리 RAII. OpenProcess가 준 핸들은 어느 경로로 나가든 반드시
+// 닫아야 한다 -- 안 닫으면 플러그인 로드마다 핸들이 새고, 그 누수는 죽은
+// 프로세스의 커널 오브젝트를 계속 살려 두므로 pid 재사용까지 늦춘다.
+class ScopedProcessHandle {
+public:
+    explicit ScopedProcessHandle(HANDLE handle) : handle_(handle) {}
+    ~ScopedProcessHandle() {
+        if (handle_ != nullptr) CloseHandle(handle_);
+    }
+    HANDLE get() const { return handle_; }
+    explicit operator bool() const { return handle_ != nullptr; }
+
+    ScopedProcessHandle(const ScopedProcessHandle&) = delete;
+    ScopedProcessHandle& operator=(const ScopedProcessHandle&) = delete;
+
+private:
+    HANDLE handle_;
+};
+
+// 리뷰 Finding C1(리브니스): pid가 가리키는 프로세스가 아직 도는가.
+// JournalReader::countCrashAdjacencyAcrossJournalFiles에 주입되어, 아직 살아
+// 있는 다른 Maya/mayapy 인스턴스의 (당연히 아직 close 줄이 없는) 저널이
+// 크래시로 집계되는 것을 막는다.
+//
+// 핸들이 살아 있다는 것만으로는 부족하다: 종료된 프로세스라도 누군가 핸들을
+// 들고 있으면 그 pid로 OpenProcess가 성공할 수 있다(좀비). 그래서 SYNCHRONIZE
+// 권한을 함께 요청해 WaitForSingleObject(h, 0)까지 본다 -- 프로세스 오브젝트는
+// 종료 시 시그널되므로 WAIT_OBJECT_0면 이미 죽은 것이고, WAIT_TIMEOUT이면
+// 아직 도는 중이다.
+//
+// PROCESS_QUERY_LIMITED_INFORMATION을 쓰는 이유: 다른 사용자/무결성 수준의
+// 프로세스에도 열릴 가능성이 가장 높은 최소 권한이다. 그래도 못 열면
+// false("죽은 것으로 친다")를 돌려주는데, 그건 이 함수가 막으려는 바로 그
+// 오판(산 세션을 크래시로 세기) 쪽으로 틀리는 방향이다 -- 그래서 권한 문제로
+// 실패할 여지를 최대한 줄이려고 이 최소 권한 조합을 고른다. 실제 배치에서는
+// 이 실패가 나오기 어렵다: 저널 디렉터리가 사용자별 userAppDir이므로 그 안의
+// 파일을 쓴 프로세스는 정의상 같은 사용자의 프로세스다.
+bool isProcessRunning(std::uint64_t processId) {
+    if (processId == 0) return false;  // 0은 System Idle -- 저널 파일의 주인일 수 없다
+    if (processId > static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)())) {
+        return false;
+    }
+
+    const ScopedProcessHandle handle(
+        OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                    static_cast<DWORD>(processId)));
+    if (!handle) return false;  // 대개 ERROR_INVALID_PARAMETER = 그런 프로세스 없음
+
+    return WaitForSingleObject(handle.get(), 0) == WAIT_TIMEOUT;
 }
 
 // book(스필)에 쓰기가 실패했을 때 한 번만 warn()으로 알린다. warn()은 자체
@@ -665,31 +729,27 @@ void BoadMaro::openJournal() {
         // 다른 Maya/mayapy 프로세스와 파일을 공유하면 open/close 줄의 위치
         // 기반 세션 경계가 동시 쓰기 아래서 깨진다(Journal.h 주석 참고).
         const std::filesystem::path directory = journalDirectory();
-        const std::filesystem::path path = JournalWriter::pathForProcess(directory,
-                                                                           currentProcessId());
+        const std::uint64_t processId = currentProcessId();
+        const std::filesystem::path path = JournalWriter::pathForProcess(directory, processId);
 
         // 이번 세션의 open 줄을 쓰기 **전에**, 그리고 이 디렉터리의 다른
         // 프로세스 파일까지 포함해 전체를 회전한다 -- 파일을 나눴다고 예전의
         // "보관 한도 10세션"이 파일마다 10세션으로 불어나면 안 된다
-        // (JournalWriter::rotateAll 주석 참고).
-        JournalWriter::rotateAll(directory);
+        // (JournalWriter::rotateAll 주석 참고). 자기 pid를 함께 넘기는 이유는
+        // 리뷰 Finding I2다: 트렁케이트 후 재작성은 자기 파일에만 하고, 남의
+        // 파일은 읽거나 통째로 지우기만 한다.
+        JournalWriter::rotateAll(directory, processId);
 
         // 회전 뒤 남은 모든 프로세스별 저널 파일을 읽어 지난 세션들의
         // 관측을 만들어 둔다. 이후로는 이 값이 바뀌지 않는다 -- 이번 세션은
-        // 아직 끝나지 않았으므로 비정상인지 정상인지 판정할 수 없다. 파일
-        // 하나하나는 "쓰는 이가 하나"라는 전제 위에서 정확하므로, 파일들에
-        // 걸친 관측은 단순히 더한다(mergeCrashAdjacency).
-        {
-            CrashAdjacency aggregate;
-            for (const std::filesystem::path& journalFile :
-                 JournalWriter::listJournalFiles(directory)) {
-                std::ifstream in(journalFile, std::ios::binary);
-                std::ostringstream ss;
-                ss << in.rdbuf();
-                mergeCrashAdjacency(aggregate, countCrashAdjacentTags(parseJournal(ss.str())));
-            }
-            crashAdjacencyStorage() = aggregate;
-        }
+        // 아직 끝나지 않았으므로 비정상인지 정상인지 판정할 수 없다.
+        //
+        // 리뷰 Finding C1(리브니스): 아직 살아 있는 프로세스의 파일은 그
+        // 마지막(미종료) 세션이 크래시가 아니라 진행 중인 세션이므로 빠진다 --
+        // 그 판정만이 이 계층(OS를 아는 쪽)의 몫이고, 집계 자체는 maro_diag
+        // 안에서 돈다(isProcessRunning을 seam으로 넘긴다).
+        crashAdjacencyStorage() =
+            countCrashAdjacencyAcrossJournalFiles(directory, &isProcessRunning);
 
         std::lock_guard<std::mutex> lock(journalMutex());
         journalWriter() = std::make_unique<JournalWriter>(path);

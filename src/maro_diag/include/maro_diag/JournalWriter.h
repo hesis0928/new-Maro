@@ -49,8 +49,16 @@ public:
     // 것일 때만 성립한다(Finding C1) -- 두 프로세스가 이 경로에 동시에
     // append하며 이 함수가 std::ios::trunc로 다시 쓰면, 그 사이에 다른
     // 프로세스가 쓴 내용이 통째로 사라진다. pathForProcess()로 파일을
-    // 나누면 그 전제가 다시 성립하고, 이 함수는 그대로 재사용된다
-    // (rotateAll()이 파일마다 이것부터 부른다).
+    // 나누면 그 전제가 다시 성립한다.
+    //
+    // 리뷰 Finding I2: 그래서 이 함수는 **자기 파일에만** 불러야 한다.
+    // 예전에는 rotateAll()이 디렉터리 안의 모든 파일에 이것을 불렀는데,
+    // 그건 위 전제를 스스로 깨는 일이었다 -- 남의 파일을 트렁케이트하는
+    // 순간 "그 파일을 트렁케이트하는 것은 그 파일의 주인뿐"이라는 보장이
+    // 사라지고, 주인이 살아서 append하는 중이라면 읽기와 트렁케이트 사이에
+    // 들어온 줄이 조용히 사라진다(MSVC의 ofstream 공유 모드는 그 동시 열기를
+    // 막지 않는다). 지금은 rotateAll()이 ownProcessId의 파일에만 이것을
+    // 부른다.
     static void rotate(const std::filesystem::path& path);
 
     // Finding C1: 이 프로세스가 써야 할 저널 파일 경로. directory 안에
@@ -64,6 +72,23 @@ public:
     static std::filesystem::path pathForProcess(const std::filesystem::path& directory,
                                                  std::uint64_t processId);
 
+    // pathForProcess()의 역함수. path의 파일 이름이 "<stem>.<pid>.jsonl"
+    // 모양이면 그 pid를 processIdOut에 넣고 true를, 아니면(그 모양이
+    // 아니거나 숫자가 uint64에 안 들어가면) processIdOut을 건드리지 않고
+    // false를 돌려준다.
+    //
+    // 리뷰 Finding C1(리브니스): 파일 이름의 pid는 단순한 이름표가 아니라
+    // "이 파일의 마지막 미종료 세션이 크래시인가, 아직 도는 중인가"를 가르는
+    // 유일한 단서다 -- 파일 내용만으로는 그 둘이 완전히 같은 모양이기
+    // 때문이다(둘 다 close 줄이 없다). 그 판정을 하려면 이름에서 pid를 도로
+    // 꺼낼 수 있어야 한다(JournalReader의 countCrashAdjacencyAcrossJournalFiles
+    // 참고). listJournalFiles()가 파일을 고르는 판정도 이 함수 하나를 쓴다 --
+    // "저널 파일인가"와 "그 저널 파일의 pid는 무엇인가"가 서로 다른 규칙을
+    // 갖게 되면, 집계 대상인데 pid를 못 읽는(=리브니스 판정을 조용히 건너뛰는)
+    // 파일이 생긴다.
+    static bool processIdFromPath(const std::filesystem::path& path,
+                                   std::uint64_t& processIdOut);
+
     // directory 안에서 kJournalFileStem으로 시작하는 프로세스별 저널 파일을
     // 전부 나열한다. 읽는 쪽(집계)과 rotateAll()이 이 목록을 공유한다.
     // directory가 없으면 빈 목록을 돌려준다 -- 첫 실행이 그 상태다.
@@ -74,10 +99,26 @@ public:
     // 총량을 kJournalSessionsKept "세션"만큼으로 되돌린다 -- 파일을
     // 나눴다고 해서 예전의 "보관 한도 10세션"이 "파일마다 10세션"으로
     // 슬그머니 불어나면 안 되기 때문이다(파일이 여러 개면 그건 더 이상
-    // 유계가 아니다). 각 파일은 먼저 자기 자신의 rotate()로 스스로의 세션
-    // 상한을 지키고(그 판단은 파일 안 open/close 줄 위치만 본다, 시각을
-    // 읽지 않는다), 그다음 파일들을 마지막 수정 시각 기준으로 최신 순으로
-    // 훑으며 세션을 누적해 한도를 넘기는 지점부터는 파일을 통째로 지운다.
+    // 유계가 아니다). ownProcessId(=이 프로세스)의 파일은 먼저 rotate()로
+    // 스스로의 세션 상한을 지키고(그 판단은 파일 안 open/close 줄 위치만
+    // 본다, 시각을 읽지 않는다), 그다음 파일들을 마지막 수정 시각 기준으로
+    // 최신 순으로 훑으며 세션을 누적해 한도를 넘기는 지점부터는 파일을
+    // 통째로 지운다.
+    //
+    // 리뷰 Finding I2 -- 이 함수가 남의 파일에 하는 일의 계약: **파일을
+    // 읽거나(세션 수 세기) 통째로 지우는 것뿐이다. 내용을 다시 쓰지
+    // 않는다.** 트렁케이트 후 재작성(rotate())은 오직 자기 파일에만 한다 --
+    // 살아 있는 다른 프로세스가 append 중인 파일을 읽고-트렁케이트-재작성하면
+    // 그 사이에 들어온 줄이 조용히 사라지기 때문이다. 통째 삭제는 이 경합이
+    // 없다: Windows에서 살아 있는 주인이 그 파일을 열어 둔 채면(공유 모드에
+    // FILE_SHARE_DELETE가 없으므로) remove()가 그냥 실패하고, 그 error_code는
+    // 아래 구현이 삼킨다 -- 반쯤 지워진 파일 같은 중간 상태가 없다.
+    //
+    // 그래서 남의 파일이 자기 세션 상한(kJournalSessionsKept)을 넘겨도 이
+    // 함수는 그 파일을 잘라 주지 않는다. 그 파일은 다음에 그 주인이 자기
+    // openJournal()에서 스스로 자를 것이고, 주인이 다시는 안 돌아오면 이
+    // 함수의 총량 한도가 언젠가 그 파일을 통째로 지운다 -- 어느 쪽이든
+    // 유계이며, 그 대가로 남의 데이터를 잃을 수 있는 창이 사라진다.
     //
     // 마지막 수정 시각을 쓰는 것은 진단 레코드/세션의 정상·비정상 판정이나
     // 순서에 쓰는 그 "타임스탬프를 읽지 않는다"는 규율과는 다른 자리다:
@@ -88,7 +129,15 @@ public:
     // 말지일 뿐이다 -- 시계가 조금 어긋나 있어도 최악의 경우 지울 파일을
     // 하나 잘못 고르는 정도이지, 남는 파일들의 진단 결론이 틀리게 되지는
     // 않는다.
-    static void rotateAll(const std::filesystem::path& directory);
+    //
+    // 리뷰 Finding I1: 그 마지막 수정 시각은 rotate()를 부르기 **전에**
+    // 읽는다. rotate()가 실제로 다시 쓴 파일은 그 순간 mtime이 "지금"이
+    // 되므로, 뒤에 읽으면 방금 잘린 오래된 파일이 진짜 최신 파일보다 앞으로
+    // 정렬되어 -- 살려야 할 최신 파일이 대신 지워진다. 위 문단의 "최악의
+    // 경우 하나 잘못 고르는 정도"는 시계가 어긋난 경우를 말하는 것이지,
+    // 우리 스스로 mtime을 뒤집어 놓고 그것을 읽는 경우가 아니다.
+    static void rotateAll(const std::filesystem::path& directory,
+                           std::uint64_t ownProcessId);
 
     JournalWriter(const JournalWriter&) = delete;
     JournalWriter& operator=(const JournalWriter&) = delete;
