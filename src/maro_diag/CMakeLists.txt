@@ -7,6 +7,7 @@ add_library(maro_diag STATIC
     src/Journal.cpp
     src/JournalWriter.cpp
     src/JournalReader.cpp
+    src/RemedyAction.cpp
 )
 
 target_include_directories(maro_diag PUBLIC

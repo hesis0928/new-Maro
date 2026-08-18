@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "maro_diag/RemedyAction.h"
+
 namespace maro {
 
 // 진단 심각도. boad가 스크립트 에디터에 어떤 함수로 내보낼지도 이것으로 정해진다.
@@ -80,6 +82,10 @@ struct DiagRecord {
     // 갈 수 있고, 그때 순서가 흔들리면 연쇄의 앞뒤가 뒤집혀 원인 분석이
     // 통째로 반대가 된다. 형식화는 표시하는 쪽(Python)이 로컬 시간대로 한다.
     std::uint64_t timestampMs = 0;
+    // 이 발생에 대한 구조화된 해법. 없으면 RemedyActionKind::None(기본값).
+    // book에서 오지 않는다 -- 위 RemedyAction.h의 주석 참고. 실패가 일어난
+    // 자리(MaroCommands.cpp)가 이 발생의 살아있는 씬 상태로 직접 채운다.
+    RemedyAction remedyAction;
 };
 
 }  // namespace maro
