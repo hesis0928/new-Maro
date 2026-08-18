@@ -378,11 +378,15 @@ void BoadMaro::devInfo(const MString& message) {
 }
 
 void BoadMaro::error(const std::string& siteTag, const MString& message,
-                      const DgContext& context) {
+                      const DgContext& context, const RemedyAction& remedyAction) {
     DiagRecord rec;
     stampTimestamp(rec);
     rec.severity = DiagSeverity::Error;
     rec.context = context;
+    // book에서 오지 않는다 -- 항상 이 호출이 준 값 그대로다. 아래 book
+    // 캐시 히트 분기가 rec.remedy/rec.priorAnalysis는 book 것으로 덮어써도
+    // remedyAction은 절대 덮어쓰지 않는다 (RemedyAction.h 계약).
+    rec.remedyAction = remedyAction;
 
     // 리뷰 Finding (해시보다 먼저): siteTag는 여기, 아직 아무것도 던질 수
     // 없는 자리에서 바로 채운다. 예전에는 이 대입이 아래 try 블록 안,
@@ -770,6 +774,17 @@ void BoadMaro::closeJournal() {
 }
 
 const CrashAdjacency& BoadMaro::crashAdjacency() { return crashAdjacencyStorage(); }
+
+bool BoadMaro::findRecordBySequence(std::uint64_t sequence, DiagRecord& out) {
+    std::lock_guard<std::mutex> lock(mutex());
+    for (const DiagRecord& rec : stream()) {
+        if (rec.sequence == sequence) {
+            out = rec;
+            return true;
+        }
+    }
+    return false;
+}
 
 namespace {
 // Maya 메인 스레드만 doIt을 부르지만, thread_local로 두면 우연한 재진입도 안전하다.

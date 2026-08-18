@@ -12,6 +12,7 @@
 #include "maro_diag/BookStore.h"
 #include "maro_diag/DiagRecord.h"
 #include "maro_diag/JournalReader.h"
+#include "maro_diag/RemedyAction.h"
 
 namespace maro {
 
@@ -87,8 +88,15 @@ public:
     // siteTag: 이 실패의 자리와 종류만 담는 불변 식별자 (maro::hashError
     // 계약, Task 1). context는 Task 4에서 onfix::capture()로 채운다 -- 지금은
     // 항상 기본값(전부 빈 문자열)이다.
+    //
+    // remedyAction: 이 발생에 대한 구조화된 해법. book에서 오지 않는다 --
+    // 호출부가 이 순간 살아있는 씬을 보고 직접 채운다 (RemedyAction.h,
+    // 플랜 서두 "spec에서 의도적으로 벗어난 지점" 참고). 기본값
+    // RemedyActionKind::None은 "해법 없음"이며 기존 호출부 전부가 이
+    // 기본값을 그대로 탄다.
     static void error(const std::string& siteTag, const MString& message,
-                       const DgContext& context = DgContext{});
+                       const DgContext& context = DgContext{},
+                       const RemedyAction& remedyAction = RemedyAction{});
 
     static std::size_t recordCount();
     // indexFromEnd 0 = 가장 최근 레코드. 값으로 반환한다 -- 뮤텍스로 보호된
@@ -179,6 +187,14 @@ public:
     // 저널 writer/crashAdjacency 저장소를 새로 더했는데도 여기 반영하지
     // 않았다면 정확히 같은 함정이 재발했을 것이다).
     static void resetForTest();
+
+    // sequence로 레코드 하나를 찾는다. 순번은 세션 전역에서 유일하고
+    // 재사용되지 않으므로(MaroPanelCommands.cpp가 이미 이 방식으로
+    // -sequence를 구현했다), 화면이 그려진 시점과 지금(적용 클릭 시점)
+    // 사이에 다른 진단이 더 들어와도 항상 사용자가 실제로 고른 그 레코드를
+    // 돌려준다. 찾지 못하면 false -- 존재한 적 없는 순번이나 세션이 리셋된
+    // 뒤의 스테일 값을 엉뚱한 이웃으로 대체하지 않는다.
+    static bool findRecordBySequence(std::uint64_t sequence, DiagRecord& out);
 
 private:
     static std::vector<DiagRecord>& stream();

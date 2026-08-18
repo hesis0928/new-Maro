@@ -3,6 +3,8 @@
 #include <maya/MPxCommand.h>
 #include <maya/MSyntax.h>
 
+#include "maro_diag/RemedyAction.h"
+
 namespace maro {
 
 // 아래 커맨드들은 진단 배관 자체가 아니라, mayapy 테스트가 BoadMaro의 내부
@@ -103,6 +105,18 @@ public:
 class MaroJournalCrashAdjacentTagsCommand : public MPxCommand {
 public:
     static void* creator();
+    MStatus doIt(const MArgList& args) override;
+};
+
+// 테스트 전용. -sequence <int>. 그 레코드의 RemedyAction을 필드 6개로:
+// kind("none"|"selectNode"|"setAttribute"|"disconnect"), nodeName,
+// attributeName, value(문자열로 변환된 double), sourcePlug, destPlug.
+// 존재하지 않는 sequence는 실패한다 (MaroPanelCommands.cpp의 -sequence
+// 규율과 같다 -- 스테일 선택을 조용히 다른 레코드로 대체하지 않는다).
+class MaroDiagQueryRemedyActionCommand : public MPxCommand {
+public:
+    static void* creator();
+    static MSyntax newSyntax();
     MStatus doIt(const MArgList& args) override;
 };
 

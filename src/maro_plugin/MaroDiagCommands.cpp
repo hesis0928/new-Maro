@@ -39,6 +39,22 @@ const char* kHashFlag = "-hs";
 const char* kHashFlagLong = "-hash";
 const char* kRemedyFlag = "-r";
 const char* kRemedyFlagLong = "-remedy";
+// maroDiagEmit(-severity error) 전용 테스트 확장. 지정하지 않으면 이전과
+// 바이트 단위로 동일하게 동작한다(RemedyActionKind::None).
+const char* kRemedyActionFlag = "-ra";
+const char* kRemedyActionFlagLong = "-remedyAction";
+const char* kRemedyNodeFlag = "-rn";
+const char* kRemedyNodeFlagLong = "-remedyNode";
+const char* kRemedyAttributeFlag = "-rat";
+const char* kRemedyAttributeFlagLong = "-remedyAttribute";
+const char* kRemedyValueFlag = "-rv";
+const char* kRemedyValueFlagLong = "-remedyValue";
+const char* kRemedySourcePlugFlag = "-rsp";
+const char* kRemedySourcePlugFlagLong = "-remedySourcePlug";
+const char* kRemedyDestPlugFlag = "-rdp";
+const char* kRemedyDestPlugFlagLong = "-remedyDestPlug";
+const char* kSequenceFlag = "-sq";
+const char* kSequenceFlagLong = "-sequence";
 
 MString severityToString(DiagSeverity s) {
     switch (s) {
@@ -63,6 +79,12 @@ MSyntax MaroDiagEmitCommand::newSyntax() {
     syntax.addFlag(kAxisOrTargetFlag, kAxisOrTargetFlagLong, MSyntax::kString);
     syntax.addFlag(kNameUnavailableFlag, kNameUnavailableFlagLong, MSyntax::kNoArg);
     syntax.addFlag(kTypeUnavailableFlag, kTypeUnavailableFlagLong, MSyntax::kNoArg);
+    syntax.addFlag(kRemedyActionFlag, kRemedyActionFlagLong, MSyntax::kString);
+    syntax.addFlag(kRemedyNodeFlag, kRemedyNodeFlagLong, MSyntax::kString);
+    syntax.addFlag(kRemedyAttributeFlag, kRemedyAttributeFlagLong, MSyntax::kString);
+    syntax.addFlag(kRemedyValueFlag, kRemedyValueFlagLong, MSyntax::kDouble);
+    syntax.addFlag(kRemedySourcePlugFlag, kRemedySourcePlugFlagLong, MSyntax::kString);
+    syntax.addFlag(kRemedyDestPlugFlag, kRemedyDestPlugFlagLong, MSyntax::kString);
     return syntax;
 }
 
@@ -111,7 +133,46 @@ MStatus MaroDiagEmitCommand::doIt(const MArgList& args) {
             // false로 남아 이전 동작과 동일하다.
             ctx.nameUnavailable = argData.isFlagSet(kNameUnavailableFlag);
             ctx.typeUnavailable = argData.isFlagSet(kTypeUnavailableFlag);
-            BoadMaro::error(siteTag.asChar(), message, ctx);
+            RemedyAction remedy;
+            if (argData.isFlagSet(kRemedyActionFlag)) {
+                MString kindStr;
+                argData.getFlagArgument(kRemedyActionFlag, 0, kindStr);
+                if (kindStr == "selectNode") {
+                    remedy.kind = RemedyActionKind::SelectNode;
+                } else if (kindStr == "setAttribute") {
+                    remedy.kind = RemedyActionKind::SetAttribute;
+                } else if (kindStr == "disconnect") {
+                    remedy.kind = RemedyActionKind::Disconnect;
+                } else {
+                    MGlobal::displayError(
+                        MString("Maro: unknown -remedyAction '") + kindStr + "'.");
+                    return MS::kFailure;
+                }
+                if (argData.isFlagSet(kRemedyNodeFlag)) {
+                    MString v;
+                    argData.getFlagArgument(kRemedyNodeFlag, 0, v);
+                    remedy.nodeName = v.asChar();
+                }
+                if (argData.isFlagSet(kRemedyAttributeFlag)) {
+                    MString v;
+                    argData.getFlagArgument(kRemedyAttributeFlag, 0, v);
+                    remedy.attributeName = v.asChar();
+                }
+                if (argData.isFlagSet(kRemedyValueFlag)) {
+                    argData.getFlagArgument(kRemedyValueFlag, 0, remedy.value);
+                }
+                if (argData.isFlagSet(kRemedySourcePlugFlag)) {
+                    MString v;
+                    argData.getFlagArgument(kRemedySourcePlugFlag, 0, v);
+                    remedy.sourcePlug = v.asChar();
+                }
+                if (argData.isFlagSet(kRemedyDestPlugFlag)) {
+                    MString v;
+                    argData.getFlagArgument(kRemedyDestPlugFlag, 0, v);
+                    remedy.destPlug = v.asChar();
+                }
+            }
+            BoadMaro::error(siteTag.asChar(), message, ctx, remedy);
         } else {
             MGlobal::displayError(MString("Maro: unknown severity '") + severity + "'.");
             return MS::kFailure;
@@ -454,6 +515,73 @@ MStatus MaroJournalCrashAdjacentTagsCommand::doIt(const MArgList& /*args*/) {
         return MS::kFailure;
     } catch (...) {
         MGlobal::displayError("Maro: maroJournalCrashAdjacentTags failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
+namespace {
+const char* remedyKindName(RemedyActionKind kind) {
+    switch (kind) {
+        case RemedyActionKind::None: return "none";
+        case RemedyActionKind::SelectNode: return "selectNode";
+        case RemedyActionKind::SetAttribute: return "setAttribute";
+        case RemedyActionKind::Disconnect: return "disconnect";
+    }
+    return "none";
+}
+}  // namespace
+
+void* MaroDiagQueryRemedyActionCommand::creator() {
+    return new MaroDiagQueryRemedyActionCommand();
+}
+
+MSyntax MaroDiagQueryRemedyActionCommand::newSyntax() {
+    MSyntax syntax;
+    syntax.addFlag(kSequenceFlag, kSequenceFlagLong, MSyntax::kLong);
+    return syntax;
+}
+
+MStatus MaroDiagQueryRemedyActionCommand::doIt(const MArgList& args) {
+    try {
+        MStatus status;
+        MArgDatabase argData(newSyntax(), args, &status);
+        if (!status) return status;
+
+        if (!argData.isFlagSet(kSequenceFlag)) {
+            MGlobal::displayError("Maro: maroDiagQueryRemedyAction requires -sequence.");
+            return MS::kFailure;
+        }
+        int sequenceArg = -1;
+        argData.getFlagArgument(kSequenceFlag, 0, sequenceArg);
+        if (sequenceArg < 0) {
+            MGlobal::displayError(
+                "Maro: maroDiagQueryRemedyAction -sequence must not be negative.");
+            return MS::kFailure;
+        }
+
+        DiagRecord rec;
+        if (!BoadMaro::findRecordBySequence(static_cast<std::uint64_t>(sequenceArg), rec)) {
+            MGlobal::displayError(
+                "Maro: maroDiagQueryRemedyAction could not resolve sequence.");
+            return MS::kFailure;
+        }
+
+        MStringArray result;
+        result.append(remedyKindName(rec.remedyAction.kind));
+        result.append(MString(rec.remedyAction.nodeName.c_str()));
+        result.append(MString(rec.remedyAction.attributeName.c_str()));
+        result.append(MString(std::to_string(rec.remedyAction.value).c_str()));
+        result.append(MString(rec.remedyAction.sourcePlug.c_str()));
+        result.append(MString(rec.remedyAction.destPlug.c_str()));
+        setResult(result);
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(
+            MString("Maro: maroDiagQueryRemedyAction failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError(
+            "Maro: maroDiagQueryRemedyAction failed with unknown error.");
         return MS::kFailure;
     }
 }

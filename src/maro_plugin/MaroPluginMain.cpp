@@ -183,6 +183,14 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroDiagQueryRemedyAction",
+                                    maro::MaroDiagQueryRemedyActionCommand::creator,
+                                    maro::MaroDiagQueryRemedyActionCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagQueryRemedyAction");
+        return status;
+    }
+
     status = plugin.registerCommand("maroDiagEmitMarked",
                                     maro::MaroDiagEmitMarkedCommand::creator,
                                     maro::MaroDiagEmitMarkedCommand::newSyntax);
@@ -266,6 +274,7 @@ MStatus uninitializePlugin(MObject obj) {
         plugin.deregisterCommand("maroJournalAbnormalSessions");
 
         plugin.deregisterCommand("maroDiagEmitMarked");
+        plugin.deregisterCommand("maroDiagQueryRemedyAction");
         plugin.deregisterCommand("maroDiagRegisterRemedy");
         plugin.deregisterCommand("maroDiagAnalysisCount");
         plugin.deregisterCommand("maroDiagQuery");
