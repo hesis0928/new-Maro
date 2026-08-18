@@ -1,6 +1,8 @@
 #include "maro_diag/JournalReader.h"
 
+#include <algorithm>
 #include <sstream>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 
@@ -58,6 +60,32 @@ std::vector<JournalSession> parseJournal(const std::string& text) {
         }
     }
     return sessions;
+}
+
+CrashAdjacency countCrashAdjacentTags(const std::vector<JournalSession>& sessions) {
+    CrashAdjacency adjacency;
+
+    for (const JournalSession& session : sessions) {
+        if (session.endedCleanly) continue;
+        ++adjacency.abnormalSessionCount;
+
+        // 마지막 구간만 본다. 전체가 구간보다 짧으면 전부를 본다.
+        const std::size_t total = session.records.size();
+        const std::size_t start =
+            total > kJournalTailRecordsForSignal ? total - kJournalTailRecordsForSignal : 0;
+
+        // 한 세션은 한 표 -- 세션 안에서 중복을 먼저 없앤다.
+        std::unordered_set<std::string> seenInThisSession;
+        for (std::size_t i = start; i < total; ++i) {
+            const std::string& tag = session.records[i].siteTag;
+            if (tag.empty()) continue;  // 신호는 사이트 태그로 지목되는 실패에만 붙는다
+            seenInThisSession.insert(tag);
+        }
+        for (const std::string& tag : seenInThisSession) {
+            ++adjacency.appearancesByTag[tag];
+        }
+    }
+    return adjacency;
 }
 
 }  // namespace maro

@@ -135,3 +135,134 @@ TEST(JournalReader, AnUnrecognizedSessionEventDoesNotEndTheSessionCleanly) {
     EXPECT_FALSE(sessions[0].endedCleanly)
         << "only an event of exactly \"close\" may end a session cleanly";
 }
+
+namespace {
+
+maro::JournalSession makeSession(bool endedCleanly,
+                                  const std::vector<std::string>& tags) {
+    maro::JournalSession session;
+    session.endedCleanly = endedCleanly;
+    std::uint64_t seq = 1;
+    for (const std::string& tag : tags) {
+        maro::JournalRecord rec;
+        rec.sequence = seq++;
+        rec.timestampMs = 1000 + seq;
+        rec.severity = maro::DiagSeverity::Error;
+        rec.siteTag = tag;
+        rec.message = "m";
+        session.records.push_back(rec);
+    }
+    return session;
+}
+
+}  // namespace
+
+// 정상 종료 세션은 분모에도 분자에도 들어가지 않는다.
+TEST(JournalReader, CleanSessionsAreNotCounted) {
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(true, {"A", "B"}));
+    sessions.push_back(makeSession(true, {"A"}));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.abnormalSessionCount, 0u);
+    EXPECT_TRUE(adj.appearancesByTag.empty());
+}
+
+// 한 세션은 한 표다. 한 세션에서 40번 나온 태그도 표는 하나다 -- 안 그러면
+// 폭주한 태그 하나가 모든 세션의 표를 독식한다.
+TEST(JournalReader, OneSessionIsOneVoteRegardlessOfRepeats) {
+    std::vector<std::string> spammy;
+    for (int i = 0; i < 15; ++i) spammy.push_back("Spam");
+    spammy.push_back("Rare");
+
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(false, spammy));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.abnormalSessionCount, 1u);
+    EXPECT_EQ(adj.appearancesByTag.at("Spam"), 1u)
+        << "fifteen hits in one session is still one session";
+    EXPECT_EQ(adj.appearancesByTag.at("Rare"), 1u);
+}
+
+// 마지막 구간 밖의 태그는 세지 않는다. 구간은 마지막 레코드 20개다.
+TEST(JournalReader, OnlyTheTailOfTheSessionCounts) {
+    std::vector<std::string> tags;
+    tags.push_back("TooEarly");
+    for (std::size_t i = 0; i < maro::kJournalTailRecordsForSignal; ++i) {
+        tags.push_back("InTail");
+    }
+
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(false, tags));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.appearancesByTag.count("TooEarly"), 0u)
+        << "it sits one record before the tail window";
+    EXPECT_EQ(adj.appearancesByTag.at("InTail"), 1u);
+}
+
+// 구간의 첫 레코드(가장 오래된 쪽 경계)는 반드시 포함되어야 한다. 위 테스트는
+// 구간 전체가 같은 태그("InTail")로 채워져 있어서, 구간을 한 칸 좁혀 그
+// 첫 레코드를 놓쳐도 "한 세션은 한 표" 중복 제거 때문에 겉으로 드러나지
+// 않는다 -- 그 자리에 고유한 태그를 둬서 경계 자체를 고정한다.
+TEST(JournalReader, TheOldestRecordOfTheTailWindowIsIncluded) {
+    std::vector<std::string> tags;
+    tags.push_back("TooEarly");
+    tags.push_back("EdgeOfTail");  // 구간의 첫(가장 오래된) 레코드, 유일한 태그
+    // 나머지는 구간을 kJournalTailRecordsForSignal개로 채운다:
+    // 1(TooEarly) + 1(EdgeOfTail) + (N-1)(Filler) = N+1개 전체, 구간은 마지막 N개.
+    for (std::size_t i = 0; i + 1 < maro::kJournalTailRecordsForSignal; ++i) {
+        tags.push_back("Filler");
+    }
+
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(false, tags));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.appearancesByTag.count("TooEarly"), 0u);
+    EXPECT_EQ(adj.appearancesByTag.at("EdgeOfTail"), 1u)
+        << "the tail window is the last kJournalTailRecordsForSignal records, "
+           "and this is the oldest one in it";
+}
+
+// 세션의 전체 레코드가 구간보다 적으면 전부를 본다.
+TEST(JournalReader, AShortSessionIsCountedWhole) {
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(false, {"A", "B"}));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.appearancesByTag.at("A"), 1u);
+    EXPECT_EQ(adj.appearancesByTag.at("B"), 1u);
+}
+
+// 여러 비정상 세션에 걸쳐 누적된다 -- 이것이 신호의 실체다.
+TEST(JournalReader, AccumulatesAcrossAbnormalSessions) {
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(false, {"Recurring", "OnceOnly"}));
+    sessions.push_back(makeSession(true, {"Recurring"}));   // 정상 -- 세지 않는다
+    sessions.push_back(makeSession(false, {"Recurring"}));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.abnormalSessionCount, 2u);
+    EXPECT_EQ(adj.appearancesByTag.at("Recurring"), 2u);
+    EXPECT_EQ(adj.appearancesByTag.at("OnceOnly"), 1u);
+}
+
+// 태그가 없는 레코드(에러가 아닌 것)는 신호의 대상이 아니다 -- 신호는
+// 사이트 태그로 지목되는 실패에 붙는다.
+TEST(JournalReader, RecordsWithoutASiteTagAreIgnored) {
+    std::vector<maro::JournalSession> sessions;
+    sessions.push_back(makeSession(false, {"", "A"}));
+
+    const maro::CrashAdjacency adj = maro::countCrashAdjacentTags(sessions);
+
+    EXPECT_EQ(adj.appearancesByTag.count(""), 0u);
+    EXPECT_EQ(adj.appearancesByTag.at("A"), 1u);
+}
