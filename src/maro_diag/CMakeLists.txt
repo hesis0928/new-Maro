@@ -5,6 +5,7 @@ add_library(maro_diag STATIC
     src/BookStore.cpp
     src/PanelPresenter.cpp
     src/JournalWriter.cpp
+    src/JournalReader.cpp
 )
 
 target_include_directories(maro_diag PUBLIC

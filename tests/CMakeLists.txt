@@ -24,6 +24,7 @@ add_executable(maro_diag_tests
     diag/test_book_store.cpp
     diag/test_panel_presenter.cpp
     diag/test_journal_writer.cpp
+    diag/test_journal_reader.cpp
 )
 
 target_link_libraries(maro_diag_tests PRIVATE
