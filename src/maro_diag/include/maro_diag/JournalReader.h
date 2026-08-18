@@ -57,4 +57,11 @@ struct CrashAdjacency {
 
 CrashAdjacency countCrashAdjacentTags(const std::vector<JournalSession>& sessions);
 
+// 리뷰 Finding C1: 저널이 프로세스별로 여러 파일로 나뉘므로(JournalWriter::
+// pathForProcess), 지난 세션들의 관측은 그 파일들을 각각 파싱한 결과를 합쳐야
+// 전체 그림이 된다. 파일 하나하나는 이미 "쓰는 이가 하나"라는 전제 위에서
+// 정확하므로 합치는 것은 단순 덧셈이다 -- 세션 하나는 정확히 자기 파일
+// 안에서만 등장하므로 두 파일에 걸쳐 같은 세션이 중복 집계될 일이 없다.
+void mergeCrashAdjacency(CrashAdjacency& target, const CrashAdjacency& addition);
+
 }  // namespace maro

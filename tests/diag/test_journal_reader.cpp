@@ -266,3 +266,79 @@ TEST(JournalReader, RecordsWithoutASiteTagAreIgnored) {
     EXPECT_EQ(adj.appearancesByTag.count(""), 0u);
     EXPECT_EQ(adj.appearancesByTag.at("A"), 1u);
 }
+
+// Finding C1 -- 저널이 프로세스별 파일로 나뉘므로, 관측을 합치는 것은 여러
+// 파일을 각자 파싱한 CrashAdjacency를 더하는 일이 된다. 세션 하나는 정확히
+// 자기 파일 안에서만 등장하므로 단순 덧셈이면 충분하다.
+TEST(JournalReader, MergeCrashAdjacencyAddsCountsAcrossFiles) {
+    maro::CrashAdjacency fileA;
+    fileA.abnormalSessionCount = 2;
+    fileA.appearancesByTag["Recurring"] = 2;
+    fileA.appearancesByTag["OnlyInA"] = 1;
+
+    maro::CrashAdjacency fileB;
+    fileB.abnormalSessionCount = 1;
+    fileB.appearancesByTag["Recurring"] = 1;
+    fileB.appearancesByTag["OnlyInB"] = 1;
+
+    maro::CrashAdjacency total;
+    maro::mergeCrashAdjacency(total, fileA);
+    maro::mergeCrashAdjacency(total, fileB);
+
+    EXPECT_EQ(total.abnormalSessionCount, 3u);
+    EXPECT_EQ(total.appearancesByTag.at("Recurring"), 3u);
+    EXPECT_EQ(total.appearancesByTag.at("OnlyInA"), 1u);
+    EXPECT_EQ(total.appearancesByTag.at("OnlyInB"), 1u);
+}
+
+// Finding C1 -- the pinned regression for the multi-writer case. Under the
+// old single-shared-file design, an interleaved journal (session B opens
+// while session A is still open, and A's own close line arrives after B's
+// open) would misattribute A's close to B and steal A's trailing record into
+// B's tail (see the review's own repro, and the now-removed scratch test
+// that confirmed it against the pre-fix parser). With per-process files,
+// what would have been one interleaved file is physically two independent
+// files instead -- so the equivalent pin is: parse each file's text on its
+// own, and confirm neither session contaminates or closes the other, even
+// though B's open genuinely happened, in wall-clock time, before A's close.
+TEST(JournalReader, TwoIndependentJournalFilesAreReadAsTwoIndependentSessionSetsAndNeitherClosesTheOther) {
+    // What process A's own file contains: A opens, writes twice (the second
+    // write happens temporally *after* B has already opened, in real time --
+    // but that fact left no mark in A's file, because B never touched it).
+    const std::string fileAText =
+        R"({"kind":"session","event":"open","t":1000})" "\n"
+        R"({"kind":"record","seq":1,"t":1001,"sev":"error","tag":"A","msg":"a1"})" "\n"
+        R"({"kind":"record","seq":2,"t":1003,"sev":"error","tag":"A","msg":"a2"})" "\n"
+        R"({"kind":"session","event":"close","t":1005})" "\n";
+
+    // What process B's own file contains: B opens while A is still open (in
+    // wall-clock time), writes once, and closes before A does.
+    const std::string fileBText =
+        R"({"kind":"session","event":"open","t":1002})" "\n"
+        R"({"kind":"record","seq":1,"t":1004,"sev":"warn","tag":"B","msg":"b1"})" "\n"
+        R"({"kind":"session","event":"close","t":1006})" "\n";
+
+    const std::vector<maro::JournalSession> sessionsA = maro::parseJournal(fileAText);
+    const std::vector<maro::JournalSession> sessionsB = maro::parseJournal(fileBText);
+
+    ASSERT_EQ(sessionsA.size(), 1u);
+    EXPECT_TRUE(sessionsA[0].endedCleanly)
+        << "A's own close, recorded only in A's file, must close A";
+    ASSERT_EQ(sessionsA[0].records.size(), 2u)
+        << "both of A's records stay in A -- B's file has no way to steal them";
+    EXPECT_EQ(sessionsA[0].records[0].siteTag, "A");
+    EXPECT_EQ(sessionsA[0].records[1].siteTag, "A");
+
+    ASSERT_EQ(sessionsB.size(), 1u);
+    EXPECT_TRUE(sessionsB[0].endedCleanly);
+    ASSERT_EQ(sessionsB[0].records.size(), 1u);
+    EXPECT_EQ(sessionsB[0].records[0].siteTag, "B");
+
+    // The crash-adjacency observation, merged, must show both sessions
+    // ended cleanly -- zero abnormal sessions, nothing crash-adjacent.
+    maro::CrashAdjacency adjacency;
+    maro::mergeCrashAdjacency(adjacency, maro::countCrashAdjacentTags(sessionsA));
+    maro::mergeCrashAdjacency(adjacency, maro::countCrashAdjacentTags(sessionsB));
+    EXPECT_EQ(adjacency.abnormalSessionCount, 0u)
+        << "neither process crashed, and neither's file can fabricate the other's crash";
+}

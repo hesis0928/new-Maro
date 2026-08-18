@@ -163,6 +163,13 @@ private:
     static std::vector<DiagRecord>& stream();
     static std::mutex& mutex();
 
+    // 리뷰 Finding I1: info/warn/devInfo/error 네 진입점이 공유하는 마지막
+    // 동작 -- 순번 배정 + 스트림 삽입 + 저널 기록 -- 을 한 곳에 모은다.
+    // 이 함수는 절대 던지지 않는다(내부에서 전부 삼킨다): 호출자는 정확히
+    // "여기서 새면 Maya가 죽는다"는 catch(...) 블록들(MaroDeleteWatcher.cpp,
+    // MaroAxisNode.cpp)이거나 uninitializePlugin의 마지막 info() 호출이다.
+    static void pushAndJournal(DiagRecord&& rec);
+
     // book 뮤텍스와 그것이 지키는 세션 캐시. 캐시는 "이 세션에서 이미 book에
     // 있다고 확인된 해시 -> 항목"만 담는다(Finding M3). 아직 book에 없는
     // (미스인) 해시는 캐시하지 않는다 -- 그래야 book이 쓰기 불가능한 동안의

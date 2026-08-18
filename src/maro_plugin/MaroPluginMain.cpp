@@ -14,6 +14,18 @@
 namespace {
 constexpr char kVendor[] = "Maro";
 constexpr char kVersion[] = "0.1.0";
+
+// 리뷰 Finding I1: uninitializePlugin은 이 파일 어디에도 try/catch가 없다.
+// 그 안에서 뭔가(가장 눈에 띄는 것은 맨 마지막의 BoadMaro::info() 호출, 다만
+// 이제 그 자체는 절대 던지지 않는다 -- MaroDiag.cpp의 pushAndJournal 참고)가
+// 던지면, closeJournal()이 아예 안 돈다 -- 다음 세션은 이번 세션이 정상
+// 종료했는데도 close 줄이 없다는 이유로 크래시로 오판한다(예외 자체가 Maya
+// 언로드 콜백 경계를 넘는 것과는 별개의, 그러나 겹쳐서 나쁜 결과다). 이
+// 가드는 지역 객체이므로, 아래 uninitializePlugin이 정상 반환하든 예외로
+// 스택이 되감기든 소멸자가 항상 불려 closeJournal()을 보장한다.
+struct JournalCloseGuard {
+    ~JournalCloseGuard() { maro::BoadMaro::closeJournal(); }
+};
 }  // namespace
 
 MStatus initializePlugin(MObject obj) {
@@ -227,54 +239,76 @@ MStatus initializePlugin(MObject obj) {
 }
 
 MStatus uninitializePlugin(MObject obj) {
-    MFnPlugin plugin(obj);
+    // 리뷰 Finding I1: 이 함수가 무엇을 하든(그 밑의 모든 deregisterX 호출,
+    // executeCommand, 맨 아래의 info() 호출) closeJournal()은 반드시 돈다 --
+    // 이 지역 객체는 아래에서 정상 반환이 나든 catch(...)로 되감기든 함수를
+    // 빠져나가는 순간 항상 소멸자가 불린다. closeJournal()을 이 함수 끝에서
+    // 직접 부르는 대신 이 가드 하나로 옮긴 이유가 그것이다.
+    // 리뷰 Finding I1: 이 함수가 무엇을 하든(그 밑의 모든 deregisterX 호출,
+    // executeCommand, 맨 아래의 info() 호출) closeJournal()은 반드시 돈다 --
+    // 이 지역 객체는 아래에서 정상 반환이 나든 catch(...)로 되감기든 함수를
+    // 빠져나가는 순간 항상 소멸자가 불린다. closeJournal()을 이 함수 끝에서
+    // 직접 부르는 대신 이 가드 하나로 옮긴 이유가 그것이다.
+    const JournalCloseGuard closeJournalOnExit;
 
-    maro::shutdownBridge();
-    maro::MaroDeleteWatcher::uninstall();
+    try {
+        MFnPlugin plugin(obj);
 
-    // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
-    // devkit의 workspaceControlCmd 샘플이 같은 이유로 같은 일을 한다.
-    MGlobal::executeCommand(
-        "if (`workspaceControl -exists maroDiagPanelControl`) "
-        "workspaceControl -e -close maroDiagPanelControl;");
-    plugin.deregisterCommand("maroDiagPanel");
+        maro::shutdownBridge();
+        maro::MaroDeleteWatcher::uninstall();
 
-    plugin.deregisterCommand("maroDiagPanelDetail");
-    plugin.deregisterCommand("maroDiagPanelRows");
+        // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
+        // devkit의 workspaceControlCmd 샘플이 같은 이유로 같은 일을 한다.
+        MGlobal::executeCommand(
+            "if (`workspaceControl -exists maroDiagPanelControl`) "
+            "workspaceControl -e -close maroDiagPanelControl;");
+        plugin.deregisterCommand("maroDiagPanel");
 
-    plugin.deregisterCommand("maroJournalCrashAdjacentTags");
-    plugin.deregisterCommand("maroJournalAbnormalSessions");
+        plugin.deregisterCommand("maroDiagPanelDetail");
+        plugin.deregisterCommand("maroDiagPanelRows");
 
-    plugin.deregisterCommand("maroDiagEmitMarked");
-    plugin.deregisterCommand("maroDiagRegisterRemedy");
-    plugin.deregisterCommand("maroDiagAnalysisCount");
-    plugin.deregisterCommand("maroDiagQuery");
-    plugin.deregisterCommand("maroDiagCount");
-    plugin.deregisterCommand("maroDiagEmitFromThread");
-    plugin.deregisterCommand("maroDiagEmit");
+        plugin.deregisterCommand("maroJournalCrashAdjacentTags");
+        plugin.deregisterCommand("maroJournalAbnormalSessions");
 
-    plugin.deregisterCommand("maroBridgeStats");
-    plugin.deregisterCommand("maroStopBridge");
-    plugin.deregisterCommand("maroStartBridge");
-    plugin.deregisterCommand("maroConnectAxis");
-    plugin.deregisterCommand("maroSetControlMode");
-    plugin.deregisterCommand("maroBindAxis");
+        plugin.deregisterCommand("maroDiagEmitMarked");
+        plugin.deregisterCommand("maroDiagRegisterRemedy");
+        plugin.deregisterCommand("maroDiagAnalysisCount");
+        plugin.deregisterCommand("maroDiagQuery");
+        plugin.deregisterCommand("maroDiagCount");
+        plugin.deregisterCommand("maroDiagEmitFromThread");
+        plugin.deregisterCommand("maroDiagEmit");
 
-    plugin.deregisterNode(maro::MaroCommandDeviceNode::id);
-    plugin.deregisterNode(maro::MaroSensorRangeNode::id);
-    plugin.deregisterNode(maro::MaroSensorDirectionNode::id);
-    plugin.deregisterNode(maro::MaroLimitNode::id);
-    plugin.deregisterNode(maro::MaroRotationNode::id);
+        plugin.deregisterCommand("maroBridgeStats");
+        plugin.deregisterCommand("maroStopBridge");
+        plugin.deregisterCommand("maroStartBridge");
+        plugin.deregisterCommand("maroConnectAxis");
+        plugin.deregisterCommand("maroSetControlMode");
+        plugin.deregisterCommand("maroBindAxis");
 
-    MStatus status = plugin.deregisterNode(maro::MaroAxisNode::id);
-    if (!status) {
-        status.perror("Maro: failed to deregister maroAxis");
+        plugin.deregisterNode(maro::MaroCommandDeviceNode::id);
+        plugin.deregisterNode(maro::MaroSensorRangeNode::id);
+        plugin.deregisterNode(maro::MaroSensorDirectionNode::id);
+        plugin.deregisterNode(maro::MaroLimitNode::id);
+        plugin.deregisterNode(maro::MaroRotationNode::id);
+
+        MStatus status = plugin.deregisterNode(maro::MaroAxisNode::id);
+        if (!status) {
+            status.perror("Maro: failed to deregister maroAxis");
+        }
+
+        // closeJournal()은 여기서 직접 부르지 않는다 -- 위 closeJournalOnExit
+        // 가드가 이 함수를 벗어나는 순간(정상 반환이든 아래 catch로의 되감김
+        // 이든) 항상 부른다.
+        maro::BoadMaro::info("Maro: plugin unloaded.");
+        // closeJournal()은 여기서 직접 부르지 않는다 -- 위 closeJournalOnExit
+        // 가드가 이 함수를 벗어나는 순간(정상 반환이든 아래 catch로의 되감김
+        // 이든) 항상 부른다.
+        return status;
+    } catch (...) {
+        // 리뷰 Finding I1: 예외가 이 언로드 콜백 경계를 넘으면 안 된다
+        // ("Maya 콜백에서 예외가 새면 안 된다"는 이 프로젝트 전역 규율).
+        // 여기서 삼키고 실패를 알린다 -- closeJournalOnExit는 이 함수가
+        // (이 catch를 거쳐) 반환하는 순간 자기 소멸자를 통해 저널을 닫는다.
+        return MS::kFailure;
     }
-
-    maro::BoadMaro::info("Maro: plugin unloaded.");
-
-    // 맨 마지막에 닫는다. 이 줄이 저널에 남아야 다음 실행이 "이 세션은
-    // 정상적으로 끝났다"를 안다 -- 없으면 비정상 종료로 판정된다.
-    maro::BoadMaro::closeJournal();
-    return status;
 }

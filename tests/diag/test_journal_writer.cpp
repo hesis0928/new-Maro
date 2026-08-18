@@ -1,15 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include "maro_diag/DiagRecord.h"
 #include "maro_diag/Journal.h"
+#include "maro_diag/JournalReader.h"
 #include "maro_diag/JournalWriter.h"
 
 namespace {
@@ -377,6 +380,60 @@ TEST(JournalWriter, SweepFlushesPendingSuppressedCountBeforeDroppingAStaleEntry)
         << "exactly one write beyond victim's budget of 5 was suppressed";
 }
 
+// Finding I2 -- 창이 아직 열린 채로 세션이 끝나면, 그 창의 억제 카운트는
+// 그 뒤로 flush될 기회가 다시는 오지 않는다(같은 키로 더 쓰지 않으니, 그리고
+// 창이 열려 있으니 sweepStaleBudgets도 손대지 않는다). 그런데 그 마지막
+// 창이야말로 크래시 직전 1초일 수 있다. writeSessionClose()는 close 줄을
+// 쓰기 전에 남은 모든 억제 카운트를 흘려야 한다 -- 뒤따르는 레코드가 전혀
+// 없어도.
+TEST(JournalWriter, ClosingTheSessionFlushesAPendingSuppressedCountWithNoFollowUpWrite) {
+    const std::filesystem::path dir = freshDir("close_flushes_suppressed");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    maro::JournalWriter writer(file);
+    writer.writeSessionOpen(1000);
+    // 예산(5)을 넘겨 같은 창 안에서 8번 쓴다, 그리고 곧바로 닫는다 --
+    // 같은 태그로 뒤따르는 쓰기가 전혀 없다.
+    for (std::uint64_t i = 0; i < 8; ++i) {
+        writer.writeRecord(i + 1, 1000 + i, maro::DiagSeverity::Warn, "Site.Burst", "burst");
+    }
+    writer.writeSessionClose(1500);
+
+    // writer가 아직 살아 있는 동안(소멸자가 돌기 전에) 확인한다 -- 소멸자도
+    // 같은 것을 보장하므로(아래 destructor 테스트), writer를 먼저 스코프
+    // 밖으로 내보내고 나서 읽으면 이 단언이 close() 자신의 flush가 아니라
+    // 소멸자의 안전망 덕에 우연히 통과할 수 있다.
+    const std::string text = readAll(file);
+    EXPECT_NE(text.find("\"kind\":\"suppressed\""), std::string::npos)
+        << "the pending count from a burst still inside its window must not be "
+           "lost just because the session closed before another write could flush it";
+    EXPECT_NE(text.find("\"count\":3"), std::string::npos)
+        << "8 writes against a budget of 5 leaves 3 suppressed";
+}
+
+// Finding I2 -- 소멸자도 같은 것을 보장해야 한다. writeSessionClose()를 한
+// 번도 부르지 않고(예: 플러그인이 언로드 없이 재로드되어 이전 writer가
+// 스코프를 벗어나는 경우) writer가 소멸되어도, 밀린 억제 카운트를 잃으면
+// 안 된다.
+TEST(JournalWriter, DestructorFlushesAPendingSuppressedCountEvenWithoutAnExplicitClose) {
+    const std::filesystem::path dir = freshDir("destructor_flushes_suppressed");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        writer.writeSessionOpen(1000);
+        for (std::uint64_t i = 0; i < 8; ++i) {
+            writer.writeRecord(i + 1, 1000 + i, maro::DiagSeverity::Warn, "Site.Burst", "burst");
+        }
+        // No writeSessionClose() call -- the writer is destroyed here
+        // (simulating a reload without an orderly unload).
+    }
+
+    const std::string text = readAll(file);
+    EXPECT_NE(text.find("\"kind\":\"suppressed\""), std::string::npos)
+        << "even without an explicit close, the destructor must not lose a "
+           "pending suppressed count";
+    EXPECT_NE(text.find("\"count\":3"), std::string::npos);
+}
+
 // 회전은 최근 N 세션만 남긴다. 오래된 세션이 통째로 사라지고 최근 것은
 // 온전히 남아야 한다.
 TEST(JournalWriter, RotateKeepsOnlyTheMostRecentSessions) {
@@ -432,4 +489,135 @@ TEST(JournalWriter, RotateOnAMissingFileIsHarmless) {
     const std::filesystem::path file = dir / "journal.jsonl";
     maro::JournalWriter::rotate(file);
     SUCCEED() << "rotating a journal that does not exist must not throw";
+}
+
+// Finding C1 -- 두 프로세스가 파일 하나를 공유하면, 위치 기반 세션 경계
+// (open 줄이 곧 경계)가 동시 쓰기 아래서 깨진다: 먼저 연 세션의 close가
+// 나중에 연 세션에 붙어 버리고, 그 사이에 낀 레코드도 엉뚱한 세션의 꼬리로
+// 집계된다. 고른 해법은 프로세스마다 자기 파일을 쓰는 것이다 -- pid가
+// 다르면 파일도 항상 다르므로 애초에 같은 파일에 동시에 쓸 수 없고, 그래서
+// 한 파일 안에서는 "쓰는 이가 하나"라는 rotate()/parseJournal의 원래 전제가
+// 다시 정확히 성립한다.
+//
+// 이 테스트는 시간상으로는 두 "프로세스"(A, B)가 겹치도록 호출을 섞는다 --
+// B가 A보다 먼저 열리고, A의 close가 B가 이미 연 뒤에야 온다. 파일이
+// 같았다면 이것이 정확히 finding이 설명하는 실패 모양이다. pathForProcess로
+// 서로 다른 pid를 주면, 그 겹침은 각자의 파일 안에 흔적조차 남지 않는다.
+TEST(JournalWriter, TwoProcessesGetIndependentJournalFilesAndNeitherClosesTheOthers) {
+    const std::filesystem::path dir = freshDir("two_process");
+    const std::filesystem::path pathA = maro::JournalWriter::pathForProcess(dir, 1111);
+    const std::filesystem::path pathB = maro::JournalWriter::pathForProcess(dir, 2222);
+    ASSERT_NE(pathA, pathB) << "different processes must never share a journal file";
+
+    {
+        maro::JournalWriter writerA(pathA);
+        maro::JournalWriter writerB(pathB);
+        ASSERT_TRUE(writerA.isOpen());
+        ASSERT_TRUE(writerB.isOpen());
+
+        writerA.writeSessionOpen(1000);
+        writerA.writeRecord(1, 1001, maro::DiagSeverity::Error, "Site.A", "a1");
+        writerB.writeSessionOpen(1002);   // B opens while A is still open
+        writerA.writeRecord(2, 1003, maro::DiagSeverity::Error, "Site.A", "a2");
+        writerB.writeRecord(3, 1004, maro::DiagSeverity::Warn, "Site.B", "b1");
+        writerA.writeSessionClose(1005);  // A's own close, temporally after B opened
+        writerB.writeSessionClose(1006);
+    }
+
+    const std::vector<maro::JournalSession> sessionsA = maro::parseJournal(readAll(pathA));
+    const std::vector<maro::JournalSession> sessionsB = maro::parseJournal(readAll(pathB));
+
+    ASSERT_EQ(sessionsA.size(), 1u);
+    EXPECT_TRUE(sessionsA[0].endedCleanly)
+        << "A's own close must close A -- it must not be lost because B's "
+           "session opened while A was still active";
+    ASSERT_EQ(sessionsA[0].records.size(), 2u)
+        << "both of A's records belong to A, none stolen by B's file";
+    EXPECT_EQ(sessionsA[0].records[0].siteTag, "Site.A");
+    EXPECT_EQ(sessionsA[0].records[1].siteTag, "Site.A");
+
+    ASSERT_EQ(sessionsB.size(), 1u);
+    EXPECT_TRUE(sessionsB[0].endedCleanly);
+    ASSERT_EQ(sessionsB[0].records.size(), 1u);
+    EXPECT_EQ(sessionsB[0].records[0].siteTag, "Site.B");
+}
+
+// 같은 시나리오지만 A가 실제로 크래시한다(close를 쓰지 않는다). 두 프로세스가
+// 파일을 나눠 가지므로 B의 open/record/close는 A의 파일에 글자 한 자도
+// 남기지 않는다 -- A는 정확히 A 자신의 꼬리로 비정상 종료 판정을 받는다.
+TEST(JournalWriter, OneProcessCrashingDoesNotContaminateOrCloseTheOtherProcess) {
+    const std::filesystem::path dir = freshDir("two_process_crash");
+    const std::filesystem::path pathA = maro::JournalWriter::pathForProcess(dir, 3333);
+    const std::filesystem::path pathB = maro::JournalWriter::pathForProcess(dir, 4444);
+
+    {
+        maro::JournalWriter writerA(pathA);
+        maro::JournalWriter writerB(pathB);
+
+        writerA.writeSessionOpen(1000);
+        writerA.writeRecord(1, 1001, maro::DiagSeverity::Error, "Site.Crash", "about to die");
+        writerB.writeSessionOpen(1002);
+        writerB.writeRecord(2, 1003, maro::DiagSeverity::Warn, "Site.B", "b1");
+        writerB.writeSessionClose(1004);
+        // A never calls writeSessionClose() -- it "crashes" here.
+    }
+
+    const std::vector<maro::JournalSession> sessionsA = maro::parseJournal(readAll(pathA));
+    const std::vector<maro::JournalSession> sessionsB = maro::parseJournal(readAll(pathB));
+
+    ASSERT_EQ(sessionsA.size(), 1u);
+    EXPECT_FALSE(sessionsA[0].endedCleanly) << "A really did crash -- this verdict is correct";
+    ASSERT_EQ(sessionsA[0].records.size(), 1u);
+    EXPECT_EQ(sessionsA[0].records[0].siteTag, "Site.Crash");
+
+    ASSERT_EQ(sessionsB.size(), 1u);
+    EXPECT_TRUE(sessionsB[0].endedCleanly)
+        << "B closed cleanly and must not be dragged into A's crash";
+}
+
+// Finding C1 -- 파일을 나눴다고 예전의 "보관 한도 10세션"이 "파일마다
+// 10세션"으로 불어나면 전체 보관량은 더 이상 유계가 아니다. rotateAll은
+// 디렉터리 전체에 걸쳐 총 세션 수를 다시 한도로 되돌려야 한다: 세션 하나짜리
+// 파일이 한도보다 많이 쌓이면, 가장 오래된(마지막 수정이 가장 이른) 파일부터
+// 통째로 지워져야 한다.
+TEST(JournalWriter, RotateAllBoundsTheTotalSessionCountAcrossManyProcessFiles) {
+    const std::filesystem::path dir = freshDir("rotate_all");
+
+    // 보관 한도보다 5개 많은 "프로세스"를 만든다. 각자 세션 하나, 레코드
+    // 하나짜리 파일.
+    const std::size_t totalFiles = maro::kJournalSessionsKept + 5;
+    for (std::size_t i = 0; i < totalFiles; ++i) {
+        const std::filesystem::path p = maro::JournalWriter::pathForProcess(dir, 10000 + i);
+        maro::JournalWriter writer(p);
+        writer.writeSessionOpen(1000);
+        writer.writeRecord(1, 1001, maro::DiagSeverity::Error,
+                            "Site.P" + std::to_string(i), "marker");
+        writer.writeSessionClose(1002);
+        // 파일마다 서로 다른 마지막 수정 시각을 갖도록 순서대로 만든다 --
+        // Windows의 기본 시스템 타이머 해상도(~15.6ms)보다 넉넉히 긴 간격을
+        // 둬서 mtime이 뒤섞이지 않게 한다.
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+
+    maro::JournalWriter::rotateAll(dir);
+
+    const std::vector<std::filesystem::path> remaining = maro::JournalWriter::listJournalFiles(dir);
+    EXPECT_EQ(remaining.size(), maro::kJournalSessionsKept)
+        << "the total footprint across all per-process files must stay bounded, "
+           "not grow with the number of files";
+
+    // 가장 최근에 만든 파일들이 살아남아야 한다.
+    bool newestSurvived = false;
+    bool oldestGone = true;
+    for (const std::filesystem::path& p : remaining) {
+        const std::string text = readAll(p);
+        if (text.find("Site.P" + std::to_string(totalFiles - 1)) != std::string::npos) {
+            newestSurvived = true;
+        }
+        if (text.find("Site.P0\"") != std::string::npos) {
+            oldestGone = false;
+        }
+    }
+    EXPECT_TRUE(newestSurvived) << "the most recently written process's journal must survive";
+    EXPECT_TRUE(oldestGone) << "the oldest process's journal must be the one dropped";
 }

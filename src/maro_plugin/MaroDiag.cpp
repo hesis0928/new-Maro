@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <process.h>  // _getpid() -- Finding C1, see currentProcessId() below
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -47,21 +48,23 @@ CrashAdjacency& crashAdjacencyStorage() {
 
 // 레코드 하나를 저널에 흘린다. 실패해도 조용하다.
 //
-// rec.siteTag를 그대로 쓴다 -- rec.errorHash가 아니다: errorHash는
+// 리뷰 Finding I1: DiagRecord 전체(문자열 7개 + DgContext)가 아니라
+// writeRecord()가 실제로 쓰는 다섯 필드만 받는다 -- 저널에 안 실리는
+// context/remedy/priorAnalysis/servedFromBook/errorHash까지 통째로 복사할
+// 이유가 없고, 문자열 복사가 늘수록 이 뒤에 이어지는 catch(...)들이 지키려는
+// "여기서는 절대 안 던진다"는 약속의 표면적도 늘어난다.
+//
+// siteTag는 호출부가 errorHash가 아니라 원문 태그를 넘겨야 한다: errorHash는
 // hashError()가 만든 16자리 16진수 다이제스트이지 사이트 태그 원문이 아니다
 // (ErrorHash.cpp 참고, book의 JSON 키로 쓰기 좋으라고 일부러 그렇게 만든
 // 값이다). 저널의 "tag" 필드는 JournalReader::countCrashAdjacentTags를 거쳐
 // maroJournalCrashAdjacentTags가 사용자에게 그대로 돌려주는 값이므로, 여기에
 // 다이제스트를 넣으면 사용자가 읽을 수 없는 16진수 문자열만 보게 된다.
-// error()가 이미 rec.siteTag에 원문을 채워 두므로(DiagRecord.h 계약) 별도
-// 인자로 다시 받을 필요가 없다. info/warn/devInfo는 사이트 태그 개념이
-// 없으므로 rec.siteTag가 항상 빈 채로 남는다(기존 동작과 동일 -- writeRecord는
-// 빈 태그를 심각도+메시지 첫 줄 키로 대체한다).
-void journalRecord(const DiagRecord& rec) {
+void journalRecord(std::uint64_t sequence, std::uint64_t timestampMs, DiagSeverity severity,
+                    const std::string& siteTag, const std::string& message) {
     std::lock_guard<std::mutex> lock(journalMutex());
     if (!journalWriter()) return;
-    journalWriter()->writeRecord(rec.sequence, rec.timestampMs, rec.severity, rec.siteTag,
-                                  rec.message);
+    journalWriter()->writeRecord(sequence, timestampMs, severity, siteTag, message);
 }
 
 std::uint64_t nowMs() {
@@ -150,8 +153,20 @@ const BookPaths& bookPaths() {
 // bookPaths()가 여기서 처음으로 완전한 타입으로 나타나므로(BookPaths 구조체가
 // 바로 위에서 정의됨), 이 함수는 g_nextSequence 근처가 아니라 여기 둔다 --
 // 그 자리에 두면 .canonical 멤버 접근이 미완성 타입을 참조해 컴파일이 안 된다.
-std::filesystem::path journalPath() {
-    return bookPaths().canonical.parent_path() / "maro_journal.jsonl";
+std::filesystem::path journalDirectory() {
+    return bookPaths().canonical.parent_path();
+}
+
+// 리뷰 Finding C1: 이 프로세스의 OS 프로세스 id. JournalWriter::pathForProcess의
+// 인자로 쓰여, 이 프로세스가 다른 Maya/mayapy 프로세스와 저널 파일을 절대
+// 공유하지 않게 한다(같은 파일 하나를 두 프로세스가 동시에 append하면
+// open/close 줄의 위치 기반 세션 경계가 깨진다 -- Journal.h 주석 참고).
+// GetCurrentProcessId()가 아니라 _getpid()를 쓰는 이유는 이 파일이 이미
+// <maya/MGlobal.h>를 통해 무엇이 windows.h를 끌어오는지 제어할 수 없어서다
+// -- <process.h>의 _getpid()는 MSVC CRT 표준 헤더이고 내부적으로 같은 값을
+// 돌려주면서도 NOMINMAX류의 매크로 오염 걱정이 없다.
+std::uint64_t currentProcessId() {
+    return static_cast<std::uint64_t>(_getpid());
 }
 
 // book(스필)에 쓰기가 실패했을 때 한 번만 warn()으로 알린다. warn()은 자체
@@ -223,6 +238,42 @@ std::unordered_map<std::string, BookEntry>& BoadMaro::bookCache() {
     return s_bookCache;
 }
 
+// 리뷰 Finding I1: 예전에는 이 블록(락+삽입+저널 기록)이 info/warn/devInfo/
+// error 네 곳에 그대로 복사되어 있었고, 그중 어느 하나도 try/catch로 감싸지
+// 않았다. 그런데 이 함수가 반환한 뒤가 정확히 "여기서 새면 Maya가 죽는다"는
+// catch(...) 블록들이 있는 자리다 -- MaroDeleteWatcher.cpp의 onNodeAdded/
+// onObjectAboutToDelete/onAxisAboutToDelete, MaroAxisNode.cpp의 compute()가
+// 전부 그 catch(...) 안에서 error()를 부른다. uninitializePlugin의 마지막
+// info() 호출도 마찬가지다 -- 거기서 새면 그 아래의 closeJournal()도 결국
+// 못 돈다(MaroPluginMain.cpp의 JournalCloseGuard가 그 경로는 따로 보강한다).
+// 그래서 이 함수는 절대 던지지 않는다: 내부에서 전부 삼킨다.
+void BoadMaro::pushAndJournal(DiagRecord&& rec) {
+    try {
+        std::uint64_t sequence = 0;
+        std::uint64_t timestampMs = 0;
+        const DiagSeverity severity = rec.severity;
+        std::string siteTag;
+        std::string message;
+        {
+            std::lock_guard<std::mutex> lock(mutex());
+            assignSequenceAndPush(std::move(rec), stream());
+            // 리뷰 Finding I1: stream().back()을 DiagRecord 하나로 통째로
+            // 복사(문자열 7개 + DgContext)하는 대신, 저널이 실제로 쓰는
+            // 다섯 필드만 뽑아 락 스코프 안에서 지역 변수에 담는다 -- 더
+            // 싸기도 하고, compute()의 워커 스레드 경로에서 벌어지는 문자열
+            // 복사 자체가 줄어든다.
+            const DiagRecord& back = stream().back();
+            sequence = back.sequence;
+            timestampMs = back.timestampMs;
+            siteTag = back.siteTag;
+            message = back.message;
+        }
+        journalRecord(sequence, timestampMs, severity, siteTag, message);
+    } catch (...) {
+        // 저널 꼬리는 절대 호출자까지 새면 안 된다 -- 위 주석 참고.
+    }
+}
+
 void BoadMaro::info(const MString& message) {
     DiagRecord rec;
     stampTimestamp(rec);
@@ -233,13 +284,7 @@ void BoadMaro::info(const MString& message) {
     if (isMainThread()) {
         MGlobal::displayInfo(MString("[Maro-Info] ") + message);
     }
-    DiagRecord journalCopy;
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        assignSequenceAndPush(std::move(rec), stream());
-        journalCopy = stream().back();
-    }
-    journalRecord(journalCopy);
+    pushAndJournal(std::move(rec));
 }
 
 void BoadMaro::warn(const MString& message) {
@@ -250,13 +295,7 @@ void BoadMaro::warn(const MString& message) {
     if (isMainThread()) {
         MGlobal::displayWarning(MString("[Maro-Warn] ") + message);
     }
-    DiagRecord journalCopy;
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        assignSequenceAndPush(std::move(rec), stream());
-        journalCopy = stream().back();
-    }
-    journalRecord(journalCopy);
+    pushAndJournal(std::move(rec));
 }
 
 void BoadMaro::devInfo(const MString& message) {
@@ -268,13 +307,7 @@ void BoadMaro::devInfo(const MString& message) {
     if (isMainThread()) {
         MGlobal::displayInfo(MString("[Maro-Dev] ") + message);
     }
-    DiagRecord journalCopy;
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        assignSequenceAndPush(std::move(rec), stream());
-        journalCopy = stream().back();
-    }
-    journalRecord(journalCopy);
+    pushAndJournal(std::move(rec));
 #else
     (void)message;
 #endif
@@ -459,15 +492,14 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
             MGlobal::displayInfo(MString("[Maro-Fix] ") + MString(rec.remedy.c_str()));
         }
     }
-    DiagRecord journalCopy;
-    {
-        std::lock_guard<std::mutex> lock(mutex());
-        assignSequenceAndPush(std::move(rec), stream());
-        journalCopy = stream().back();
-    }
-    // journalCopy.siteTag는 위에서 이미 원문으로 채워져 있다 -- journalRecord()가
-    // 그것을 그대로 쓴다(위 journalRecord() 주석 참고).
-    journalRecord(journalCopy);
+    // 리뷰 Finding I1: 이 함수의 위쪽 try/catch는 book 조회/기록만 감쌌다 --
+    // 여기, 순번 배정+삽입+저널 기록은 그 catch 밖이었다. pushAndJournal이
+    // 이제 이 꼬리 전체를 스스로 삼킨다(그 안의 siteTag는 위에서 이미
+    // rec.siteTag에 원문으로 채워져 있다 -- journalRecord()가 그것을 그대로
+    // 쓴다, 위 journalRecord() 주석 참고). 이 함수를 부르는 자리들이 바로
+    // "여기서 새면 Maya가 죽는다"는 catch(...) 블록들이다(MaroDeleteWatcher.cpp,
+    // MaroAxisNode.cpp).
+    pushAndJournal(std::move(rec));
 }
 
 std::size_t BoadMaro::freshAnalysisCount() { return g_freshAnalysisCount.load(); }
@@ -584,20 +616,34 @@ void BoadMaro::resetForTest() {
 
 void BoadMaro::openJournal() {
     try {
-        const std::filesystem::path path = journalPath();
+        // 리뷰 Finding C1: 이 프로세스는 자기 자신의 저널 파일에만 쓴다 --
+        // 다른 Maya/mayapy 프로세스와 파일을 공유하면 open/close 줄의 위치
+        // 기반 세션 경계가 동시 쓰기 아래서 깨진다(Journal.h 주석 참고).
+        const std::filesystem::path directory = journalDirectory();
+        const std::filesystem::path path = JournalWriter::pathForProcess(directory,
+                                                                           currentProcessId());
 
-        // 이번 세션의 open 줄을 쓰기 **전에** 회전한다 -- 그래야 보관
-        // 한도가 "지난 N 세션"을 뜻하고 이번 세션이 그 한도를 잡아먹지 않는다.
-        JournalWriter::rotate(path);
+        // 이번 세션의 open 줄을 쓰기 **전에**, 그리고 이 디렉터리의 다른
+        // 프로세스 파일까지 포함해 전체를 회전한다 -- 파일을 나눴다고 예전의
+        // "보관 한도 10세션"이 파일마다 10세션으로 불어나면 안 된다
+        // (JournalWriter::rotateAll 주석 참고).
+        JournalWriter::rotateAll(directory);
 
-        // 회전 뒤의 저널을 읽어 지난 세션들의 관측을 만들어 둔다. 이후로는
-        // 이 값이 바뀌지 않는다 -- 이번 세션은 아직 끝나지 않았으므로
-        // 비정상인지 정상인지 판정할 수 없다.
+        // 회전 뒤 남은 모든 프로세스별 저널 파일을 읽어 지난 세션들의
+        // 관측을 만들어 둔다. 이후로는 이 값이 바뀌지 않는다 -- 이번 세션은
+        // 아직 끝나지 않았으므로 비정상인지 정상인지 판정할 수 없다. 파일
+        // 하나하나는 "쓰는 이가 하나"라는 전제 위에서 정확하므로, 파일들에
+        // 걸친 관측은 단순히 더한다(mergeCrashAdjacency).
         {
-            std::ifstream in(path, std::ios::binary);
-            std::ostringstream ss;
-            ss << in.rdbuf();
-            crashAdjacencyStorage() = countCrashAdjacentTags(parseJournal(ss.str()));
+            CrashAdjacency aggregate;
+            for (const std::filesystem::path& journalFile :
+                 JournalWriter::listJournalFiles(directory)) {
+                std::ifstream in(journalFile, std::ios::binary);
+                std::ostringstream ss;
+                ss << in.rdbuf();
+                mergeCrashAdjacency(aggregate, countCrashAdjacentTags(parseJournal(ss.str())));
+            }
+            crashAdjacencyStorage() = aggregate;
         }
 
         std::lock_guard<std::mutex> lock(journalMutex());

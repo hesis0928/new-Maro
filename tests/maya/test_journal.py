@@ -9,6 +9,7 @@
 좀비 mayapy.exe 방지: subprocess.run(timeout=...)은 타임아웃 시 자식을
 kill()하고 wait()까지 마친 뒤에야 예외를 던진다 -- 각 세션 호출을 그 경계
 안에 두는 것만으로 무한 대기도, 죽은 자식이 남는 것도 막힌다."""
+import glob
 import os
 import subprocess
 import sys
@@ -33,8 +34,15 @@ def run_session(label, env):
     return completed.returncode, completed.stdout
 
 
-def journal_path(bookDir):
-    return os.path.join(bookDir, "maro_journal.jsonl")
+def journal_paths(bookDir):
+    # Finding C1: each process now writes its own "maro_journal.<pid>.jsonl"
+    # file (MaroDiag.cpp's currentProcessId()/JournalWriter::pathForProcess)
+    # instead of one shared "maro_journal.jsonl" -- sharing a single file
+    # across processes let one process's session boundary get corrupted by
+    # another's interleaved writes. This directory is fresh per ctest
+    # invocation (MARO_TEST_BOOK_ROOT), so any per-process file found here
+    # belongs to one of this test's own mayapy subprocesses.
+    return sorted(glob.glob(os.path.join(bookDir, "maro_journal.*.jsonl")))
 
 
 def orchestrate():
@@ -46,8 +54,11 @@ def orchestrate():
     print(out1)
     assert rc1 != 0, "session 1 is supposed to die abnormally, not exit cleanly"
 
-    path = journal_path(bookDir)
-    assert os.path.exists(path), f"expected a journal at {path}"
+    paths = journal_paths(bookDir)
+    assert len(paths) == 1, (
+        f"expected exactly one per-process journal after session 1, found {paths}"
+    )
+    path = paths[0]
     with open(path, encoding="utf-8") as f:
         text = f.read()
     assert "MaroBindAxisCommand.TargetNotTransform" in text, (

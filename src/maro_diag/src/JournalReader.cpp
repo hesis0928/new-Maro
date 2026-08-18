@@ -88,4 +88,11 @@ CrashAdjacency countCrashAdjacentTags(const std::vector<JournalSession>& session
     return adjacency;
 }
 
+void mergeCrashAdjacency(CrashAdjacency& target, const CrashAdjacency& addition) {
+    target.abnormalSessionCount += addition.abnormalSessionCount;
+    for (const auto& [tag, count] : addition.appearancesByTag) {
+        target.appearancesByTag[tag] += count;
+    }
+}
+
 }  // namespace maro

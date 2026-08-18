@@ -11,6 +11,21 @@ namespace maro {
 // 저널 한 줄의 종류. 세션 id는 두지 않는다 -- 세션의 경계는 open 줄 자체이고
 // 세션은 close 줄이나 다음 open 줄에서 끝난다. 그래서 고유 id를 만들 필요도,
 // 그것이 충돌할 걱정도 없다.
+//
+// 리뷰 Finding C1: 위 문단은 "쓰는 이가 하나"일 때만 참이다. 두 Maya 프로세스가
+// (아티스트가 창을 두 개 띄우거나, Maya와 mayapy 배치가 동시에 이 플러그인을
+// 물면) 파일 하나를 공유해 append하면, 한쪽의 open 줄이 다른 쪽이 아직
+// 안 끝난 세션 한가운데 끼어든다 -- open 줄이 세션 경계라는 이 파일의 위치
+// 기반 규칙이 그 순간 깨진다: 먼저 연 세션이 나중 세션의 close에 밀려 끊긴
+// 것처럼 보이고(실제로는 멀쩡히 자기 close를 썼는데도), 그 사이에 낀 레코드도
+// 엉뚱한 세션의 꼬리로 집계된다(JournalReader.cpp 참고). 세션 id를 새로
+// 두는 대신, 프로세스마다 자기 저널 파일을 따로 쓰는 쪽을 골랐다
+// (JournalWriter::pathForProcess) -- 그러면 파일 하나 안에서는 "쓰는 이가
+// 하나"라는 이 문단의 전제가 다시 정확히 성립하고, 회전이 파일을 통째로
+// 트렁케이트하는 동안 다른 프로세스가 같은 파일에 쓰는 경합도 함께 없어진다
+// (파일을 안 나눴다면 세션 id를 둬도 그 경합은 남았을 것이다). 대가는 저널
+// 파일이 여러 개로 늘어난다는 것 -- 그래서 전체 보관 상한도 파일 하나가
+// 아니라 전체 파일 집합을 대상으로 다시 정의해야 한다(JournalWriter::rotateAll).
 enum class JournalLineKind {
     SessionOpen,
     SessionClose,
@@ -47,6 +62,12 @@ constexpr std::size_t kJournalMaxBudgetKeys = 256;
 // 비기 때문이다 -- 진단이 뜸했던 세션일수록 창이 비고, 정작 그 드문 진단이
 // 후보에서 빠진다.
 constexpr std::size_t kJournalTailRecordsForSignal = 20;
+
+// 프로세스별 저널 파일 이름의 공통 어간. 실제 파일 이름은
+// "<stem>.<pid>.jsonl"이다(JournalWriter::pathForProcess). 리더가 한 디렉터리
+// 안의 저널 파일들을 모으려면(JournalWriter::listJournalFiles) 이 접두사로
+// 골라내야 하므로, 쓰기와 읽기 양쪽이 이 상수 하나를 공유한다.
+constexpr const char* kJournalFileStem = "maro_journal";
 
 const char* severityToJournalName(DiagSeverity severity);
 DiagSeverity severityFromJournalName(const std::string& name);
