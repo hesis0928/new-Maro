@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <memory>
+#include <sstream>
 #include <thread>
 #include <utility>
 
@@ -12,6 +15,8 @@
 
 #include "maro_diag/BookStore.h"
 #include "maro_diag/ErrorHash.h"
+#include "maro_diag/JournalReader.h"
+#include "maro_diag/JournalWriter.h"
 
 namespace maro {
 
@@ -22,6 +27,41 @@ std::atomic<std::size_t> g_freshAnalysisCount{0};
 // 레코드 순번. 0은 "안 채워짐"을 뜻하므로 첫 레코드가 1을 받도록 pre-increment
 // 한다. 레코드 뮤텍스와 무관하게 워커 스레드에서도 불리므로 atomic이다.
 std::atomic<std::uint64_t> g_nextSequence{0};
+
+// 저널 쓰기를 지키는 전용 뮤텍스. 이 뮤텍스는 **말단**이다 -- 안에서
+// boad도 book도 부르지 않으므로 잠금 순서 문제가 생기지 않는다.
+std::mutex& journalMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::unique_ptr<JournalWriter>& journalWriter() {
+    static std::unique_ptr<JournalWriter> w;
+    return w;
+}
+
+CrashAdjacency& crashAdjacencyStorage() {
+    static CrashAdjacency adjacency;
+    return adjacency;
+}
+
+// 레코드 하나를 저널에 흘린다. 실패해도 조용하다.
+//
+// siteTag는 DiagRecord가 아니라 별도 인자로 받는다: rec.errorHash는
+// hashError()가 만든 16자리 16진수 다이제스트이지 사이트 태그 원문이 아니다
+// (ErrorHash.cpp 참고, book의 JSON 키로 쓰기 좋으라고 일부러 그렇게 만든
+// 값이다). 저널의 "tag" 필드는 JournalReader::countCrashAdjacentTags를 거쳐
+// maroJournalCrashAdjacentTags가 사용자에게 그대로 돌려주는 값이므로, 여기에
+// 다이제스트를 넣으면 사용자가 읽을 수 없는 16진수 문자열만 보게 된다.
+// error()는 원문 siteTag를 인자로 이미 갖고 있으므로 그것을 그대로 넘긴다.
+// info/warn/devInfo는 사이트 태그 개념이 없으므로 빈 문자열을 넘긴다(기존
+// 동작과 동일 -- writeRecord는 빈 태그를 심각도+메시지 첫 줄 키로 대체한다).
+void journalRecord(const DiagRecord& rec, const std::string& siteTag = std::string()) {
+    std::lock_guard<std::mutex> lock(journalMutex());
+    if (!journalWriter()) return;
+    journalWriter()->writeRecord(rec.sequence, rec.timestampMs, rec.severity, siteTag,
+                                  rec.message);
+}
 
 std::uint64_t nowMs() {
     using namespace std::chrono;
@@ -103,6 +143,16 @@ const BookPaths& bookPaths() {
     return paths;
 }
 
+// 저널은 book과 같은 디렉터리에 둔다 -- bookPaths()의 해소 결과를
+// 재사용하므로 테스트의 MARO_DIAG_BOOK_DIR 재정의도 그대로 따라온다.
+//
+// bookPaths()가 여기서 처음으로 완전한 타입으로 나타나므로(BookPaths 구조체가
+// 바로 위에서 정의됨), 이 함수는 g_nextSequence 근처가 아니라 여기 둔다 --
+// 그 자리에 두면 .canonical 멤버 접근이 미완성 타입을 참조해 컴파일이 안 된다.
+std::filesystem::path journalPath() {
+    return bookPaths().canonical.parent_path() / "maro_journal.jsonl";
+}
+
 // book(스필)에 쓰기가 실패했을 때 한 번만 warn()으로 알린다. warn()은 자체
 // 뮤텍스를 잠그므로, 이 함수는 error()가 자신의 lock_guard를 잡기 *전에만*
 // 불러야 한다 -- 그러지 않으면 std::mutex는 재진입 불가이므로 교착 상태에
@@ -182,8 +232,13 @@ void BoadMaro::info(const MString& message) {
     if (isMainThread()) {
         MGlobal::displayInfo(MString("[Maro-Info] ") + message);
     }
-    std::lock_guard<std::mutex> lock(mutex());
-    assignSequenceAndPush(std::move(rec), stream());
+    DiagRecord journalCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        assignSequenceAndPush(std::move(rec), stream());
+        journalCopy = stream().back();
+    }
+    journalRecord(journalCopy);
 }
 
 void BoadMaro::warn(const MString& message) {
@@ -194,8 +249,13 @@ void BoadMaro::warn(const MString& message) {
     if (isMainThread()) {
         MGlobal::displayWarning(MString("[Maro-Warn] ") + message);
     }
-    std::lock_guard<std::mutex> lock(mutex());
-    assignSequenceAndPush(std::move(rec), stream());
+    DiagRecord journalCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        assignSequenceAndPush(std::move(rec), stream());
+        journalCopy = stream().back();
+    }
+    journalRecord(journalCopy);
 }
 
 void BoadMaro::devInfo(const MString& message) {
@@ -207,8 +267,13 @@ void BoadMaro::devInfo(const MString& message) {
     if (isMainThread()) {
         MGlobal::displayInfo(MString("[Maro-Dev] ") + message);
     }
-    std::lock_guard<std::mutex> lock(mutex());
-    assignSequenceAndPush(std::move(rec), stream());
+    DiagRecord journalCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        assignSequenceAndPush(std::move(rec), stream());
+        journalCopy = stream().back();
+    }
+    journalRecord(journalCopy);
 #else
     (void)message;
 #endif
@@ -388,8 +453,15 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
             MGlobal::displayInfo(MString("[Maro-Fix] ") + MString(rec.remedy.c_str()));
         }
     }
-    std::lock_guard<std::mutex> lock(mutex());
-    assignSequenceAndPush(std::move(rec), stream());
+    DiagRecord journalCopy;
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        assignSequenceAndPush(std::move(rec), stream());
+        journalCopy = stream().back();
+    }
+    // error()의 원문 siteTag 인자를 그대로 넘긴다 -- rec.errorHash는 그
+    // 다이제스트일 뿐이다(위 journalRecord() 주석 참고).
+    journalRecord(journalCopy, siteTag);
 }
 
 std::size_t BoadMaro::freshAnalysisCount() { return g_freshAnalysisCount.load(); }
@@ -503,6 +575,44 @@ void BoadMaro::resetForTest() {
     g_freshAnalysisCount = 0;
     g_bookUnwritableWarned = false;
 }
+
+void BoadMaro::openJournal() {
+    try {
+        const std::filesystem::path path = journalPath();
+
+        // 이번 세션의 open 줄을 쓰기 **전에** 회전한다 -- 그래야 보관
+        // 한도가 "지난 N 세션"을 뜻하고 이번 세션이 그 한도를 잡아먹지 않는다.
+        JournalWriter::rotate(path);
+
+        // 회전 뒤의 저널을 읽어 지난 세션들의 관측을 만들어 둔다. 이후로는
+        // 이 값이 바뀌지 않는다 -- 이번 세션은 아직 끝나지 않았으므로
+        // 비정상인지 정상인지 판정할 수 없다.
+        {
+            std::ifstream in(path, std::ios::binary);
+            std::ostringstream ss;
+            ss << in.rdbuf();
+            crashAdjacencyStorage() = countCrashAdjacentTags(parseJournal(ss.str()));
+        }
+
+        std::lock_guard<std::mutex> lock(journalMutex());
+        journalWriter() = std::make_unique<JournalWriter>(path);
+        journalWriter()->writeSessionOpen(nowMs());
+    } catch (...) {
+        // 저널을 못 열어도 진단은 그대로 돈다.
+    }
+}
+
+void BoadMaro::closeJournal() {
+    try {
+        std::lock_guard<std::mutex> lock(journalMutex());
+        if (!journalWriter()) return;
+        journalWriter()->writeSessionClose(nowMs());
+        journalWriter().reset();
+    } catch (...) {
+    }
+}
+
+const CrashAdjacency& BoadMaro::crashAdjacency() { return crashAdjacencyStorage(); }
 
 namespace {
 // Maya 메인 스레드만 doIt을 부르지만, thread_local로 두면 우연한 재진입도 안전하다.

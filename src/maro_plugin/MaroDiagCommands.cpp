@@ -420,4 +420,42 @@ MStatus MaroDiagEmitMarkedCommand::doIt(const MArgList& args) {
     }
 }
 
+void* MaroJournalAbnormalSessionsCommand::creator() {
+    return new MaroJournalAbnormalSessionsCommand();
+}
+
+MStatus MaroJournalAbnormalSessionsCommand::doIt(const MArgList& /*args*/) {
+    try {
+        setResult(static_cast<int>(BoadMaro::crashAdjacency().abnormalSessionCount));
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(MString("Maro: maroJournalAbnormalSessions failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError("Maro: maroJournalAbnormalSessions failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
+void* MaroJournalCrashAdjacentTagsCommand::creator() {
+    return new MaroJournalCrashAdjacentTagsCommand();
+}
+
+MStatus MaroJournalCrashAdjacentTagsCommand::doIt(const MArgList& /*args*/) {
+    try {
+        MStringArray result;
+        for (const auto& entry : BoadMaro::crashAdjacency().appearancesByTag) {
+            result.append(MString(entry.first.c_str()));
+        }
+        setResult(result);
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        MGlobal::displayError(MString("Maro: maroJournalCrashAdjacentTags failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        MGlobal::displayError("Maro: maroJournalCrashAdjacentTags failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
 }  // namespace maro

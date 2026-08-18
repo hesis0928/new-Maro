@@ -92,4 +92,18 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
+// 테스트 전용. 로드 시점에 읽어 둔 저널에서 비정상 종료로 끝난 세션의 수.
+class MaroJournalAbnormalSessionsCommand : public MPxCommand {
+public:
+    static void* creator();
+    MStatus doIt(const MArgList& args) override;
+};
+
+// 테스트 전용. 크래시 인접으로 집계된 사이트 태그들을 문자열 배열로.
+class MaroJournalCrashAdjacentTagsCommand : public MPxCommand {
+public:
+    static void* creator();
+    MStatus doIt(const MArgList& args) override;
+};
+
 }  // namespace maro

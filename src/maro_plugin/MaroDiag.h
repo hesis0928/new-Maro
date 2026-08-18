@@ -11,6 +11,7 @@
 
 #include "maro_diag/BookStore.h"
 #include "maro_diag/DiagRecord.h"
+#include "maro_diag/JournalReader.h"
 
 namespace maro {
 
@@ -129,6 +130,17 @@ public:
     // book을 못 읽어도 예외를 던지지 않고 false를 돌려준다: 진단 경로는
     // 지식 저장소에 닿지 못해서 실패하지 않는다.
     static bool lookupBook(const std::string& errorHash, BookEntry& out);
+
+    // 저널을 연다. 플러그인 로드 시 한 번 부르며, 그 전에 오래된 세션을
+    // 회전으로 정리하고 지난 세션들의 크래시 인접 집계를 읽어 둔다.
+    // 열지 못해도 던지지 않는다 -- 보존이 안 될 뿐 진단은 그대로 돈다.
+    static void openJournal();
+    // 정상 종료 줄을 쓰고 닫는다. uninitializePlugin에서만 부른다.
+    // 이 줄이 없이 끝난 세션이 곧 비정상 종료다.
+    static void closeJournal();
+
+    // 로드 시점에 읽어 둔 지난 세션들의 관측. 인과가 아니라 상관이다.
+    static const CrashAdjacency& crashAdjacency();
 
     // 테스트 전용. 프로덕션 코드는 부르지 않는다. boad 세션 상태(레코드
     // 스트림, 신규분석 카운터, book-불가 경고 래치, book 캐시) 전부를

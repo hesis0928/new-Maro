@@ -24,6 +24,10 @@ MStatus initializePlugin(MObject obj) {
     // 나갈 수도 있으므로 제일 앞에 둔다.
     maro::markMainThread();
 
+    // 저널을 연다. markMainThread()가 book 경로를 이미 확정했으므로
+    // 저널 경로도 여기서 안전하게 해소된다.
+    maro::BoadMaro::openJournal();
+
     MFnPlugin plugin(obj, kVendor, kVersion, "Any");
 
     MStatus status = plugin.registerNode(
@@ -175,6 +179,20 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroJournalAbnormalSessions",
+                                    maro::MaroJournalAbnormalSessionsCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroJournalAbnormalSessions");
+        return status;
+    }
+
+    status = plugin.registerCommand("maroJournalCrashAdjacentTags",
+                                    maro::MaroJournalCrashAdjacentTagsCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroJournalCrashAdjacentTags");
+        return status;
+    }
+
     status = plugin.registerCommand("maroDiagPanelRows",
                                     maro::MaroDiagPanelRowsCommand::creator,
                                     maro::MaroDiagPanelRowsCommand::newSyntax);
@@ -223,6 +241,10 @@ MStatus uninitializePlugin(MObject obj) {
 
     plugin.deregisterCommand("maroDiagPanelDetail");
     plugin.deregisterCommand("maroDiagPanelRows");
+
+    plugin.deregisterCommand("maroJournalCrashAdjacentTags");
+    plugin.deregisterCommand("maroJournalAbnormalSessions");
+
     plugin.deregisterCommand("maroDiagEmitMarked");
     plugin.deregisterCommand("maroDiagRegisterRemedy");
     plugin.deregisterCommand("maroDiagAnalysisCount");
@@ -250,5 +272,9 @@ MStatus uninitializePlugin(MObject obj) {
     }
 
     maro::BoadMaro::info("Maro: plugin unloaded.");
+
+    // 맨 마지막에 닫는다. 이 줄이 저널에 남아야 다음 실행이 "이 세션은
+    // 정상적으로 끝났다"를 안다 -- 없으면 비정상 종료로 판정된다.
+    maro::BoadMaro::closeJournal();
     return status;
 }
