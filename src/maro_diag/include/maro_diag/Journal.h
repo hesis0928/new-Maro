@@ -32,6 +32,16 @@ constexpr std::size_t kJournalSessionsKept = 10;
 constexpr std::size_t kJournalMaxLinesPerTagPerWindow = 5;
 constexpr std::uint64_t kJournalSuppressionWindowMs = 1000;
 
+// 억제 예산 맵(JournalWriter::budgets_)의 키 상한. 태그가 있는 레코드는
+// 호출 지점 수만큼만 키가 생기므로 자연히 유계이지만, 태그 없는 레코드(에러가
+// 아닌 info/warn/devInfo)는 심각도 + 메시지 첫 줄을 키로 삼는다 -- 그 메시지가
+// 파일 경로나 노드 이름 같은 동적 내용을 담는 경우가 흔하므로, 오래 사는
+// writer는 이론상 키를 무한히 쌓을 수 있다. 맵이 이 상한에 닿으면 창이 이미
+// 닫힌 항목부터 쓸어낸다(JournalWriter::sweepStaleBudgets) -- MaroDiag.h가
+// 기록 벡터에 대해 아직 안 고친 채로 남겨 둔 바로 그 무한 성장 함정을 여기서는
+// 만들지 않기 위해서다.
+constexpr std::size_t kJournalMaxBudgetKeys = 256;
+
 // 크래시 인접 신호가 보는 "마지막 구간"의 크기. 줄 수로 정의하는 이유는
 // 시간으로 정의하면 아이들 상태로 오래 떠 있다가 죽은 세션에서 창이 텅
 // 비기 때문이다 -- 진단이 뜸했던 세션일수록 창이 비고, 정작 그 드문 진단이

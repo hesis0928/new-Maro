@@ -57,6 +57,21 @@ private:
     void flushSuppressed(const std::string& siteTag, TagBudget& budget,
                           std::uint64_t timestampMs);
 
+    // budgets_가 kJournalMaxBudgetKeys에 닿으면 호출된다. 창이 이미 닫힌
+    // (timestampMs 기준으로 더 이상 새 줄을 억제할 이유가 없는) 항목을 지운다.
+    // 지우기 전에 그 항목에 밀린 suppressed 카운트가 있으면 반드시 flush한다
+    // -- 그렇지 않으면 "N줄 생략" 안내가 사용자에게 영영 전달되지 않는다
+    // (그 항목의 키를 다시는 안 쓸 수도 있으므로, 다음 번 그 키로 쓸 때
+    // 플러시되기를 기다릴 수 없다). 아직 창이 열려 있는 항목은 지우지
+    // 않는다 -- 지우면 그 태그의 억제가 조용히 리셋되어 예산을 다시 받는
+    // 것과 같아지기 때문이다.
+    void sweepStaleBudgets(std::uint64_t timestampMs);
+
+    // 태그(또는 태그 없는 레코드의 심각도+메시지) -> 억제 예산. 상한은
+    // kJournalMaxBudgetKeys(Journal.h)이고, 거기 닿으면 sweepStaleBudgets가
+    // 창이 닫힌 항목부터 정리한다. 그래도 동시에 활성 상태(창이 아직 열린)인
+    // 키가 상한보다 많으면 그 순간만큼은 맵이 상한을 넘을 수 있다 -- 활성
+    // 예산을 지우는 것은 억제 자체를 무너뜨리므로 그 경우엔 지우지 않는다.
     std::unordered_map<std::string, TagBudget> budgets_;
 
     std::ofstream out_;

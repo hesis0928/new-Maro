@@ -261,6 +261,38 @@ TEST(JournalWriter, TagsDoNotSpendEachOthersBudget) {
         << "neither tag exceeded its own budget, so nothing was suppressed";
 }
 
+// 태그가 없는 레코드(에러가 아닌 info/warn/devInfo -- BoadMaro::info/warn/
+// devInfo는 siteTag를 받지 않으므로 플러그인의 비-에러 진단은 전부 이 경로를
+// 지난다)도 서로 다른 메시지라면 서로의 예산을 잡아먹지 않아야 한다. 키가
+// 심각도 하나로 뭉개지면 무관한 두 경고가 서로를 억제하기 시작하는데, 그게
+// 바로 태그별 억제가 막으려는 실패 형태다. 위 TagsDoNotSpendEachOthersBudget과
+// 같은 모양이지만 태그 없이, 메시지 텍스트만 다르게 준다.
+TEST(JournalWriter, UntaggedMessagesDoNotSpendEachOthersBudget) {
+    const std::filesystem::path dir = freshDir("untagged_interleaved");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        writer.writeSessionOpen(1000);
+        // 태그 없는 두 메시지(같은 심각도, 텍스트만 다름)를 번갈아 4번씩 --
+        // 각자 예산(5) 안이므로 전부 쓰여야 한다. 억제 키가 심각도 하나로
+        // 뭉개지면 여덟 번째 쓰기(둘을 합쳐 5를 넘는 지점)부터 억제가
+        // 걸린다.
+        for (std::uint64_t i = 0; i < 4; ++i) {
+            writer.writeRecord(i * 2 + 1, 1000 + i, maro::DiagSeverity::Warn, "",
+                                "alpha message");
+            writer.writeRecord(i * 2 + 2, 1000 + i, maro::DiagSeverity::Warn, "",
+                                "beta message");
+        }
+        writer.writeSessionClose(1500);
+    }
+
+    const std::string text = readAll(file);
+    EXPECT_EQ(countLines(text), 10u) << "open + 4 alpha + 4 beta + close";
+    EXPECT_EQ(text.find("\"kind\":\"suppressed\""), std::string::npos)
+        << "neither untagged message exceeded its own budget, so nothing was "
+           "suppressed";
+}
+
 // 창이 지나면 예산이 되살아난다.
 TEST(JournalWriter, BudgetRefillsAfterTheWindow) {
     const std::filesystem::path dir = freshDir("refill");
@@ -280,6 +312,69 @@ TEST(JournalWriter, BudgetRefillsAfterTheWindow) {
 
     const std::string text = readAll(file);
     EXPECT_EQ(countLines(text), 12u) << "open + 5 + 5 + close, with nothing suppressed";
+}
+
+// budgets_ 맵은 무한히 자라면 안 된다(태그 없는 레코드는 메시지 첫 줄을 키에
+// 섞으므로, 동적인 내용을 담은 메시지가 반복되면 키가 계속 새로 생긴다).
+// 맵이 kJournalMaxBudgetKeys에 닿으면 창이 이미 닫힌 항목부터 정리되는데,
+// 그 정리가 밀린 suppressed 카운트를 조용히 버리면 안 된다 -- 그 카운트는
+// "N줄 생략" 안내이고, 그 항목의 키를 다시는 안 쓸 수도 있으므로 지금
+// 플러시하지 않으면 사용자는 영영 그 안내를 못 본다.
+//
+// "victim" 키 하나로 예산(5)을 넘겨 suppressed=1을 만든 뒤, 그 창이 닫힐
+// 시각으로 넘어가 서로 다른 새 키를 kJournalMaxBudgetKeys개 채운다. 마지막
+// 새 키를 넣는 순간 맵이 상한에 닿아 정리가 돌고, victim의 창은 이미
+// 닫혀 있으므로 정리 대상이 된다 -- 그 정리가 victim을 다시 만나기 전에
+// "1줄 생략"을 저널에 남겨야 한다. victim은 이후 다시 쓰이지 않으므로,
+// 이 줄은 오직 정리 과정 자체에서만 나올 수 있다.
+TEST(JournalWriter, SweepFlushesPendingSuppressedCountBeforeDroppingAStaleEntry) {
+    const std::filesystem::path dir = freshDir("sweep_flushes");
+    const std::filesystem::path file = dir / "journal.jsonl";
+    {
+        maro::JournalWriter writer(file);
+        writer.writeSessionOpen(1000);
+
+        // victim: 태그 없음, 창(1000..1999) 안에서 예산(5)을 넘겨 6번 쓴다
+        // -- 마지막 한 번이 suppressed=1을 남긴다.
+        for (std::uint64_t i = 0; i < 6; ++i) {
+            writer.writeRecord(i + 1, 1000, maro::DiagSeverity::Warn, "",
+                                "victim message");
+        }
+
+        // victim의 창이 확실히 닫힐 시각으로 넘어간다.
+        const std::uint64_t sweepTime = 5000;
+
+        // 서로 다른 새 키를 kJournalMaxBudgetKeys개, 전부 sweepTime에 쓴다
+        // (그래서 이 키들 자신의 창은 아직 열려 있어 정리 대상이 아니다).
+        // kJournalMaxBudgetKeys번째 새 키를 넣을 때 맵 크기가 상한(victim +
+        // 그 앞의 새 키들)에 닿아 정리가 트리거된다.
+        for (std::size_t i = 0; i < maro::kJournalMaxBudgetKeys; ++i) {
+            writer.writeRecord(1000 + i, sweepTime, maro::DiagSeverity::Warn, "",
+                                "filler message " + std::to_string(i));
+        }
+
+        writer.writeSessionClose(sweepTime + 100);
+    }
+
+    const std::string text = readAll(file);
+    const std::vector<std::string> lines = splitLines(text);
+
+    // 정확히 victim에 대한 것 하나만 있어야 한다: 새 키들은 전부 자기
+    // 예산(5) 안에서 한 번씩만 쓰였으므로 스스로는 어떤 생략도 만들지 않는다.
+    std::vector<nlohmann::json> suppressedLines;
+    for (const std::string& line : lines) {
+        const nlohmann::json parsed = nlohmann::json::parse(line);
+        if (parsed.at("kind") == "suppressed") suppressedLines.push_back(parsed);
+    }
+
+    ASSERT_EQ(suppressedLines.size(), 1u)
+        << "the victim's pending suppressed count must be flushed exactly "
+           "once by the sweep, since victim is never written to again and "
+           "so has no other chance to be flushed";
+    EXPECT_EQ(suppressedLines[0].at("tag"), "warn:victim message")
+        << "the flushed line must name the evicted key, not some other entry";
+    EXPECT_EQ(suppressedLines[0].at("count"), 1u)
+        << "exactly one write beyond victim's budget of 5 was suppressed";
 }
 
 // 회전은 최근 N 세션만 남긴다. 오래된 세션이 통째로 사라지고 최근 것은

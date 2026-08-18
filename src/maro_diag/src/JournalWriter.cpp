@@ -92,6 +92,27 @@ void JournalWriter::flushSuppressed(const std::string& siteTag, TagBudget& budge
     budget.suppressed = 0;
 }
 
+void JournalWriter::sweepStaleBudgets(std::uint64_t timestampMs) {
+    // flushSuppressed 자체도 dump()를 부르므로 던질 수 있다 -- 이 함수는
+    // writeRecord의 try 안에서만 불려야 한다(그쪽이 흡수한다). 여기서는
+    // 따로 감싸지 않는다: 이중으로 감싸면 "무엇이 어디서 흡수되는지"가
+    // 흐려진다.
+    for (auto it = budgets_.begin(); it != budgets_.end();) {
+        TagBudget& budget = it->second;
+        const bool windowClosed = timestampMs < budget.windowStartMs ||
+                                   timestampMs - budget.windowStartMs >= kJournalSuppressionWindowMs;
+        if (windowClosed) {
+            // 지우기 전에 밀린 생략 카운트를 먼저 알린다 -- 이 키를 다시는
+            // 안 쓸 수도 있으므로, 나중의 창 롤오버에서 플러시되기를 기다릴
+            // 수 없다.
+            flushSuppressed(it->first, budget, timestampMs);
+            it = budgets_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void JournalWriter::writeRecord(std::uint64_t sequence, std::uint64_t timestampMs,
                                  DiagSeverity severity, const std::string& siteTag,
                                  const std::string& message) {
@@ -112,6 +133,15 @@ void JournalWriter::writeRecord(std::uint64_t sequence, std::uint64_t timestampM
             const std::size_t cut = message.find('\n');
             key = std::string(severityToJournalName(severity)) + ":" +
                   (cut == std::string::npos ? message : message.substr(0, cut));
+        }
+
+        // budgets_는 태그(또는 메시지 첫 줄) 하나당 항목 하나다. 에러가
+        // 아닌 진단은 메시지 내용을 키에 섞으므로, 동적인 내용(경로, 노드
+        // 이름)을 담은 메시지가 반복해서 새 키를 만들며 무한히 자랄 수
+        // 있다. 상한에 닿으면 새 키를 더 넣기 전에 창이 닫힌 항목부터
+        // 정리한다.
+        if (budgets_.size() >= kJournalMaxBudgetKeys) {
+            sweepStaleBudgets(timestampMs);
         }
 
         TagBudget& budget = budgets_[key];
