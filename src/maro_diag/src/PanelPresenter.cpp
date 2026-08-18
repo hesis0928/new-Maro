@@ -163,9 +163,16 @@ PanelDetail buildPanelDetail(const DiagRecord& record,
 
     // 잡음 문턱: 비정상 종료가 2회 미만이거나 이 태그가 1회만 걸렸으면
     // 아무것도 말하지 않는다.
+    //
+    // record.siteTag로 찾는다 -- record.errorHash가 아니다. appearancesByTag는
+    // 저널이 보존한 사이트 태그 **원문**으로 키가 잡혀 있는데(JournalReader.h,
+    // maroJournalCrashAdjacentTags가 사용자에게 그대로 돌려주는 값이라 읽을 수
+    // 있어야 한다), errorHash는 hashError()의 16자리 16진수 다이제스트라 원문과
+    // 절대 같지 않다(ErrorHash.h 계약). errorHash로 조회하면 이 신호가 실제
+    // 데이터에서는 한 번도 히트하지 않는다.
     detail.crashAdjacencyNote.clear();
-    if (!record.errorHash.empty() && crashAdjacency.abnormalSessionCount >= 2) {
-        const auto found = crashAdjacency.appearancesByTag.find(record.errorHash);
+    if (!record.siteTag.empty() && crashAdjacency.abnormalSessionCount >= 2) {
+        const auto found = crashAdjacency.appearancesByTag.find(record.siteTag);
         if (found != crashAdjacency.appearancesByTag.end() && found->second >= 2) {
             detail.crashAdjacencyNote =
                 "지난 비정상 종료 " + std::to_string(crashAdjacency.abnormalSessionCount) +

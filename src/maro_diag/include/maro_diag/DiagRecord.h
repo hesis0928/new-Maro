@@ -59,6 +59,13 @@ struct DiagRecord {
     DiagSeverity severity = DiagSeverity::Info;
     std::string message;          // 실제로 출력된(또는 출력될) 문장. 언제나 "지금" 일어난 일.
     std::string errorHash;        // Error 심각도에서만 채워진다. hashError()의 결과.
+    // Error 심각도에서만 채워진다. hashError()에 넘긴 원문 사이트 태그
+    // (errorHash는 그 다이제스트일 뿐이다 -- ErrorHash.h 계약). 저널이
+    // 저장/복원하는 것과 같은 원문 문자열이므로, 지난 비정상 종료들의
+    // 관측(CrashAdjacency::appearancesByTag, 사이트 태그 원문으로 키가
+    // 잡힌다)에 대고 이 레코드를 찾을 때는 반드시 이 필드로 조회해야 한다.
+    // errorHash로 조회하면 다이제스트 대 원문이라 절대 맞아떨어지지 않는다.
+    std::string siteTag;
     DgContext context;             // onfix가 채운다. 없으면 전부 빈 문자열.
     std::string remedy;            // book에 등록된 해법. 없으면 빈 문자열.
     bool servedFromBook = false;  // book 캐시로 즉답했으면 true.

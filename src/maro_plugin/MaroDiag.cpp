@@ -47,19 +47,20 @@ CrashAdjacency& crashAdjacencyStorage() {
 
 // 레코드 하나를 저널에 흘린다. 실패해도 조용하다.
 //
-// siteTag는 DiagRecord가 아니라 별도 인자로 받는다: rec.errorHash는
+// rec.siteTag를 그대로 쓴다 -- rec.errorHash가 아니다: errorHash는
 // hashError()가 만든 16자리 16진수 다이제스트이지 사이트 태그 원문이 아니다
 // (ErrorHash.cpp 참고, book의 JSON 키로 쓰기 좋으라고 일부러 그렇게 만든
 // 값이다). 저널의 "tag" 필드는 JournalReader::countCrashAdjacentTags를 거쳐
 // maroJournalCrashAdjacentTags가 사용자에게 그대로 돌려주는 값이므로, 여기에
 // 다이제스트를 넣으면 사용자가 읽을 수 없는 16진수 문자열만 보게 된다.
-// error()는 원문 siteTag를 인자로 이미 갖고 있으므로 그것을 그대로 넘긴다.
-// info/warn/devInfo는 사이트 태그 개념이 없으므로 빈 문자열을 넘긴다(기존
-// 동작과 동일 -- writeRecord는 빈 태그를 심각도+메시지 첫 줄 키로 대체한다).
-void journalRecord(const DiagRecord& rec, const std::string& siteTag = std::string()) {
+// error()가 이미 rec.siteTag에 원문을 채워 두므로(DiagRecord.h 계약) 별도
+// 인자로 다시 받을 필요가 없다. info/warn/devInfo는 사이트 태그 개념이
+// 없으므로 rec.siteTag가 항상 빈 채로 남는다(기존 동작과 동일 -- writeRecord는
+// 빈 태그를 심각도+메시지 첫 줄 키로 대체한다).
+void journalRecord(const DiagRecord& rec) {
     std::lock_guard<std::mutex> lock(journalMutex());
     if (!journalWriter()) return;
-    journalWriter()->writeRecord(rec.sequence, rec.timestampMs, rec.severity, siteTag,
+    journalWriter()->writeRecord(rec.sequence, rec.timestampMs, rec.severity, rec.siteTag,
                                   rec.message);
 }
 
@@ -307,6 +308,11 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
     try {
         const std::string hash = hashError(siteTag);
         rec.errorHash = hash;
+        // Finding 1(패널 리뷰): 원문 태그도 레코드에 싣는다. errorHash는
+        // 다이제스트일 뿐이라 crashAdjacency(저널이 원문으로 키를 잡아 둔
+        // 관측, JournalReader.h)에 대고 조회할 수 없다 -- 그 조회는
+        // rec.siteTag로 해야 한다(DiagRecord.h 계약, PanelPresenter.cpp).
+        rec.siteTag = siteTag;
 
         // Finding I4/M3: book 파일(정본+스필) I/O와 그것을 거울처럼 비추는
         // 세션 캐시를 하나의 book 뮤텍스로 직렬화한다. Task 7 이후
@@ -459,9 +465,9 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         assignSequenceAndPush(std::move(rec), stream());
         journalCopy = stream().back();
     }
-    // error()의 원문 siteTag 인자를 그대로 넘긴다 -- rec.errorHash는 그
-    // 다이제스트일 뿐이다(위 journalRecord() 주석 참고).
-    journalRecord(journalCopy, siteTag);
+    // journalCopy.siteTag는 위에서 이미 원문으로 채워져 있다 -- journalRecord()가
+    // 그것을 그대로 쓴다(위 journalRecord() 주석 참고).
+    journalRecord(journalCopy);
 }
 
 std::size_t BoadMaro::freshAnalysisCount() { return g_freshAnalysisCount.load(); }

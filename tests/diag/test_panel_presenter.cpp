@@ -4,6 +4,7 @@
 
 #include "maro_diag/BookStore.h"
 #include "maro_diag/DiagRecord.h"
+#include "maro_diag/ErrorHash.h"
 #include "maro_diag/PanelView.h"
 #include "maro_diag/PanelPresenter.h"
 
@@ -32,6 +33,28 @@ maro::DiagRecord makeHashlessRecord(std::uint64_t seq, std::uint64_t ms,
     rec.severity = sev;
     rec.message = message;
     // rec.errorHash left empty on purpose.
+    return rec;
+}
+
+// crashAdjacency 룩업(PanelPresenter.cpp의 buildPanelDetail)은
+// record.siteTag로 이뤄진다 -- record.errorHash는 hashError()의 다이제스트일
+// 뿐이지 사이트 태그 원문이 아니다(DiagRecord.h/ErrorHash.h 계약). 위의
+// makeRecord()는 접기 키(collapseKey) 테스트를 위해 원문을 errorHash에 직접
+// 넣어 두는데, crashAdjacency 테스트에 그걸 그대로 쓰면 프로덕션과 다른
+// 값으로(원문 대 원문) 룩업이 우연히 맞아떨어져 Finding 1의 결함(다이제스트
+// 대 원문이라 절대 안 맞아떨어지는 실제 버그)을 이 테스트가 잡지 못한다.
+// 이 헬퍼는 error()가 실제로 채우는 모양 그대로 -- errorHash에 다이제스트,
+// siteTag에 원문 -- 을 재현한다.
+maro::DiagRecord makeErrorRecordWithSiteTag(std::uint64_t seq, std::uint64_t ms,
+                                             const std::string& siteTag,
+                                             const std::string& message) {
+    maro::DiagRecord rec;
+    rec.sequence = seq;
+    rec.timestampMs = ms;
+    rec.severity = maro::DiagSeverity::Error;
+    rec.errorHash = maro::hashError(siteTag);
+    rec.siteTag = siteTag;
+    rec.message = message;
     return rec;
 }
 
@@ -430,9 +453,15 @@ TEST(PanelPresenter, WorksWithoutABookEntry) {
 
 // 문턱 아래에서는 아무 말도 하지 않는다. 1회를 근거로 뭔가 말하는 것은
 // 정보가 아니라 소음이다.
+//
+// makeErrorRecordWithSiteTag를 쓴다(makeRecord가 아니다): appearancesByTag는
+// 저널이 보존한 사이트 태그 원문으로 키가 잡혀 있고, 룩업은 record.siteTag로
+// 이뤄진다(PanelPresenter.cpp). makeRecord처럼 원문을 errorHash에 직접
+// 넣으면 룩업이 프로덕션과 다른 경로(원문 대 원문)로 우연히 맞아떨어져,
+// errorHash로 조회하는 결함(다이제스트 대 원문이라 실제로는 절대 맞아떨어지지
+// 않는다)을 이 테스트가 잡지 못한다.
 TEST(PanelPresenter, SaysNothingBelowTheCrashAdjacencyThreshold) {
-    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
-                                       "Site.A", "failed");
+    maro::DiagRecord rec = makeErrorRecordWithSiteTag(1, 1000, "Site.A", "failed");
 
     maro::CrashAdjacency onlyOneAbnormal;
     onlyOneAbnormal.abnormalSessionCount = 1;
@@ -450,29 +479,57 @@ TEST(PanelPresenter, SaysNothingBelowTheCrashAdjacencyThreshold) {
 }
 
 // 문턱을 넘으면 관측된 사실을 정확한 숫자로 말한다.
+//
+// 분모(abnormalSessionCount)와 분자(appearancesByTag[tag])는 서로 자리를
+// 바꿔도 둘 다 여전히 문자열 어딘가에는 나타난다 -- "숫자가 있는가"만
+// 확인하면 구현이 둘을 바꿔치기해도(분자·분모 전치) 잡아내지 못한다. 그래서
+// 각 숫자가 문장의 정확히 어느 자리에 있는지까지 고정한다: 7과 2처럼 서로
+// 혼동될 수 없는 값을 골라(부분 문자열로도 안 겹치고, 자리가 바뀌면 반드시
+// 다른 문장이 나오도록) 완성된 문장 전체를 EXPECT_EQ로 고정한다.
 TEST(PanelPresenter, ReportsTheObservedCountsAboveTheThreshold) {
-    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
-                                       "Site.A", "failed");
+    maro::DiagRecord rec = makeErrorRecordWithSiteTag(1, 1000, "Site.A", "failed");
     maro::CrashAdjacency adjacency;
-    adjacency.abnormalSessionCount = 4;
-    adjacency.appearancesByTag["Site.A"] = 3;
+    adjacency.abnormalSessionCount = 7;    // 분모: 지난 비정상 종료 수
+    adjacency.appearancesByTag["Site.A"] = 2;  // 분자: 그중 이 태그가 걸린 수
 
     const std::string note =
         maro::buildPanelDetail(rec, nullptr, false, adjacency).crashAdjacencyNote;
 
-    EXPECT_NE(note.find("4"), std::string::npos) << "the denominator must appear";
-    EXPECT_NE(note.find("3"), std::string::npos) << "the numerator must appear";
+    EXPECT_EQ(note, "지난 비정상 종료 7회 중 2회에서 이 진단이 마지막 순간에 있었습니다.")
+        << "7 (abnormalSessionCount, the denominator) and 2 (this tag's appearances, the "
+           "numerator) must each land in their own role -- a transposed 'appeared in 7 of 2' "
+           "would misstate the correlation, and only pinning the full sentence catches a swap";
 }
 
 // 다른 태그의 집계를 이 레코드에 붙이지 않는다.
 TEST(PanelPresenter, DoesNotBorrowAnotherTagsCount) {
-    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
-                                       "Site.Quiet", "failed");
+    maro::DiagRecord rec = makeErrorRecordWithSiteTag(1, 1000, "Site.Quiet", "failed");
     maro::CrashAdjacency adjacency;
     adjacency.abnormalSessionCount = 4;
     adjacency.appearancesByTag["Site.Noisy"] = 3;
 
     EXPECT_EQ(maro::buildPanelDetail(rec, nullptr, false, adjacency).crashAdjacencyNote, "");
+}
+
+// Finding 1 회귀 방지: 이 레코드의 errorHash(다이제스트)가 우연히 다른 태그의
+// 원문 텍스트와 똑같은 값이어도, 그 다른 태그의 집계를 빌려오면 안 된다.
+// 룩업이 (되돌아가서) record.errorHash로 이뤄지면, appearancesByTag에 마침
+// 그 다이제스트 문자열과 같은 키가 있을 때 엉뚱한 히트가 난다 -- 이 테스트는
+// 그 자리를 정확히 채워서 그 회귀를 잡는다.
+TEST(PanelPresenter, DoesNotBorrowHistoryWhenHashCollidesWithAnotherTagsText) {
+    const std::string realTag = "MaroBindAxisCommand.TargetNotTransform";
+    maro::DiagRecord rec = makeErrorRecordWithSiteTag(1, 1000, realTag, "failed");
+
+    maro::CrashAdjacency adjacency;
+    adjacency.abnormalSessionCount = 4;
+    // 이 레코드의 진짜 사이트 태그(realTag)는 여기 등장하지 않는다. 대신
+    // "다른 태그"의 텍스트가 정확히 이 레코드의 errorHash 값과 같다 --
+    // errorHash로 조회하면 이 항목을 실수로 히트로 본다.
+    adjacency.appearancesByTag[rec.errorHash] = 3;
+
+    EXPECT_EQ(maro::buildPanelDetail(rec, nullptr, false, adjacency).crashAdjacencyNote, "")
+        << "a lookup keyed by errorHash would collide with this fabricated tag string and "
+           "wrongly borrow its history; the lookup must key off siteTag instead";
 }
 
 // 해시가 없는 레코드(에러가 아닌 것)에는 신호가 붙지 않는다.
