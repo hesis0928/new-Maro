@@ -140,6 +140,16 @@ public:
     static void closeJournal();
 
     // 로드 시점에 읽어 둔 지난 세션들의 관측. 인과가 아니라 상관이다.
+    //
+    // 뮤텍스로 지키지 않는다 -- 이래도 안전한 이유: 이 값은
+    // initializePlugin() 중 openJournal()이 메인 스레드에서 딱 한 번 쓰고
+    // 그 뒤로는 다시 쓰이지 않는다. 이 값을 읽는 쪽은 전부 MPxCommand::doIt
+    // (MaroDiagCommands.cpp의 디버그 커맨드, MaroPanelCommands.cpp의 패널
+    // 상세 커맨드)이며, Maya는 doIt을 메인 스레드에서만 부른다. 즉 쓰기와
+    // 읽기가 겹칠 스레드 경합이 애초에 존재하지 않는다. 이 불변식이 깨지는
+    // 경우: (1) openJournal() 이후에 이 저장소를 다시 쓰는 코드가 생기거나,
+    // (2) doIt이 아닌 경로(예: compute()류 워커 스레드)에서 crashAdjacency()를
+    // 부르게 되는 경우 -- 그때는 journalMutex()처럼 전용 뮤텍스가 필요해진다.
     static const CrashAdjacency& crashAdjacency();
 
     // 테스트 전용. 프로덕션 코드는 부르지 않는다. boad 세션 상태(레코드

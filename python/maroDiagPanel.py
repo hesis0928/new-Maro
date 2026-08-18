@@ -14,7 +14,7 @@ import maya.cmds as cmds
 
 # C++ 쪽 계약. 바뀌면 양쪽을 함께 고쳐야 한다 (MaroPanelCommands.h 참고).
 ROW_FIELDS = 8
-DETAIL_FIELDS = 13
+DETAIL_FIELDS = 14
 
 CONTROL_NAME = "maroDiagPanelControl"
 
@@ -108,6 +108,8 @@ def _onSelect(listControl, detailControl, rowsHolder):
         lines += ["", "전에 본 문제 — 과거 분석:", detail[9]]
     if detail[10]:
         lines += ["", "해법:", detail[10]]
+    if detail[13]:
+        lines += ["", detail[13]]
     cmds.scrollField(detailControl, edit=True, text="\n".join(lines))
 
 

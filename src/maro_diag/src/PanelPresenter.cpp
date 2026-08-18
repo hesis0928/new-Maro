@@ -1,6 +1,7 @@
 #include "maro_diag/PanelPresenter.h"
 
 #include <algorithm>
+#include <string>
 #include <unordered_map>
 
 namespace maro {
@@ -125,7 +126,8 @@ std::vector<PanelRow> buildPanelRows(const std::vector<DiagRecord>& stream,
 
 PanelDetail buildPanelDetail(const DiagRecord& record,
                               const BookEntry* bookEntry,
-                              bool targetNodeExists) {
+                              bool targetNodeExists,
+                              const CrashAdjacency& crashAdjacency) {
     (void)targetNodeExists;  // B-1b가 적용 가능 여부를 판단할 때 쓴다.
 
     PanelDetail detail;
@@ -158,6 +160,19 @@ PanelDetail buildPanelDetail(const DiagRecord& record,
     // B-1a에는 구조화된 동작이 없다. 자리만 지키고 내용은 B-1b가 채운다.
     detail.applyAvailable = false;
     detail.applyUnavailableReason = "NoActionRecorded";
+
+    // 잡음 문턱: 비정상 종료가 2회 미만이거나 이 태그가 1회만 걸렸으면
+    // 아무것도 말하지 않는다.
+    detail.crashAdjacencyNote.clear();
+    if (!record.errorHash.empty() && crashAdjacency.abnormalSessionCount >= 2) {
+        const auto found = crashAdjacency.appearancesByTag.find(record.errorHash);
+        if (found != crashAdjacency.appearancesByTag.end() && found->second >= 2) {
+            detail.crashAdjacencyNote =
+                "지난 비정상 종료 " + std::to_string(crashAdjacency.abnormalSessionCount) +
+                "회 중 " + std::to_string(found->second) +
+                "회에서 이 진단이 마지막 순간에 있었습니다.";
+        }
+    }
     return detail;
 }
 

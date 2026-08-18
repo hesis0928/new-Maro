@@ -13,7 +13,7 @@ maya.standalone.initialize(name="python")
 import maya.cmds as cmds  # noqa: E402
 
 ROW_FIELDS = 8
-DETAIL_FIELDS = 13
+DETAIL_FIELDS = 14
 
 plugin = os.environ["MARO_PLUGIN_PATH"]
 cmds.loadPlugin(plugin)
@@ -110,11 +110,20 @@ assert len(detail) == DETAIL_FIELDS, (
 )
 # 필드 순서: nodeType, nodeTypeState, attributeName, attributeNameState,
 #            activeCommand, activeCommandState, axisOrTarget, axisOrTargetState,
-#            message, priorAnalysis, remedyText, applyAvailable, applyUnavailableReason
+#            message, priorAnalysis, remedyText, applyAvailable, applyUnavailableReason,
+#            crashAdjacencyNote
 assert detail[11] == "0", "B-1a records no structured actions, so apply is never available"
 assert detail[12] == "NoActionRecorded", f"unexpected reason {detail[12]!r}"
 assert detail[8], "detail must carry the message of the represented record"
 print("detail contract OK")
+
+# 이 세션은 저널에 비정상 종료 기록이 없으므로 신호 자리는 비어 있어야 한다.
+# 문턱 아래에서 뭔가 말하는 것은 정보가 아니라 소음이다.
+assert detail[13] == "", (
+    f"no abnormal sessions on record, so the crash-adjacency note must be empty, "
+    f"got {detail[13]!r}"
+)
+print("crash adjacency note empty OK")
 
 # --- 프레즌스 문자열 매핑을 그 자체로 고정한다 -----------------------------
 # 위 단언들은 detail[8]/[11]/[12]만 확인했다 -- 상태 필드(1,3,5,7) 자체는

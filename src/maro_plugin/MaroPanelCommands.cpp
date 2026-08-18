@@ -196,7 +196,8 @@ MStatus MaroDiagPanelDetailCommand::doIt(const MArgList& args) {
             !chosen->errorHash.empty() && BoadMaro::lookupBook(chosen->errorHash, entry);
 
         const PanelDetail detail =
-            buildPanelDetail(*chosen, haveEntry ? &entry : nullptr, false);
+            buildPanelDetail(*chosen, haveEntry ? &entry : nullptr, false,
+                              BoadMaro::crashAdjacency());
 
         MStringArray result;
         result.append(MString(detail.nodeType.value.c_str()));
@@ -212,6 +213,7 @@ MStatus MaroDiagPanelDetailCommand::doIt(const MArgList& args) {
         result.append(MString(detail.remedyText.c_str()));
         result.append(detail.applyAvailable ? "1" : "0");
         result.append(MString(detail.applyUnavailableReason.c_str()));
+        result.append(MString(detail.crashAdjacencyNote.c_str()));
         setResult(result);
         return MS::kSuccess;
     } catch (const std::exception& e) {

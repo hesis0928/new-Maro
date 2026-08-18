@@ -5,6 +5,7 @@
 
 #include "maro_diag/BookStore.h"
 #include "maro_diag/DiagRecord.h"
+#include "maro_diag/JournalReader.h"
 #include "maro_diag/PanelView.h"
 
 namespace maro {
@@ -36,8 +37,12 @@ std::vector<PanelRow> buildPanelRows(const std::vector<DiagRecord>& stream,
 // 프레젠터는 살아있는 씬을 조회하지 않는다 (설계 스펙 §3.3). B-1a에서는
 // 적용 버튼이 없으므로 쓰이지 않지만, B-1b가 이 자리에서 판단하도록
 // 시그니처를 지금 고정한다.
+// crashAdjacency는 플러그인 로드 시점에 저널에서 읽어 둔 관측이며, 이
+// 세션 동안 바뀌지 않는다 -- 이번 세션은 아직 끝나지 않아 정상인지
+// 비정상인지 판정할 수 없기 때문이다.
 PanelDetail buildPanelDetail(const DiagRecord& record,
                               const BookEntry* bookEntry,
-                              bool targetNodeExists);
+                              bool targetNodeExists,
+                              const CrashAdjacency& crashAdjacency);
 
 }  // namespace maro

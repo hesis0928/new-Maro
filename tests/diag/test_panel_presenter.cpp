@@ -323,7 +323,7 @@ TEST(PanelPresenter, DistinguishesNotCapturedFromNotApplicable) {
     rec.context.nameUnavailable = true;
     rec.context.attributeName = "";      // 이 실패에는 관여한 어트리뷰트가 없다
 
-    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, false);
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, false, maro::CrashAdjacency{});
 
     EXPECT_EQ(detail.nodeType.presence, maro::ContextPresence::Present);
     EXPECT_EQ(detail.nodeType.value, "maroAxis");
@@ -345,7 +345,7 @@ TEST(PanelPresenter, BothNodeTypeAndNameNotCapturedWhenNodeLookupFailedEntirely)
     rec.context.typeUnavailable = true;
     rec.context.nameUnavailable = true;
 
-    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, false);
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, false, maro::CrashAdjacency{});
 
     EXPECT_EQ(detail.nodeType.presence, maro::ContextPresence::NotCaptured)
         << "the MFnDependencyNode constructor itself threw -- the type was wanted but not obtained";
@@ -361,7 +361,7 @@ TEST(PanelPresenter, CarriesRemedyTextButOffersNoActionYet) {
     entry.analysis = "이 축은 이미 다른 오브젝트에 묶여 있다";
     entry.remedy = "먼저 기존 바인딩을 끊으세요";
 
-    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true, maro::CrashAdjacency{});
 
     EXPECT_EQ(detail.remedyText, "먼저 기존 바인딩을 끊으세요");
     EXPECT_FALSE(detail.applyAvailable);
@@ -377,7 +377,7 @@ TEST(PanelPresenter, PrefersTheCurrentBookAnalysisOverTheRecordedOne) {
     maro::BookEntry entry;
     entry.analysis = "그 뒤에 갱신된 분석";
 
-    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true, maro::CrashAdjacency{});
 
     EXPECT_EQ(detail.priorAnalysis, "그 뒤에 갱신된 분석");
 }
@@ -392,7 +392,7 @@ TEST(PanelPresenter, FallsBackToRecordAnalysisWhenBookEntryAnalysisIsEmpty) {
     maro::BookEntry entry;  // entry.analysis left empty on purpose
     entry.remedy = "해법은 있다";
 
-    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true, maro::CrashAdjacency{});
 
     EXPECT_EQ(detail.priorAnalysis, "레코드가 남을 때의 분석")
         << "a present-but-empty book analysis must not blank out the record's own analysis";
@@ -407,7 +407,7 @@ TEST(PanelPresenter, FallsBackToRecordRemedyWhenBookEntryRemedyIsEmpty) {
     maro::BookEntry entry;  // entry.remedy left empty on purpose
     entry.analysis = "분석은 있다";
 
-    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true);
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, true, maro::CrashAdjacency{});
 
     EXPECT_EQ(detail.remedyText, "레코드에 실려 온 해법")
         << "a present-but-empty book remedy must not blank out a remedy the record was carrying";
@@ -419,9 +419,68 @@ TEST(PanelPresenter, WorksWithoutABookEntry) {
                                        "hash", "failed");
     rec.priorAnalysis = "레코드에 실려 온 분석";
 
-    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, true);
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, true, maro::CrashAdjacency{});
 
     EXPECT_EQ(detail.message, "failed");
     EXPECT_EQ(detail.priorAnalysis, "레코드에 실려 온 분석");
     EXPECT_EQ(detail.remedyText, "");
+}
+
+#include "maro_diag/JournalReader.h"
+
+// 문턱 아래에서는 아무 말도 하지 않는다. 1회를 근거로 뭔가 말하는 것은
+// 정보가 아니라 소음이다.
+TEST(PanelPresenter, SaysNothingBelowTheCrashAdjacencyThreshold) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "Site.A", "failed");
+
+    maro::CrashAdjacency onlyOneAbnormal;
+    onlyOneAbnormal.abnormalSessionCount = 1;
+    onlyOneAbnormal.appearancesByTag["Site.A"] = 1;
+    EXPECT_EQ(maro::buildPanelDetail(rec, nullptr, false, onlyOneAbnormal)
+                  .crashAdjacencyNote, "")
+        << "one abnormal session is not a pattern";
+
+    maro::CrashAdjacency singleAppearance;
+    singleAppearance.abnormalSessionCount = 4;
+    singleAppearance.appearancesByTag["Site.A"] = 1;
+    EXPECT_EQ(maro::buildPanelDetail(rec, nullptr, false, singleAppearance)
+                  .crashAdjacencyNote, "")
+        << "appearing once out of four is not a pattern either";
+}
+
+// 문턱을 넘으면 관측된 사실을 정확한 숫자로 말한다.
+TEST(PanelPresenter, ReportsTheObservedCountsAboveTheThreshold) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "Site.A", "failed");
+    maro::CrashAdjacency adjacency;
+    adjacency.abnormalSessionCount = 4;
+    adjacency.appearancesByTag["Site.A"] = 3;
+
+    const std::string note =
+        maro::buildPanelDetail(rec, nullptr, false, adjacency).crashAdjacencyNote;
+
+    EXPECT_NE(note.find("4"), std::string::npos) << "the denominator must appear";
+    EXPECT_NE(note.find("3"), std::string::npos) << "the numerator must appear";
+}
+
+// 다른 태그의 집계를 이 레코드에 붙이지 않는다.
+TEST(PanelPresenter, DoesNotBorrowAnotherTagsCount) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Error,
+                                       "Site.Quiet", "failed");
+    maro::CrashAdjacency adjacency;
+    adjacency.abnormalSessionCount = 4;
+    adjacency.appearancesByTag["Site.Noisy"] = 3;
+
+    EXPECT_EQ(maro::buildPanelDetail(rec, nullptr, false, adjacency).crashAdjacencyNote, "");
+}
+
+// 해시가 없는 레코드(에러가 아닌 것)에는 신호가 붙지 않는다.
+TEST(PanelPresenter, NoNoteForARecordWithoutASiteTag) {
+    maro::DiagRecord rec = makeRecord(1, 1000, maro::DiagSeverity::Warn, "", "just a warning");
+    maro::CrashAdjacency adjacency;
+    adjacency.abnormalSessionCount = 4;
+    adjacency.appearancesByTag[""] = 3;
+
+    EXPECT_EQ(maro::buildPanelDetail(rec, nullptr, false, adjacency).crashAdjacencyNote, "");
 }

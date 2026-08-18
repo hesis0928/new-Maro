@@ -26,11 +26,11 @@ public:
 };
 
 // -sequence <int>
-// 그 순번의 레코드 하나를 13필드 상세로 돌려준다:
+// 그 순번의 레코드 하나를 14필드 상세로 돌려준다:
 //   nodeType, nodeTypeState, attributeName, attributeNameState,
 //   activeCommand, activeCommandState, axisOrTarget, axisOrTargetState,
 //   message, priorAnalysis, remedyText, applyAvailable("0"/"1"),
-//   applyUnavailableReason
+//   applyUnavailableReason, crashAdjacencyNote
 // 상태 필드는 "present" | "notApplicable" | "notCaptured" 중 하나다.
 //
 // 리뷰 Finding: 예전에는 -index로 화면에 그려진 행 목록의 자리를 받아, 그

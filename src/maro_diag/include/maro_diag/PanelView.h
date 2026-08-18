@@ -57,6 +57,12 @@ struct PanelDetail {
     std::string remedyText;
     bool applyAvailable = false;
     std::string applyUnavailableReason;
+    // 이 자리가 지난 비정상 종료 직전에 반복해서 나타났다면 그 사실을
+    // 담는다. 비어 있으면 말할 것이 없다는 뜻이다.
+    //
+    // 인과가 아니라 상관이다. 크래시 직전에 있었다는 것이 크래시를
+    // 일으켰다는 뜻은 아니므로 문구는 관측된 사실만 말한다.
+    std::string crashAdjacencyNote;
 };
 
 }  // namespace maro
