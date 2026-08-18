@@ -25,16 +25,23 @@ std::vector<JournalSession> parseJournal(const std::string& text) {
             continue;
         }
 
-        const std::string kind = j.value("kind", std::string());
-        if (kind == "session") {
-            const std::string event = j.value("event", std::string());
-            if (event == "open") {
-                sessions.emplace_back();
-            } else if (event == "close" && !sessions.empty()) {
-                sessions.back().endedCleanly = true;
+        std::string kind;
+        try {
+            kind = j.value("kind", std::string());
+            if (kind == "session") {
+                const std::string event = j.value("event", std::string());
+                if (event == "open") {
+                    sessions.emplace_back();
+                } else if (event == "close" && !sessions.empty()) {
+                    sessions.back().endedCleanly = true;
+                }
             }
+        } catch (...) {
+            // kind나 event가 기대한 타입이 아니거나 (예: 숫자) 줄 자체가
+            // 객체가 아니면(예: 알몸 스칼라 줄) 이 줄만 버리고 계속한다.
             continue;
         }
+        if (kind == "session") continue;
         if (kind != "record") continue;   // suppressed 줄은 레코드가 아니다
         if (sessions.empty()) continue;   // open 줄 앞의 레코드는 버린다
 
