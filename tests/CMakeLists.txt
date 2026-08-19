@@ -15,6 +15,7 @@ add_executable(maro_ipc_tests
     ipc/test_named_mutex_guard.cpp
     ipc/test_named_pipe.cpp
     ipc/test_job_escape.cpp
+    ipc/test_sentinel_process.cpp
 )
 
 target_link_libraries(maro_ipc_tests PRIVATE
@@ -22,6 +23,14 @@ target_link_libraries(maro_ipc_tests PRIVATE
     GTest::gtest
     GTest::gtest_main
 )
+
+# test_sentinel_process.cpp는 진짜 maro_sentinel.exe를 서브프로세스로 띄운다.
+# 이 프로젝트는 멀티 컨피그 제너레이터(Visual Studio)라 두 타깃이 각자 다른
+# 하위 디렉터리(tests/Release/, src/maro_sentinel/Release/)에 놓이므로
+# "테스트 실행 파일 옆에 있겠지"라는 가정이 성립하지 않는다. 빌드 시스템이
+# 아는 정확한 경로를 컴파일 타임에 넘긴다.
+target_compile_definitions(maro_ipc_tests PRIVATE
+    MARO_SENTINEL_EXE_PATH="$<TARGET_FILE:maro_sentinel>")
 
 gtest_discover_tests(maro_ipc_tests)
 
