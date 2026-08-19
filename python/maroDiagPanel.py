@@ -71,7 +71,7 @@ def _contextLine(label, value, state):
     return "{}: {}{}".format(label, value, suffix)
 
 
-def _onSelect(listControl, detailControl, rowsHolder):
+def _onSelect(listControl, detailControl, applyButton, rowsHolder, selectionHolder):
     """목록에서 고른 자리를 refresh()가 마지막으로 그린 행의 sequence로
     바꿔 상세를 받아 온다.
 
@@ -94,6 +94,8 @@ def _onSelect(listControl, detailControl, rowsHolder):
     if len(detail) != DETAIL_FIELDS:
         cmds.scrollField(detailControl, edit=True,
                          text="Maro: unexpected detail field count {}".format(len(detail)))
+        cmds.button(applyButton, edit=True, enable=False, label="적용")
+        selectionHolder["sequence"] = None
         return
 
     lines = [
@@ -110,10 +112,20 @@ def _onSelect(listControl, detailControl, rowsHolder):
         lines += ["", "해법:", detail[10]]
     if detail[13]:
         lines += ["", detail[13]]
+
+    applyAvailable = detail[11] == "1"
+    selectionHolder["sequence"] = sequence if applyAvailable else None
+    cmds.button(applyButton, edit=True, enable=applyAvailable,
+               label="적용" if applyAvailable else "적용 불가")
     cmds.scrollField(detailControl, edit=True, text="\n".join(lines))
 
 
-def refresh(listControl, detailControl, severityControl, noteControl, rowsHolder):
+def refresh(listControl, detailControl, severityControl, noteControl, applyButton, rowsHolder, selectionHolder):
+    # 목록이 다시 그려지면 이전 선택은 더 이상 화면의 어느 자리와도
+    # 대응하지 않는다 -- 버튼을 꺼서 스테일 sequence로 적용을 누르는 경로를
+    # 원천적으로 없앤다.
+    cmds.button(applyButton, edit=True, enable=False, label="적용")
+    selectionHolder["sequence"] = None
     severity = cmds.optionMenu(severityControl, query=True, value=True)
     rows = sliceRows(cmds.maroDiagPanelRows(severity=severity))
     rowsHolder["rows"] = rows
@@ -146,27 +158,51 @@ def buildUI():
     noteControl = cmds.text(label="", align="left")
     detailControl = cmds.scrollField(editable=False, wordWrap=True)
     refreshButton = cmds.button(label="새로 고침")
+    applyButton = cmds.button(label="적용", enable=False)
 
     # refresh()가 화면에 그린 행을 _onSelect()가 다시 볼 수 있게 담아 두는
     # 자리. 클로저로 두 콜백이 공유한다 -- 모듈 전역이면 패널을 두 개 띄웠을
     # 때 서로의 선택을 밟는다.
     rowsHolder = {"rows": []}
 
+    # _onSelect가 채우고 applyButton의 클릭 콜백이 읽는다. sequence가
+    # None이면 적용할 것이 없다는 뜻 -- 버튼이 꺼져 있으므로 정상적으로는
+    # 눌릴 수 없지만, 방어적으로 한 번 더 확인한다.
+    selectionHolder = {"sequence": None}
+
     cmds.textScrollList(
         listControl, edit=True,
-        selectCommand=lambda *_: _onSelect(listControl, detailControl, rowsHolder))
+        selectCommand=lambda *_: _onSelect(listControl, detailControl, applyButton,
+                                          rowsHolder, selectionHolder))
     cmds.button(
         refreshButton, edit=True,
-        command=lambda *_: refresh(listControl, detailControl, severityControl, noteControl, rowsHolder))
+        command=lambda *_: refresh(listControl, detailControl, severityControl,
+                                   noteControl, applyButton, rowsHolder, selectionHolder))
     cmds.optionMenu(
         severityControl, edit=True,
-        changeCommand=lambda *_: refresh(listControl, detailControl, severityControl, noteControl, rowsHolder))
+        changeCommand=lambda *_: refresh(listControl, detailControl, severityControl,
+                                         noteControl, applyButton, rowsHolder, selectionHolder))
+
+    def _onApply(*_):
+        sequence = selectionHolder["sequence"]
+        if sequence is None:
+            return
+        cmds.maroDiagRequestRemedy(sequence=sequence)
+        # 적용은 다음 큐 틱에서 일어난다 -- 여기서 화면을 다시 그리면 아직
+        # 반영 전인 상태를 보여줄 뿐이다. 기존 UI 모델(선택할 때만 상세를
+        # 다시 읽는다)과 같은 이유로, 사용자가 "새로 고침"을 눌러 결과를
+        # 본다.
+        cmds.text(noteControl, edit=True,
+                  label="적용 요청됨 -- 잠시 후 새로 고침을 눌러 결과를 확인하세요.")
+
+    cmds.button(applyButton, edit=True, command=_onApply)
 
     cmds.formLayout(
         form, edit=True,
         attachForm=[
             (severityControl, "top", 4), (severityControl, "left", 4),
-            (refreshButton, "top", 4), (refreshButton, "right", 4),
+            (applyButton, "top", 4), (applyButton, "right", 4),
+            (refreshButton, "top", 4),
             (listControl, "left", 4), (listControl, "right", 4),
             (noteControl, "left", 4), (noteControl, "right", 4),
             (detailControl, "left", 4), (detailControl, "right", 4),
@@ -176,10 +212,12 @@ def buildUI():
             (listControl, "top", 4, severityControl),
             (listControl, "bottom", 4, noteControl),
             (noteControl, "bottom", 4, detailControl),
+            (refreshButton, "right", 4, applyButton),
         ],
         attachPosition=[(detailControl, "top", 0, 60)])
 
-    refresh(listControl, detailControl, severityControl, noteControl, rowsHolder)
+    refresh(listControl, detailControl, severityControl, noteControl, applyButton,
+            rowsHolder, selectionHolder)
     return form
 
 
