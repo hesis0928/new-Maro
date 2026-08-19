@@ -44,9 +44,10 @@ struct ContextField {
 };
 
 // 선택된 행의 상세. 필드 개수는 지금 확정한다 -- Python이 필드 수로 잘라
-// 재조립하므로 B-1b에서 개수가 바뀌면 UI가 조용히 어긋난다. B-1a에서
-// applyAvailable은 항상 false, applyUnavailableReason은 항상
-// "NoActionRecorded"다: 자리는 있고 내용만 나중에 채워진다.
+// 재조립하므로 필드가 늘거나 줄면 UI가 조용히 어긋난다. applyAvailable과
+// applyUnavailableReason은 B-1a가 자리만 예약해 뒀고("항상 false" /
+// "NoActionRecorded"), B-1b-2(PanelPresenter.cpp의 buildPanelDetail)가
+// record.remedyAction과 targetNodeExists를 보고 실제 값을 채운다.
 struct PanelDetail {
     ContextField nodeType;
     ContextField attributeName;
