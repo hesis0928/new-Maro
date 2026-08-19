@@ -541,3 +541,75 @@ TEST(PanelPresenter, NoNoteForARecordWithoutASiteTag) {
 
     EXPECT_EQ(maro::buildPanelDetail(rec, nullptr, false, adjacency).crashAdjacencyNote, "");
 }
+
+// 해법이 없으면(RemedyActionKind::None) targetNodeExists와 무관하게
+// 항상 적용 불가다.
+TEST(PanelPresenter, NoRemedyMeansNotApplicableRegardlessOfNodeExistence) {
+    maro::DiagRecord rec;
+    rec.severity = maro::DiagSeverity::Error;
+    rec.message = "m";
+    const maro::CrashAdjacency adjacency;
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, /*targetNodeExists=*/true, adjacency);
+    EXPECT_FALSE(detail.applyAvailable);
+    EXPECT_EQ(detail.applyUnavailableReason, "NoActionRecorded");
+}
+
+// 해법이 있고 대상 노드가 존재하면 적용 가능하다.
+TEST(PanelPresenter, RemedyWithExistingTargetIsApplicable) {
+    maro::DiagRecord rec;
+    rec.severity = maro::DiagSeverity::Error;
+    rec.message = "m";
+    rec.remedyAction.kind = maro::RemedyActionKind::SelectNode;
+    rec.remedyAction.nodeName = "axisA";
+    const maro::CrashAdjacency adjacency;
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, /*targetNodeExists=*/true, adjacency);
+    EXPECT_TRUE(detail.applyAvailable);
+    EXPECT_TRUE(detail.applyUnavailableReason.empty());
+}
+
+// 해법은 있지만 대상 노드가 사라졌으면 적용 불가 -- 다른 이유로.
+TEST(PanelPresenter, RemedyWithMissingTargetIsNotApplicable) {
+    maro::DiagRecord rec;
+    rec.severity = maro::DiagSeverity::Error;
+    rec.message = "m";
+    rec.remedyAction.kind = maro::RemedyActionKind::SelectNode;
+    rec.remedyAction.nodeName = "axisA";
+    const maro::CrashAdjacency adjacency;
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, /*targetNodeExists=*/false, adjacency);
+    EXPECT_FALSE(detail.applyAvailable);
+    EXPECT_EQ(detail.applyUnavailableReason, "TargetNodeMissing");
+}
+
+// book/레코드에 사람이 등록한 remedy 텍스트가 없어도, 구조화된 해법이
+// 있으면 그것을 서술한 문장이 remedyText에 나온다 -- 사용자가 버튼만 보고
+// 뭐가 바뀌는지 모르면 안 된다.
+TEST(PanelPresenter, RemedyTextFallsBackToDescriptionWhenNothingIsRegistered) {
+    maro::DiagRecord rec;
+    rec.severity = maro::DiagSeverity::Error;
+    rec.message = "m";
+    rec.remedyAction.kind = maro::RemedyActionKind::SelectNode;
+    rec.remedyAction.nodeName = "axisA";
+    const maro::CrashAdjacency adjacency;
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, nullptr, /*targetNodeExists=*/true, adjacency);
+    EXPECT_EQ(detail.remedyText, "'axisA' 노드를 선택합니다.");
+}
+
+// 등록된 remedy 텍스트가 있으면 그것이 서술 문구보다 우선한다 -- 사람이
+// 쓴 설명이 기계가 만든 기본 서술보다 정보가 많다.
+TEST(PanelPresenter, RegisteredRemedyTextWinsOverDescription) {
+    maro::DiagRecord rec;
+    rec.severity = maro::DiagSeverity::Error;
+    rec.message = "m";
+    rec.remedyAction.kind = maro::RemedyActionKind::SelectNode;
+    rec.remedyAction.nodeName = "axisA";
+    maro::BookEntry entry;
+    entry.remedy = "the child transform under axisA usually solves this";
+    const maro::CrashAdjacency adjacency;
+
+    const maro::PanelDetail detail = maro::buildPanelDetail(rec, &entry, /*targetNodeExists=*/true, adjacency);
+    EXPECT_EQ(detail.remedyText, "the child transform under axisA usually solves this");
+}

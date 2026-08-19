@@ -128,8 +128,6 @@ PanelDetail buildPanelDetail(const DiagRecord& record,
                               const BookEntry* bookEntry,
                               bool targetNodeExists,
                               const CrashAdjacency& crashAdjacency) {
-    (void)targetNodeExists;  // B-1b가 적용 가능 여부를 판단할 때 쓴다.
-
     PanelDetail detail;
     // nodeType과 axisOrTarget은 MaroDeleteWatcher.cpp의 captureFromNode에서
     // 살아있는 Maya 조회로 채워지므로 둘 다 실패할 수 있다 -- 각자의 플래그를
@@ -153,13 +151,25 @@ PanelDetail buildPanelDetail(const DiagRecord& record,
     }
     if (bookEntry != nullptr && !bookEntry->remedy.empty()) {
         detail.remedyText = bookEntry->remedy;
-    } else {
+    } else if (!record.remedy.empty()) {
         detail.remedyText = record.remedy;
+    } else {
+        // 사람이 등록한 텍스트가 없어도 구조화된 해법이 있으면 그것을
+        // 서술한 문장을 대신 보여준다. 빈 채로 버튼만 뜨면 사용자가 뭐가
+        // 바뀌는지 모른 채 누르게 된다.
+        detail.remedyText = describeRemedyAction(record.remedyAction);
     }
 
-    // B-1a에는 구조화된 동작이 없다. 자리만 지키고 내용은 B-1b가 채운다.
-    detail.applyAvailable = false;
-    detail.applyUnavailableReason = "NoActionRecorded";
+    if (record.remedyAction.kind == RemedyActionKind::None) {
+        detail.applyAvailable = false;
+        detail.applyUnavailableReason = "NoActionRecorded";
+    } else if (!targetNodeExists) {
+        detail.applyAvailable = false;
+        detail.applyUnavailableReason = "TargetNodeMissing";
+    } else {
+        detail.applyAvailable = true;
+        detail.applyUnavailableReason.clear();
+    }
 
     // 잡음 문턱: 비정상 종료가 2회 미만이거나 이 태그가 1회만 걸렸으면
     // 아무것도 말하지 않는다.
