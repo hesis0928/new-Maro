@@ -42,10 +42,18 @@ cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\V
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] }
 }
 cd C:\Users\ckd30\Projects\Maya_Ros_Sim
-cmake --build out/build
+cmake --build out/build --config Release
 ```
 
 빌드가 `LNK1168`로 실패하면 잔존 `mayapy.exe`가 DLL을 잡고 있는 것이다: `Get-CimInstance Win32_Process -Filter "Name='mayapy.exe'" | Invoke-CimMethod -MethodName Terminate`.
+
+**`--config Release`/`-C Release`를 항상 명시한다.** 이 저장소의 `out/build`는 CMake Visual Studio 제너레이터(멀티 컨피그)라, 컨피그를 안 주면 `cmake --build`가 Debug로 링크를 시도하다가 `LNK2038`(`_ITERATOR_DEBUG_LEVEL` 불일치, `maro_diag`/`maro_transform`이 `src/maro_plugin/CMakeLists.txt`가 여는 devkit의 Debug CRT 오버라이드 스코프 밖에서 먼저 add_subdirectory되기 때문)로 죽는다. Task 5가 이걸 처음 밟고 진단했다 — 저장소 전체에 걸친 기존 버그이고 이 플랜이 만든 게 아니므로 고치지 않는다(아래 "알려진 사전 결함" 참고). Release는 이 불일치를 그냥 비켜 간다.
+
+**알려진, 이 플랜과 무관한 사전 결함 (고치지 않고 기록만 한다):**
+1. 위의 Debug 링크 실패 (`src/maro_plugin/CMakeLists.txt`의 devkit 포함이 자기 디렉터리 스코프에만 CRT 플래그를 걺, `main`에도 존재 확인함).
+2. `MARO_DIAG_PANEL_PY_OUT`(`src/maro_plugin/CMakeLists.txt`)이 컨피그별 경로가 아니라 `${CMAKE_CURRENT_BINARY_DIR}/maroDiagPanel.py` 고정 경로에 `maroDiagPanel.py`를 놓는데, `.mll`은 항상 `Debug/`나 `Release/` 하위에 있다 -- 어느 컨피그로 빌드해도 `test_panel_commands.py`가 그 파일을 못 찾는다(`ModuleNotFoundError`). `main`에도 동일하게 존재 확인함. 이 실패 하나만 빼고 전체 스위트를 본다: 이 플랜의 완료 기준은 "128/129, 이 사전 결함 하나만 예외"다.
+
+두 결함 모두 `main`에 이미 있고 이 플랜의 어떤 태스크도 `src/maro_plugin/CMakeLists.txt`를 건드리지 않으므로 이 브랜치가 만든 게 아니다. 최종 전체 브랜치 리뷰에서 "왜 129개 중 1개가 실패하냐"고 물으면 이 항목을 가리키면 된다.
 
 ## 범위 밖
 
@@ -143,7 +151,7 @@ TEST(RemedyAction, SetAttributeValueHasNoDecimalPoint) {
 - [ ] **Step 2: 테스트가 실패하는지 확인**
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R RemedyAction
+ctest --test-dir out/build -C Release --output-on-failure -R RemedyAction
 ```
 
 기대: 컴파일 실패 — `maro_diag/RemedyAction.h`가 없다.
@@ -284,11 +292,11 @@ add_executable(maro_diag_tests
 cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] }
 }
-cmake --build out/build
+cmake --build out/build --config Release
 ```
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R RemedyAction
+ctest --test-dir out/build -C Release --output-on-failure -R RemedyAction
 ```
 
 기대: 5개 전부 통과.
@@ -298,7 +306,7 @@ ctest --test-dir out/build --output-on-failure -R RemedyAction
 `describeRemedyAction`의 `SetAttribute` 분기에서 `action.attributeName`을 빼고 고정 문자열 `"attr"`로 바꾼다.
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R RemedyAction
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R RemedyAction
 ```
 
 기대: `SetAttributeNamesNodeAttributeAndValue`가 **실패**한다. 확인했으면 되돌린다.
@@ -693,11 +701,11 @@ MStatus MaroDiagQueryRemedyActionCommand::doIt(const MArgList& args) {
 cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] }
 }
-cmake --build out/build
+cmake --build out/build --config Release
 ```
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R "remedy_capture|maro_diag_tests"
+ctest --test-dir out/build -C Release --output-on-failure -R "remedy_capture|maro_diag_tests"
 ```
 
 기대: 전부 통과.
@@ -707,7 +715,7 @@ ctest --test-dir out/build --output-on-failure -R "remedy_capture|maro_diag_test
 `MaroDiagQueryRemedyActionCommand::doIt`의 `if (!BoadMaro::findRecordBySequence(...))` 블록 안 `return MS::kFailure;`를 `return MS::kSuccess;`로 바꾼다(찾지 못해도 성공한 것처럼 만든다).
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R remedy_capture
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R remedy_capture
 ```
 
 기대: `unknown sequence fails` 검증에서 **실패**한다(빈 배열을 6개로 언패킹하다 예외가 나거나 `raised`가 `False`). 확인했으면 되돌린다.
@@ -1123,11 +1131,11 @@ print("WouldCreateCycle has no remedy (by design) OK")
 cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] }
 }
-cmake --build out/build
+cmake --build out/build --config Release
 ```
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R remedy_capture
+ctest --test-dir out/build -C Release --output-on-failure -R remedy_capture
 ```
 
 기대: 통과. (이 테스트가 사실상 여섯 자리 전부를 한 번씩 실제로 유발하므로, 하나라도 해법이 안 채워지면 여기서 잡힌다 — 그래서 이 태스크는 자리마다 별도 deliberate-break 대신 이 종단 테스트 하나로 여섯 배선을 함께 못 박는다.)
@@ -1137,7 +1145,7 @@ ctest --test-dir out/build --output-on-failure -R remedy_capture
 `InvalidControlMode` 자리의 `remedy.value = 0.0;`을 `remedy.value = 1.0;`으로 바꾼다.
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R remedy_capture
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R remedy_capture
 ```
 
 기대: `InvalidControlMode remedy OK` 직전 단언에서 **실패**한다(`float(value) == 0.0`이 거짓). 확인했으면 되돌린다.
@@ -1242,7 +1250,7 @@ TEST(PanelPresenter, RegisteredRemedyTextWinsOverDescription) {
 - [ ] **Step 2: 테스트가 실패하는지 확인**
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R PanelPresenter
+ctest --test-dir out/build -C Release --output-on-failure -R PanelPresenter
 ```
 
 기대: `NoRemedyMeansNotApplicableRegardlessOfNodeExistence`는 이미 통과(기존 하드코딩과 우연히 일치), 나머지 네 개는 **실패**한다(`applyAvailable`가 항상 false, `remedyText`가 항상 비어 있거나 기존 값).
@@ -1294,7 +1302,7 @@ ctest --test-dir out/build --output-on-failure -R PanelPresenter
 - [ ] **Step 4: 빌드하고 테스트가 통과하는지 확인**
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R PanelPresenter
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R PanelPresenter
 ```
 
 기대: 전부 통과.
@@ -1304,7 +1312,7 @@ cmake --build out/build && ctest --test-dir out/build --output-on-failure -R Pan
 `else if (!targetNodeExists) {` 줄을 `else if (false) {`로 바꾼다.
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R PanelPresenter
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R PanelPresenter
 ```
 
 기대: `RemedyWithMissingTargetIsNotApplicable`이 **실패**한다(`applyAvailable`가 true가 됨). 확인했으면 되돌린다.
@@ -1468,11 +1476,11 @@ bool remedyTargetsExist(const RemedyAction& remedy) {
 cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] }
 }
-cmake --build out/build
+cmake --build out/build --config Release
 ```
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R remedy_availability
+ctest --test-dir out/build -C Release --output-on-failure -R remedy_availability
 ```
 
 기대: 통과.
@@ -1482,7 +1490,7 @@ ctest --test-dir out/build --output-on-failure -R remedy_availability
 `remedyTargetsExist`를 임시로 항상 `true`를 돌려주게 바꾼다(`return true;`를 함수 맨 앞에 추가).
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R remedy_availability
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R remedy_availability
 ```
 
 기대: `unavailable after delete OK` 이전 단언에서 **실패**한다(삭제 후에도 `applyAvailable == "1"`). 확인했으면 되돌린다.
@@ -1861,11 +1869,11 @@ set(SOURCE_FILES
 cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] }
 }
-cmake --build out/build
+cmake --build out/build --config Release
 ```
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R main_thread_queue
+ctest --test-dir out/build -C Release --output-on-failure -R main_thread_queue
 ```
 
 기대: 통과.
@@ -1882,7 +1890,7 @@ MStatus MaroQueueTestEnqueueIncrementCommand::doIt(const MArgList&) {
 ```
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R main_thread_queue
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R main_thread_queue
 ```
 
 기대: `deferred (not inline) OK` 직전 단언에서 **실패**한다(`maroQueueTestCounter()`가 곧바로 1). 확인했으면 되돌린다.
@@ -2438,11 +2446,11 @@ set(SOURCE_FILES
 cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($matches[1])" -Value $matches[2] }
 }
-cmake --build out/build
+cmake --build out/build --config Release
 ```
 
 ```bash
-ctest --test-dir out/build --output-on-failure -R remedy_apply
+ctest --test-dir out/build -C Release --output-on-failure -R remedy_apply
 ```
 
 기대: 통과.
@@ -2452,7 +2460,7 @@ ctest --test-dir out/build --output-on-failure -R remedy_apply
 `MaroApplyRemedyCommand::isUndoable()`을 임시로 `return false;`로 바꾼다.
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R remedy_apply
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R remedy_apply
 ```
 
 기대: `cmds.undo()`가 이 커맨드를 건너뛰어 `disconnect undo OK` 이전 단언(연결이 복원됐는지)에서 **실패**한다. 확인했으면 되돌린다.
@@ -2462,7 +2470,7 @@ cmake --build out/build && ctest --test-dir out/build --output-on-failure -R rem
 `MaroApplyRemedyCommand::doIt`의 `SelectNode`/`SetAttribute` 재확인 블록에서 `if (!nameStillExists(nodeName)) {`를 `if (false) {`로 바꾼다.
 
 ```bash
-cmake --build out/build && ctest --test-dir out/build --output-on-failure -R remedy_apply
+cmake --build out/build --config Release && ctest --test-dir out/build -C Release --output-on-failure -R remedy_apply
 ```
 
 기대: `vanished target fails cleanly OK` 이전 단언에서 **실패**한다(사라진 노드에 대해서도 성공한 것처럼 동작하다 `MSelectionList::add`/`findPlug`가 내부에서 조용히 실패하거나 예외 없이 잘못된 상태로 진행). 확인했으면 되돌린다.
@@ -2470,10 +2478,10 @@ cmake --build out/build && ctest --test-dir out/build --output-on-failure -R rem
 - [ ] **Step 9: 전체 스위트가 여전히 통과하는지 확인**
 
 ```bash
-ctest --test-dir out/build --output-on-failure
+ctest --test-dir out/build -C Release --output-on-failure
 ```
 
-기대: 전부 통과 (이 플랜 시작 시점 117개 + 이 플랜이 추가한 신규 gtest 5개(Task 1) + mayapy 4개(Task 2, 5, 6, 7) = 126개 언저리; 정확한 숫자는 출력으로 확인한다).
+기대: Global Constraints의 사전 결함 #2(`maya_panel_commands`) 하나만 빼고 전부 통과 (이 플랜 시작 시점 117개 + 이 플랜이 추가한 신규 gtest 5개(Task 1) + mayapy 4개(Task 2, 5, 6, 7) = 126개 언저리; 정확한 숫자는 출력으로 확인한다).
 
 - [ ] **Step 10: 커밋**
 
@@ -2666,7 +2674,7 @@ git commit -m "feat: wire an Apply button into the diagnostic panel"
 
 ## 완료 기준
 
-- `ctest --test-dir out/build --output-on-failure` 전부 통과
+- `ctest --test-dir out/build -C Release --output-on-failure` 전부 통과 — 단, Global Constraints에 적은 사전 결함 #2(`maya_panel_commands`의 `ModuleNotFoundError`)는 `main`에 이미 있고 이 플랜이 만들지 않았으므로 유일한 예외로 인정한다
 - 여섯 개 알려진 실패가 각자 올바른 구조화된 해법(또는 `WouldCreateCycle`처럼 의도적으로 없음)을 낸다
 - 대상이 사라지면 적용 불가로 정확히 바뀐다
 - 적용은 항상 큐를 거쳐 다음 틱에서 일어나고, `Ctrl+Z`로 되돌아간다
