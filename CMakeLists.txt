@@ -31,6 +31,7 @@ option(MARO_BUILD_TESTS  "Build tests" ON)
 
 add_subdirectory(src/maro_transform)
 add_subdirectory(src/maro_diag)
+add_subdirectory(src/maro_ipc)
 
 if(MARO_BUILD_TESTS)
     enable_testing()

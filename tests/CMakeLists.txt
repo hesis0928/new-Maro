@@ -6,6 +6,20 @@ find_package(GTest CONFIG REQUIRED)
 # is repeated here rather than relying on that one.
 find_package(nlohmann_json CONFIG REQUIRED)
 
+include(GoogleTest)
+
+add_executable(maro_ipc_tests
+    ipc/test_message.cpp
+)
+
+target_link_libraries(maro_ipc_tests PRIVATE
+    maro_ipc
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_discover_tests(maro_ipc_tests)
+
 add_executable(maro_transform_tests
     transform/test_convert.cpp
 )
@@ -16,7 +30,6 @@ target_link_libraries(maro_transform_tests PRIVATE
     GTest::gtest_main
 )
 
-include(GoogleTest)
 gtest_discover_tests(maro_transform_tests)
 
 add_executable(maro_diag_tests
