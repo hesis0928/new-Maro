@@ -3,6 +3,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 add_library(maro_ipc STATIC
     src/Message.cpp
     src/Naming.cpp
+    src/SentinelRecord.cpp
 )
 
 target_include_directories(maro_ipc PUBLIC

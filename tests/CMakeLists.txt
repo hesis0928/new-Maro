@@ -11,6 +11,7 @@ include(GoogleTest)
 add_executable(maro_ipc_tests
     ipc/test_message.cpp
     ipc/test_naming.cpp
+    ipc/test_sentinel_record.cpp
 )
 
 target_link_libraries(maro_ipc_tests PRIVATE
