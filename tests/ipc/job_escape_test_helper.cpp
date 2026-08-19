@@ -6,7 +6,7 @@
 // 종료 코드: 0 = 예상대로 거부됨(탈출 실패), 1 = 예상과 다르게 성공함
 // (job이 breakaway를 막았어야 하는데 자식이 spawn됨), 2 = 설정 자체가 실패
 // (job 생성/할당 실패 -- 이 머신의 권한 문제일 수 있어 테스트가 이 경우를
-// 스킵으로 처리한다).
+// 스킵으로 처리한다), 3 = --child로 재실행된 손자가 즉시 빠져나감.
 #include <windows.h>
 
 #include <cstdio>
@@ -20,15 +20,15 @@ int main(int argc, char** argv) {
     // 원래 브리프의 주석은 "별도 분기 없이 그대로 둔다"고 했다 -- 손자가
     // 같은 main()을 타서 자기 job을 또 만들고 spawnWithBreakaway를 또
     // 시도하더라도, 부모가 spawn 직후 TerminateProcess로 곧장 정리하니
-    // 실질적인 부작용이 없다는 논리였다. Step 8(고의로 breakaway를
-    // 허용해 봄)에서 실측한 결과 이 전제가 깨진다: 부모 자신도 자기
-    // job에 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE로 들어가 있어서, spawn 직후
-    // CloseHandle(job)이 부모를 비동기로 죽이는 레이스가 TerminateProcess
-    // 호출보다 먼저 이기는 경우가 실제로 있었다 -- 그러면 부모는 자기
-    // 자식을 정리하지 못한 채 죽고, 고아가 된 자식이 손자를 낳고, 그
-    // 손자도 똑같이 고아가 되어 또 손자를 낳는 식으로 프로세스가 끝없이
-    // 이어지는 것을 직접 목격했다(수 초 안에 세대가 계속 바뀌며 실행
-    // 중인 프로세스가 관찰됨). --child는 그 사슬을 여기서 끊는다.
+    // 실질적인 부작용이 없다는 논리였다. 이 전제는 예전 버전에서 깨졌다:
+    // 그때는 이 job에 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE가 걸려 있었고,
+    // 부모 자신이 그 job의 멤버이면서 유일한 핸들 소유자였다. 그러면
+    // CloseHandle(job)이 마지막 핸들을 닫는 순간 Windows가 부모를 반드시
+    // 죽인다 -- 레이스가 아니라 결정론적 동작이다(15/15 추적 실행 전부
+    // 동일). 부모는 자기 자식을 정리하지 못한 채 죽고, 고아가 된 자식이
+    // 손자를 낳는 사슬이 이어졌다. 지금은 아래에서 KILL_ON_JOB_CLOSE를
+    // 아예 걸지 않으므로 근본 원인이 사라졌지만, --child 가드는 방어
+    // 차원에서 그대로 둔다(비용이 없다).
     if (argc > 1 && std::strcmp(argv[1], "--child") == 0) {
         return 3;
     }
@@ -40,8 +40,17 @@ int main(int argc, char** argv) {
     }
 
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    // 일부러 JOB_OBJECT_LIMIT_BREAKAWAY_OK를 안 건다 -- 이 job은 탈출을 막는다.
+    // LimitFlags를 비워 둔다. 이 테스트에 필요한 성질은 단 하나,
+    // "JOB_OBJECT_LIMIT_BREAKAWAY_OK가 없다"는 것이다 -- 그것만으로 job은
+    // CREATE_BREAKAWAY_FROM_JOB을 거부한다. 특히
+    // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE는 절대 걸면 안 된다: 이 프로세스가
+    // 자기 job의 멤버이자 그 job의 유일한 핸들 소유자이므로, 그 플래그가
+    // 있으면 아래 CloseHandle(job)이 마지막 핸들을 닫는 순간 Windows가 이
+    // 프로세스를 죽인다. 그러면 그 뒤의 return 0 / return 1이 둘 다 도달
+    // 불가능해지고, job에 죽은 프로세스의 종료 코드는 0이라서 테스트가
+    // spawnWithBreakaway의 실제 결과와 무관하게 항상 통과하는 -- 즉 아무것도
+    // 검증하지 못하는 -- 테스트가 된다.
+    info.BasicLimitInformation.LimitFlags = 0;
     if (!::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info,
                                    sizeof(info))) {
         std::fprintf(stderr, "SetInformationJobObject failed: %lu\n", ::GetLastError());
@@ -77,7 +86,11 @@ int main(int argc, char** argv) {
         ::TerminateProcess(childInfo->hProcess, 0);
         ::CloseHandle(childInfo->hProcess);
         ::CloseHandle(childInfo->hThread);
+        std::fprintf(stderr, "helper: spawnWithBreakaway UNEXPECTEDLY SUCCEEDED, exiting 1\n");
         return 1;
     }
+    // 여기까지 왔다는 것 자체가 증거다: 이 프로세스는 CloseHandle(job)에서
+    // 죽지 않고 살아남아, 실제 거부를 직접 관측한 뒤 0을 돌려준다.
+    std::fprintf(stderr, "helper: spawnWithBreakaway refused as expected, exiting 0\n");
     return 0;
 }
