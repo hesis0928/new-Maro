@@ -11,6 +11,7 @@
 #include "MaroDiagCommands.h"
 #include "MaroMainThreadQueue.h"
 #include "MaroPanelCommands.h"
+#include "MaroRemedyCommands.h"
 
 namespace {
 constexpr char kVendor[] = "Maro";
@@ -219,6 +220,22 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroDiagRequestRemedy",
+                                    maro::MaroDiagRequestRemedyCommand::creator,
+                                    maro::MaroDiagRequestRemedyCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroDiagRequestRemedy");
+        return status;
+    }
+
+    status = plugin.registerCommand("maroApplyRemedy",
+                                    maro::MaroApplyRemedyCommand::creator,
+                                    maro::MaroApplyRemedyCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroApplyRemedy");
+        return status;
+    }
+
     status = plugin.registerCommand("maroDiagEmitMarked",
                                     maro::MaroDiagEmitMarkedCommand::creator,
                                     maro::MaroDiagEmitMarkedCommand::newSyntax);
@@ -307,6 +324,16 @@ MStatus uninitializePlugin(MObject obj) {
         plugin.deregisterCommand("maroJournalAbnormalSessions");
 
         plugin.deregisterCommand("maroDiagEmitMarked");
+
+        // 브리프 Step 5는 이 둘을 maroDiagQueryRemedyAction 바로 위에 놓으라고
+        // 했지만, 그 자리는 등록 역순이 아니다 -- 같은 브리프가 등록은
+        // maroQueueTestCounter "뒤"에 두라고 했으므로, 역순이라면 이 둘의
+        // 해제는 maroQueueTest 두 개보다 "먼저" 와야 한다. 이 파일이 스스로
+        // 내건 규율(등록 역순)을 따르는 쪽을 택했다. 해제 순서 자체는
+        // 기능적으로 무해하지만, 규율이 한 곳에서 어긋나면 규율이 아니게 된다.
+        plugin.deregisterCommand("maroApplyRemedy");
+        plugin.deregisterCommand("maroDiagRequestRemedy");
+
         // 브리프 Step 6에는 이 두 테스트 전용 커맨드의 deregister 호출이
         // 없었다 -- 이 파일의 다른 모든 registerCommand는 반드시 짝을 이루는
         // deregisterCommand를 이 함수 안에 갖고 있는데(위아래 블록 전부가
