@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -19,5 +20,12 @@ bool isCurrentProcessInJob();
 // (PROCESS_INFORMATION::hProcess/hThread).
 std::optional<PROCESS_INFORMATION> spawnWithBreakaway(const std::string& exePath,
                                                         const std::string& args);
+
+// WMI Win32_Process::Create로 우회 생성한다. 이 경로로 만들어진 프로세스는
+// Maya의 자식이 아니라 WMI 서비스(WinMgmt) 밑에서 만들어지므로 Maya의 job과
+// 무관하다 -- CREATE_BREAKAWAY_FROM_JOB이 막혔을 때의 2단계 폴백. 같은
+// 사용자 프로세스라 관리자 권한이 필요 없다. 실패(경로가 없거나, 생성
+// 자체가 거부되거나)하면 nullopt.
+std::optional<std::uint64_t> spawnViaWmi(const std::string& exePath, const std::string& args);
 
 }  // namespace maro::ipc

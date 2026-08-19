@@ -63,4 +63,28 @@ TEST(JobEscape, SpawnWithBreakawayFailsInsideARestrictiveJob) {
            "got exit code " << exitCode;
 }
 
+TEST(JobEscape, SpawnViaWmiActuallyStartsAProcess) {
+    // notepad.exe는 모든 Windows에 있고 창을 띄우지만 사용자 상호작용을
+    // 요구하지 않는다 -- 뜨자마자 바로 종료시킨다.
+    const auto pid = maro::ipc::spawnViaWmi("C:\\Windows\\System32\\notepad.exe", "");
+    ASSERT_TRUE(pid.has_value());
+
+    HANDLE process = ::OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                                   FALSE, static_cast<DWORD>(*pid));
+    ASSERT_NE(process, nullptr)
+        << "spawnViaWmi reported PID " << *pid << " but no such process exists";
+
+    DWORD exitCodeBeforeTerminate = 0;
+    ::GetExitCodeProcess(process, &exitCodeBeforeTerminate);
+    EXPECT_EQ(exitCodeBeforeTerminate, static_cast<DWORD>(STILL_ACTIVE));
+
+    ::TerminateProcess(process, 0);
+    ::CloseHandle(process);
+}
+
+TEST(JobEscape, SpawnViaWmiFailsCleanlyOnBogusPath) {
+    const auto pid = maro::ipc::spawnViaWmi("C:\\this\\path\\does\\not\\exist.exe", "");
+    EXPECT_FALSE(pid.has_value());
+}
+
 }  // namespace
