@@ -1,5 +1,6 @@
 #include "MaroRemedyCommands.h"
 
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <string>
@@ -211,7 +212,9 @@ MStatus MaroApplyRemedyCommand::doIt(const MArgList& args) {
                 MPlug plug = fn.findPlug(MString(remedy.attributeName.c_str()), false,
                                          &plugStatus);
                 if (!plugStatus) return plugStatus;
-                m_modifier.newPlugValueInt(plug, static_cast<int>(remedy.value));
+                // Round the same way describeRemedyAction() does so the record cannot
+                // claim a different number was applied than what actually was.
+                m_modifier.newPlugValueInt(plug, static_cast<int>(std::llround(remedy.value)));
                 break;
             }
             case RemedyActionKind::Disconnect: {
