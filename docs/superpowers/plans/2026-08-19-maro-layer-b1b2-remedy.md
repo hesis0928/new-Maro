@@ -2116,11 +2116,16 @@ private:
 ```cpp
 #include "MaroRemedyCommands.h"
 
+#include <cstdint>
+#include <exception>
+#include <string>
+
 #include <maya/MArgDatabase.h>
 #include <maya/MArgList.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
 #include <maya/MPlug.h>
+#include <maya/MPlugArray.h>
 
 #include "MaroDiag.h"
 #include "MaroMainThreadQueue.h"
@@ -2192,8 +2197,15 @@ MStatus MaroDiagRequestRemedyCommand::doIt(const MArgList& args) {
         }
 
         MaroMainThreadQueue::enqueue([sequence]() {
+            // executeCommand의 이 오버로드는 undoEnabled 기본값이 false다
+            // (devkit MGlobal.h) -- 명시하지 않으면 maroApplyRemedy가 실행은
+            // 되어도 undo 큐에 절대 안 올라가고, 사용자가 Ctrl+Z를 누르면
+            // 이 해법이 아니라 그 직전의 무관한 커맨드가 되돌아간다. 이
+            // 태스크의 존재 이유(되돌릴 수 있는 적용)를 통째로 무력화하는
+            // 결함이라 반드시 true로 준다.
             MGlobal::executeCommand(
-                MString("maroApplyRemedy -sequence ") + MString(std::to_string(sequence).c_str()));
+                MString("maroApplyRemedy -sequence ") + MString(std::to_string(sequence).c_str()),
+                /*displayEnabled=*/false, /*undoEnabled=*/true);
         });
         return MS::kSuccess;
     } catch (const std::exception& e) {
@@ -2318,9 +2330,15 @@ MStatus MaroApplyRemedyCommand::doIt(const MArgList& args) {
         m_stagedChange = true;
         status = redoIt();
         if (status) {
+            // MString(const char*) 기본 생성자는 로케일의 네이티브 멀티바이트
+            // 인코딩을 가정한다(devkit MString.h 문서) -- describeRemedyAction()의
+            // UTF-8 한국어 출력을 그대로 넘기면 CP949 등 비-UTF-8 코드페이지에서
+            // 모지바케가 난다. MaroPanelCommands.cpp가 같은 이유로 쓰는 setUTF8()
+            // 관례를 그대로 따른다.
+            MString description;
+            description.setUTF8(describeRemedyAction(remedy).c_str());
             BoadMaro::info(MString("Maro: applied remedy for sequence ") +
-                          MString(std::to_string(sequence).c_str()) + ": " +
-                          MString(describeRemedyAction(remedy).c_str()));
+                          MString(std::to_string(sequence).c_str()) + ": " + description);
         }
         return status;
     } catch (const std::exception& e) {
@@ -2409,7 +2427,7 @@ MStatus MaroApplyRemedyCommand::undoIt() {
     }
 ```
 
-`uninitializePlugin`의 `plugin.deregisterCommand("maroDiagQueryRemedyAction");` 바로 위에 추가(등록 역순):
+`uninitializePlugin`의 `plugin.deregisterCommand("maroDiagEmitMarked");` 바로 **아래**에 추가. (`maroDiagQueryRemedyAction` 바로 위가 아니다 -- 등록 순서가 `...maroDiagQueryRemedyAction -> maroQueueTestEnqueueIncrement -> maroQueueTestCounter -> maroDiagRequestRemedy -> maroApplyRemedy -> maroDiagEmitMarked...`이므로, 진짜 역순 자리는 `maroDiagEmitMarked` 바로 다음, 즉 두 큐 테스트 커맨드의 deregister보다 먼저다):
 
 ```cpp
         plugin.deregisterCommand("maroApplyRemedy");
