@@ -120,4 +120,18 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
+// 테스트 전용. 상시 큐에 카운터를 1 올리는 작업을 넣는다. 인자 없음.
+class MaroQueueTestEnqueueIncrementCommand : public MPxCommand {
+public:
+    static void* creator();
+    MStatus doIt(const MArgList& args) override;
+};
+
+// 테스트 전용. 위 커맨드가 큐를 통해 실제로 올린 누적 횟수.
+class MaroQueueTestCounterCommand : public MPxCommand {
+public:
+    static void* creator();
+    MStatus doIt(const MArgList& args) override;
+};
+
 }  // namespace maro

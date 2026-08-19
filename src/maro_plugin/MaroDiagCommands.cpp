@@ -10,6 +10,7 @@
 #include <maya/MStringArray.h>
 
 #include "MaroDiag.h"
+#include "MaroMainThreadQueue.h"
 
 namespace maro {
 
@@ -64,6 +65,11 @@ MString severityToString(DiagSeverity s) {
         case DiagSeverity::Error: return "error";
     }
     return "unknown";
+}
+
+std::atomic<int>& queueTestCounter() {
+    static std::atomic<int> counter{0};
+    return counter;
 }
 
 }  // namespace
@@ -584,6 +590,24 @@ MStatus MaroDiagQueryRemedyActionCommand::doIt(const MArgList& args) {
             "Maro: maroDiagQueryRemedyAction failed with unknown error.");
         return MS::kFailure;
     }
+}
+
+void* MaroQueueTestEnqueueIncrementCommand::creator() {
+    return new MaroQueueTestEnqueueIncrementCommand();
+}
+
+MStatus MaroQueueTestEnqueueIncrementCommand::doIt(const MArgList&) {
+    MaroMainThreadQueue::enqueue([]() { queueTestCounter().fetch_add(1); });
+    return MS::kSuccess;
+}
+
+void* MaroQueueTestCounterCommand::creator() {
+    return new MaroQueueTestCounterCommand();
+}
+
+MStatus MaroQueueTestCounterCommand::doIt(const MArgList&) {
+    setResult(queueTestCounter().load());
+    return MS::kSuccess;
 }
 
 }  // namespace maro

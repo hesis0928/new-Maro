@@ -9,6 +9,7 @@
 #include "MaroDeleteWatcher.h"
 #include "MaroDiag.h"
 #include "MaroDiagCommands.h"
+#include "MaroMainThreadQueue.h"
 #include "MaroPanelCommands.h"
 
 namespace {
@@ -26,6 +27,13 @@ constexpr char kVersion[] = "0.1.0";
 struct JournalCloseGuard {
     ~JournalCloseGuard() { maro::BoadMaro::closeJournal(); }
 };
+
+// 큐도 저널과 같은 이유로 가드를 쓴다 -- 이 함수의 어떤 경로로 빠져나가든
+// (정상 반환이든 catch로의 되감김이든) 타이머 콜백을 반드시 뗀다. 안 떼면
+// 언로드된 코드의 클로저(task)가 다음 틱에서 불려 크래시한다.
+struct MainThreadQueueGuard {
+    ~MainThreadQueueGuard() { maro::MaroMainThreadQueue::uninstall(); }
+};
 }  // namespace
 
 MStatus initializePlugin(MObject obj) {
@@ -39,6 +47,12 @@ MStatus initializePlugin(MObject obj) {
     // 저널을 연다. markMainThread()가 book 경로를 이미 확정했으므로
     // 저널 경로도 여기서 안전하게 해소된다.
     maro::BoadMaro::openJournal();
+
+    MStatus queueStatus = maro::MaroMainThreadQueue::install();
+    if (!queueStatus) {
+        queueStatus.perror("Maro: failed to install the main-thread queue");
+        return queueStatus;
+    }
 
     MFnPlugin plugin(obj, kVendor, kVersion, "Any");
 
@@ -191,6 +205,20 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroQueueTestEnqueueIncrement",
+                                    maro::MaroQueueTestEnqueueIncrementCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroQueueTestEnqueueIncrement");
+        return status;
+    }
+
+    status = plugin.registerCommand("maroQueueTestCounter",
+                                    maro::MaroQueueTestCounterCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroQueueTestCounter");
+        return status;
+    }
+
     status = plugin.registerCommand("maroDiagEmitMarked",
                                     maro::MaroDiagEmitMarkedCommand::creator,
                                     maro::MaroDiagEmitMarkedCommand::newSyntax);
@@ -254,6 +282,11 @@ MStatus uninitializePlugin(MObject obj) {
     // 직접 부르는 대신 이 가드 하나로 옮긴 이유가 그것이다.
     const JournalCloseGuard closeJournalOnExit;
 
+    // 큐를 저널보다 먼저 뗀다 -- 정지 순서는 중요하지 않지만(큐 작업이
+    // 저널을 부르지 않는다), 상시 인프라를 하나씩 순서대로 내리는 쪽이
+    // 나중에 유지보수할 때 더 읽기 쉽다.
+    const MainThreadQueueGuard queueGuardOnExit;
+
     try {
         MFnPlugin plugin(obj);
 
@@ -274,6 +307,16 @@ MStatus uninitializePlugin(MObject obj) {
         plugin.deregisterCommand("maroJournalAbnormalSessions");
 
         plugin.deregisterCommand("maroDiagEmitMarked");
+        // 브리프 Step 6에는 이 두 테스트 전용 커맨드의 deregister 호출이
+        // 없었다 -- 이 파일의 다른 모든 registerCommand는 반드시 짝을 이루는
+        // deregisterCommand를 이 함수 안에 갖고 있는데(위아래 블록 전부가
+        // 그 규율을 따른다), 이 둘만 빠지면 unloadPlugin 이후에도 Maya의
+        // 전역 커맨드 레지스트리가 이미 언로드된 DLL 코드를 가리키는
+        // 함수 포인터를 계속 들고 있게 된다 -- 그 상태에서 누가
+        // maroQueueTestCounter를 부르면 크래시한다. 브리프의 누락으로 보고
+        // 이 파일의 기존 관례(등록 역순 deregister)를 따라 채워 넣었다.
+        plugin.deregisterCommand("maroQueueTestCounter");
+        plugin.deregisterCommand("maroQueueTestEnqueueIncrement");
         plugin.deregisterCommand("maroDiagQueryRemedyAction");
         plugin.deregisterCommand("maroDiagRegisterRemedy");
         plugin.deregisterCommand("maroDiagAnalysisCount");

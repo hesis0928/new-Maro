@@ -15,6 +15,7 @@ set(SOURCE_FILES
     MaroDiag.cpp
     MaroDiagCommands.cpp
     MaroPanelCommands.cpp
+    MaroMainThreadQueue.cpp
 )
 
 set(LIBRARIES

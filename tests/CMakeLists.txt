@@ -151,7 +151,8 @@ if(MARO_BUILD_PLUGIN)
                       robustness diag_boad diag_onfix diag_book
                       diag_book_cross_session diag_remedy
                       diag_degraded diag_degraded_remedy diag_thread
-                      panel_commands journal remedy_capture remedy_availability)
+                      panel_commands journal remedy_capture
+                      remedy_availability main_thread_queue)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
