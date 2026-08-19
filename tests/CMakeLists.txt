@@ -14,6 +14,7 @@ add_executable(maro_ipc_tests
     ipc/test_sentinel_record.cpp
     ipc/test_named_mutex_guard.cpp
     ipc/test_named_pipe.cpp
+    ipc/test_job_escape.cpp
 )
 
 target_link_libraries(maro_ipc_tests PRIVATE
@@ -23,6 +24,9 @@ target_link_libraries(maro_ipc_tests PRIVATE
 )
 
 gtest_discover_tests(maro_ipc_tests)
+
+add_executable(maro_job_escape_test_helper ipc/job_escape_test_helper.cpp)
+target_link_libraries(maro_job_escape_test_helper PRIVATE maro_ipc)
 
 add_executable(maro_transform_tests
     transform/test_convert.cpp

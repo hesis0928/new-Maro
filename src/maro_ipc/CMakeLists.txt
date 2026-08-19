@@ -6,6 +6,7 @@ add_library(maro_ipc STATIC
     src/SentinelRecord.cpp
     src/NamedMutexGuard.cpp
     src/NamedPipe.cpp
+    src/JobEscape.cpp
 )
 
 target_include_directories(maro_ipc PUBLIC
