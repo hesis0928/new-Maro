@@ -75,6 +75,16 @@ shape = cmds.listRelatives(cube, shapes=True)[0]
 axisA = cmds.createNode("maroAxis", name="axisA")
 axisB = cmds.createNode("maroAxis", name="axisB")
 
+# 최종 리뷰 Finding I1 이후로 이 자리들은 전부 짧은 이름이 아니라 모호하지
+# 않은 전체 DAG 경로를 담는다(MaroCommands.cpp의 unambiguousNodeName /
+# unambiguousPlugName). 짧은 이름은 나중에 Apply를 누르는 시점에 같은 하나를
+# 가리킨다는 보장이 없기 때문이다 -- 같은 짧은 이름이 다른 부모 아래 또 있는
+# 씬은 지극히 평범하다. 아래 비교는 전부 그 전체 경로 기준이다.
+# (maroAxis는 MPxLocatorNode 파생이라 자동 생성된 transform 밑의 shape이다:
+#  "axisA"의 전체 경로는 "|transform1|axisA" 꼴이 된다.)
+cubePath = cmds.ls(cube, long=True)[0]
+axisAPath = cmds.ls(axisA, long=True)[0]
+
 # TargetNotTransform: shape을 바인딩 시도 -> 부모 transform을 selectNode.
 try:
     cmds.maroBindAxis(axisA, shape)
@@ -105,7 +115,8 @@ assert raised, "re-binding an already-bound axis must fail"
 seq = int(cmds.maroDiagQuery(index=0)[10])
 kind, _, _, _, srcPlug, dstPlug = cmds.maroDiagQueryRemedyAction(sequence=seq)
 assert kind == "disconnect", kind
-assert srcPlug.startswith(cube + ".") and dstPlug == axisA + ".targetObject", (srcPlug, dstPlug)
+assert srcPlug == cubePath + ".message" and dstPlug == axisAPath + ".targetObject", (
+    srcPlug, dstPlug)
 print("AxisAlreadyBound remedy OK")
 
 # ObjectAlreadyHasAxis: cube는 이미 axisA에 묶여 있다. axisB로도 바인딩
@@ -119,7 +130,7 @@ assert raised, "binding an already-claimed object must fail"
 seq = int(cmds.maroDiagQuery(index=0)[10])
 kind, _, _, _, srcPlug, dstPlug = cmds.maroDiagQueryRemedyAction(sequence=seq)
 assert kind == "disconnect", kind
-assert dstPlug == axisA + ".targetObject", dstPlug
+assert dstPlug == axisAPath + ".targetObject", dstPlug
 print("ObjectAlreadyHasAxis remedy OK")
 
 # InvalidControlMode: SetAttribute(controlMode, 0).
@@ -131,10 +142,27 @@ except RuntimeError:
 assert raised, "an invalid control mode must fail"
 seq = int(cmds.maroDiagQuery(index=0)[10])
 kind, nodeName, attrName, value, _, _ = cmds.maroDiagQueryRemedyAction(sequence=seq)
-assert kind == "setAttribute" and nodeName == axisA and attrName == "controlMode", (
+assert kind == "setAttribute" and nodeName == axisAPath and attrName == "controlMode", (
     kind, nodeName, attrName)
 assert float(value) == 0.0, value
 print("InvalidControlMode remedy OK")
+
+# Finding I2: 이 해법은 대상이 진짜 maroAxis일 때만 붙는다. 존재하지 않는
+# 이름이나 maroAxis가 아닌 노드에는 controlMode 어트리뷰트 자체가 없으므로,
+# 해법을 달면 눌러도 아무 일도 안 일어나는 버튼이 된다. 실패 자체는 그대로
+# InvalidControlMode여야 한다 -- 검사 순서는 바뀌지 않았다.
+for bogus in ("noSuchNodeAtAll", cube):
+    try:
+        cmds.maroSetControlMode(bogus, 5)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised, "an invalid control mode must still fail for %r" % (bogus,)
+    seq = int(cmds.maroDiagQuery(index=0)[10])
+    kind, _, _, _, _, _ = cmds.maroDiagQueryRemedyAction(sequence=seq)
+    assert kind == "none", (
+        "InvalidControlMode must not offer a fix for %r, got %s" % (bogus, kind))
+print("InvalidControlMode offers no remedy for a bogus target OK")
 
 # SelfParent / NotMaroAxisNode(둘째 자리): maroConnectAxis 경유.
 #
@@ -155,7 +183,7 @@ except RuntimeError:
 assert raised, "self-parenting must fail"
 seq = int(cmds.maroDiagQuery(index=0)[10])
 kind, nodeName, _, _, _, _ = cmds.maroDiagQueryRemedyAction(sequence=seq)
-assert kind == "selectNode" and nodeName == axisA, (kind, nodeName)
+assert kind == "selectNode" and nodeName == axisAPath, (kind, nodeName)
 print("SelfParent remedy OK")
 
 try:
@@ -166,7 +194,7 @@ except RuntimeError:
 assert raised, "connecting a non-axis node must fail"
 seq = int(cmds.maroDiagQuery(index=0)[10])
 kind, nodeName, _, _, _, _ = cmds.maroDiagQueryRemedyAction(sequence=seq)
-assert kind == "selectNode" and nodeName == cube, (kind, nodeName)
+assert kind == "selectNode" and nodeName == cubePath, (kind, nodeName)
 print("NotMaroAxisNode remedy OK")
 
 # WouldCreateCycle: 의도적으로 해법이 없다.

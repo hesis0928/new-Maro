@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include <maya/MAngle.h>
@@ -23,6 +24,70 @@
 #include "MaroRosRuntime.h"
 
 namespace maro {
+
+namespace {
+
+// 최종 리뷰 Finding I1의 근본 원인 쪽 대책.
+//
+// RemedyAction에 담기는 이름은 "실패가 난 지금"이 아니라 "사용자가 나중에
+// Apply를 누르는 그때" 다시 풀린다. 그 사이에 씬은 얼마든지 바뀔 수 있으므로,
+// 담는 이름은 그때도 여전히 **정확히 하나**를 가리켜야 한다. 짧은 이름은 그
+// 성질을 갖지 못한다: 다른 부모 아래 같은 짧은 이름을 갖는 노드는 Maya 씬에서
+// 지극히 평범하다(그룹 둘에 각각 pCube1).
+//
+// 실측(Maya 2026, mayapy):
+//   MSelectionList::add("pCube1")          -> kInvalidParameter (아예 실패)
+//   MSelectionList::add("pCube1.message")  -> kSuccess, length()==2 (!!)
+// 즉 플러그 이름 쪽은 모호해도 "성공"으로 통과하면서 매치를 전부 담는다.
+// 적용 경로가 그 리스트를 위치 인덱스로 집으면 사용자가 지목한 적 없는
+// 노드의 연결을 끊게 된다. 전체 DAG 경로는 두 경우 모두 length()==1로
+// 풀린다(같은 실측에서 "|g1|pCube1.message" 확인).
+//
+// MaroBindAxisCommand의 TargetNotTransform 자리가 이미 fullPathName()을 쓰고
+// 있었다 -- 그 선례를 나머지 자리로 넓힌다.
+//
+// DAG가 아닌 노드는 DG 안에서 이름이 이미 유일하므로 name()을 그대로 쓴다
+// (대체가 아니라 그 경우의 정답이다). maroAxis는 MPxLocatorNode 파생이라
+// 언제나 DAG 쪽으로 간다.
+std::string unambiguousNodeName(const MObject& node) {
+    if (node.isNull()) return std::string();
+    if (node.hasFn(MFn::kDagNode)) {
+        MStatus status;
+        MFnDagNode dagFn(node, &status);
+        if (status) {
+            const MString path = dagFn.fullPathName(&status);
+            if (status && path.length() > 0) return path.asChar();
+        }
+    }
+    MStatus status;
+    MFnDependencyNode depFn(node, &status);
+    if (!status) return std::string();
+    return depFn.name().asChar();
+}
+
+// MPlug::name()은 노드 쪽을 짧은 이름으로 준다. 노드 부분만 모호하지 않은
+// 이름으로 갈아 끼우고 어트리뷰트 부분은 그대로 붙인다.
+//
+// partialName의 인자는 (includeNodeName, includeNonMandatoryIndices,
+// includeInstancedIndices, useAlias, useFullAttributePath, useLongNames)다.
+// 노드 이름은 우리가 직접 붙이므로 첫 인자는 false, 인덱스와 전체 어트리뷰트
+// 경로는 켜 둔다(배열 원소/자식 플러그가 와도 이름이 온전해야 한다),
+// useAlias는 끄고 긴 이름을 쓴다(별칭은 씬에 따라 달라질 수 있다).
+// 실측으로 "|g1|pCube1|pCube1Shape.worldMatrix[0]"까지 length()==1로
+// 왕복하는 것을 확인했다.
+std::string unambiguousPlugName(const MPlug& plug) {
+    if (plug.isNull()) return std::string();
+    const std::string nodeName = unambiguousNodeName(plug.node());
+    if (nodeName.empty()) return plug.name().asChar();
+    MStatus status;
+    const MString attr = plug.partialName(false, true, true, false, true, true, &status);
+    // 어트리뷰트 부분을 못 얻으면 이름을 반쪽으로 만드는 것보다 예전 그대로의
+    // 온전한(다만 짧은) 이름이 낫다 -- 적용 쪽 방어선이 모호함을 잡아낸다.
+    if (!status || attr.length() == 0) return plug.name().asChar();
+    return nodeName + "." + attr.asChar();
+}
+
+}  // namespace
 
 void* MaroBindAxisCommand::creator() {
     return new MaroBindAxisCommand();
@@ -70,7 +135,7 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
         if (axisFn.typeId() != MaroAxisNode::id) {
             maro::RemedyAction remedy;
             remedy.kind = maro::RemedyActionKind::SelectNode;
-            remedy.nodeName = axisFn.name().asChar();
+            remedy.nodeName = unambiguousNodeName(axisObj);
             maro::BoadMaro::error(
                 "MaroBindAxisCommand.NotMaroAxisNode",
                 MString("Maro: '") + axisFn.name() + "' is not a maroAxis node.",
@@ -134,8 +199,8 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
             MFnDependencyNode boundFn(boundObj);
             maro::RemedyAction remedy;
             remedy.kind = maro::RemedyActionKind::Disconnect;
-            remedy.sourcePlug = axisSources[0].name().asChar();
-            remedy.destPlug = axisTarget.name().asChar();
+            remedy.sourcePlug = unambiguousPlugName(axisSources[0]);
+            remedy.destPlug = unambiguousPlugName(axisTarget);
             maro::BoadMaro::error(
                 "MaroBindAxisCommand.AxisAlreadyBound",
                 MString("Maro: '") + axisFn.name() + "' is already bound to '" +
@@ -156,8 +221,8 @@ MStatus MaroBindAxisCommand::doIt(const MArgList& args) {
                 if (otherFn.typeId() == MaroAxisNode::id) {
                     maro::RemedyAction remedy;
                     remedy.kind = maro::RemedyActionKind::Disconnect;
-                    remedy.sourcePlug = targetMessage.name().asChar();
-                    remedy.destPlug = destinations[i].name().asChar();
+                    remedy.sourcePlug = unambiguousPlugName(targetMessage);
+                    remedy.destPlug = unambiguousPlugName(destinations[i]);
                     maro::BoadMaro::error(
                         "MaroBindAxisCommand.ObjectAlreadyHasAxis",
                         MString("Maro: '") + targetFn.name() +
@@ -302,9 +367,10 @@ MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
             // book 항목이 고아가 된다.
             const bool childIsOffender = childFn.typeId() != MaroAxisNode::id;
             const MFnDependencyNode& offenderFn = childIsOffender ? childFn : parentFn;
+            const MObject& offenderObj = childIsOffender ? childObj : parentObj;
             maro::RemedyAction remedy;
             remedy.kind = maro::RemedyActionKind::SelectNode;
-            remedy.nodeName = offenderFn.name().asChar();
+            remedy.nodeName = unambiguousNodeName(offenderObj);
             maro::BoadMaro::error(
                 "MaroConnectAxisCommand.NotMaroAxisNode",
                 "Maro: maroConnectAxis expects two maroAxis nodes.",
@@ -315,7 +381,7 @@ MStatus MaroConnectAxisCommand::doIt(const MArgList& args) {
         if (childObj == parentObj) {
             maro::RemedyAction remedy;
             remedy.kind = maro::RemedyActionKind::SelectNode;
-            remedy.nodeName = childFn.name().asChar();
+            remedy.nodeName = unambiguousNodeName(childObj);
             maro::BoadMaro::error(
                 "MaroConnectAxisCommand.SelfParent",
                 MString("Maro: '") + childFn.name() + "' cannot be its own parent.",
@@ -794,11 +860,33 @@ MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
             // 안전한 기본값은 Manual(0)이다 -- 잘못된 모드로 인해 사용자가
             // 의도하지 않은 ROS 제어가 걸리는 쪽보다, 아무것도 안 하던
             // Manual로 떨어지는 쪽이 덜 놀랍다.
+            //
+            // 최종 리뷰 Finding I2: 예전에는 인자 문자열 axisName을 그대로
+            // 담았다 -- 이 분기는 그 이름이 존재하는 노드인지, 그 노드가
+            // maroAxis인지 확인하기 *전*이다. 그래서
+            // `maroSetControlMode 없는노드 5`가 controlMode 어트리뷰트가
+            // 아예 없는 대상을 가리키는 해법을 만들어 냈고, 패널은 그것을
+            // "적용 가능"으로 내주어 눌러도 아무 일도 안 일어나는 버튼이
+            // 됐다. 대상이 진짜 maroAxis일 때만 해법을 단다.
+            //
+            // 검사 **순서**는 건드리지 않는다: 모드 검사가 여전히 맨 먼저이고
+            // 실패는 그대로 InvalidControlMode로 보고된다(아래 조회는 씬을
+            // 읽기만 하며 어떤 분기도 바꾸지 않는다). 달라지는 것은 해법이
+            // 붙느냐뿐이다 -- 해법이 없으면 패널은 분석만 보여준다.
             maro::RemedyAction remedy;
-            remedy.kind = maro::RemedyActionKind::SetAttribute;
-            remedy.nodeName = axisName.asChar();
-            remedy.attributeName = "controlMode";
-            remedy.value = 0.0;
+            MSelectionList axisLookup;
+            if (axisLookup.add(axisName) == MS::kSuccess && axisLookup.length() == 1) {
+                MObject axisObj;
+                if (axisLookup.getDependNode(0, axisObj) && !axisObj.isNull()) {
+                    MFnDependencyNode axisFn(axisObj);
+                    if (axisFn.typeId() == MaroAxisNode::id) {
+                        remedy.kind = maro::RemedyActionKind::SetAttribute;
+                        remedy.nodeName = unambiguousNodeName(axisObj);
+                        remedy.attributeName = "controlMode";
+                        remedy.value = 0.0;
+                    }
+                }
+            }
             maro::BoadMaro::error(
                 "MaroSetControlModeCommand.InvalidControlMode",
                 "Maro: control mode must be 0 (Manual) or 1 (ROS).",

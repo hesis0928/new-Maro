@@ -50,6 +50,45 @@ assert detail[11] == "0", "deleting one side of a disconnect pair must disable a
 assert detail[12] == "TargetNodeMissing", detail[12]
 print("disconnect availability OK")
 
+# --- 최종 리뷰 Finding I2 ---
+#
+# setAttribute 해법의 "존재한다"는 노드가 아니라 **노드와 그 어트리뷰트**를
+# 뜻해야 한다. 예전에는 노드 이름만 확인했으므로, 그 노드에 그 어트리뷰트가
+# 아예 없어도 패널이 Apply를 내주었다 -- 그리고 적용은 findPlug에서 아무런
+# 기록 없이 실패했다(큐가 displayEnabled=false로 부르므로 스크립트
+# 에디터에도 아무것도 안 뜬다). 사용자에게는 "버튼이 영원히 아무 일도 안
+# 한다"로만 보였다.
+plainCube = cmds.polyCube(name="plainCube")[0]
+assert not cmds.attributeQuery("controlMode", node=plainCube, exists=True), \
+    "이 테스트의 전제: 평범한 transform에는 controlMode가 없다"
+
+cmds.maroDiagEmit(severity="error", message="m3", siteTag="T.AttrMissing",
+                  remedyAction="setAttribute", remedyNode=plainCube,
+                  remedyAttribute="controlMode", remedyValue=0.0)
+seq3 = int(cmds.maroDiagQuery(index=0)[10])
+
+detail = cmds.maroDiagPanelDetail(sequence=seq3)
+assert detail[11] == "0", (
+    "a setAttribute remedy whose attribute does not exist on the node must not be "
+    "offered as applicable, got %r (%r)" % (detail[11], detail[12]))
+assert detail[12] == "TargetNodeMissing", detail[12]
+print("setAttribute availability checks the attribute, not just the node OK")
+
+# 패널 조회와 클릭 사이의 경합을 흉내내어 적용을 직접 부른다. 실패하는 것은
+# 예전에도 그랬지만, 이제는 **왜** 실패했는지가 boad에 남아야 한다.
+countBefore = cmds.maroDiagCount()
+try:
+    cmds.maroApplyRemedy(sequence=seq3)
+    raised = False
+except RuntimeError:
+    raised = True
+assert raised, "applying a setAttribute remedy for a missing attribute must fail"
+assert cmds.maroDiagCount() > countBefore, \
+    "that failure must be recorded -- an unrecorded failure is invisible to the user"
+refusal = cmds.maroDiagQuery(index=0)[1]
+assert "controlMode" in refusal and plainCube in refusal, refusal
+print("missing-attribute apply fails with a recorded reason OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()

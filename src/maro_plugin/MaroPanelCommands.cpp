@@ -71,15 +71,25 @@ const char* presenceName(ContextPresence p) {
     return "notApplicable";
 }
 
-// name이 "node" 또는 "node.attribute" 모양의 이름을 가진 무언가로
-// 존재하면 true. MSelectionList::add가 둘 다 그대로 받으므로 노드
+// name이 "node" 또는 "node.attribute" 모양의 이름으로 지금 씬에서 **정확히
+// 하나**로 풀리면 true. MSelectionList::add가 둘 다 그대로 받으므로 노드
 // 하나짜리(selectNode/setAttribute)와 플러그짜리(disconnect)를 같은
 // 방법으로 확인할 수 있다 -- 플러그 쪽은 부수적으로 그 노드에 그
 // 어트리뷰트가 실제로 있는지까지 확인해 준다.
+//
+// 최종 리뷰 Finding I1: 예전에는 add()의 상태만 봤다. 그 인자는 devkit
+// 시그니처에서조차 이름이 matchString이다 -- 엄격한 조회가 아니라 `ls`와
+// 같은 패턴 매치라서, 모호한 이름에도 성공을 돌려주며 매치를 전부 담는다
+// (실측: 노드 이름 "pCube1"은 kInvalidParameter로 거절되지만 플러그 이름
+// "pCube1.message"는 kSuccess에 length()==2로 통과한다). 그 상태로 패널이
+// "적용 가능"이라 답하면, 적용 쪽은 그 모호한 이름을 안전하게 처리할 수
+// 없어 거절한다 -- 눌러도 아무 일이 안 나는 버튼이 된다. "존재한다"를
+// "정확히 하나로 풀린다"로 좁혀 적용 쪽의 규율과 같은 것을 보게 한다.
 bool nameStillExists(const std::string& name) {
     if (name.empty()) return false;
     MSelectionList sel;
-    return sel.add(MString(name.c_str())) == MS::kSuccess;
+    if (sel.add(MString(name.c_str())) != MS::kSuccess) return false;
+    return sel.length() == 1;
 }
 
 // 이 해법이 손대는 노드/플러그가 전부 지금 씬에 존재하는가. 프레젠터는
@@ -90,8 +100,15 @@ bool remedyTargetsExist(const RemedyAction& remedy) {
         case RemedyActionKind::None:
             return false;  // 해법이 없으면 이 질문 자체가 성립하지 않는다.
         case RemedyActionKind::SelectNode:
-        case RemedyActionKind::SetAttribute:
             return nameStillExists(remedy.nodeName);
+        case RemedyActionKind::SetAttribute:
+            // 최종 리뷰 Finding I2: 노드 이름만 확인하면, 그 노드에 이
+            // 어트리뷰트가 아예 없을 때도 "적용 가능"이라 답한다 -- 그리고
+            // 적용 쪽은 findPlug에서 실패한다. 노드가 아니라 노드**와 그
+            // 어트리뷰트**를 함께 확인한다: "node.attribute" 한 이름으로
+            // 넘기면 MSelectionList가 둘 다 검사해 준다(disconnect 쪽이
+            // 이미 그렇게 하고 있다).
+            return nameStillExists(remedy.nodeName + "." + remedy.attributeName);
         case RemedyActionKind::Disconnect:
             return nameStillExists(remedy.sourcePlug) && nameStillExists(remedy.destPlug);
     }

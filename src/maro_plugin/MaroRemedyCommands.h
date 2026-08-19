@@ -43,7 +43,11 @@ public:
 private:
     MDGModifier m_modifier;
     RemedyActionKind m_kind = RemedyActionKind::None;
-    MString m_selectNodeName;
+    // SelectNode가 고를 대상. 이름이 아니라 doIt이 이미 "정확히 하나"로
+    // 풀어 검증한 결과를 들고 있다 (최종 리뷰 Finding I1) -- redoIt이 이름을
+    // 다시 풀면 그 사이에 이름이 가리키는 것이 달라졌을 때 doIt이 검증한
+    // 것과 다른 대상을 고르게 된다.
+    MSelectionList m_selectTarget;
     MSelectionList m_previousSelection;
     bool m_stagedChange = false;
 };
