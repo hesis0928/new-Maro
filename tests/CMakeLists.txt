@@ -13,6 +13,7 @@ add_executable(maro_ipc_tests
     ipc/test_naming.cpp
     ipc/test_sentinel_record.cpp
     ipc/test_named_mutex_guard.cpp
+    ipc/test_named_pipe.cpp
 )
 
 target_link_libraries(maro_ipc_tests PRIVATE
