@@ -24,23 +24,25 @@ std::string encodeMessage(const Message& message) {
 }
 
 bool decodeMessage(const std::string& encoded, Message& out) {
-    nlohmann::json j;
     try {
-        j = nlohmann::json::parse(encoded);
+        // Wrap entire function to handle both malformed JSON and type mismatches.
+        // j.value<T>() throws type_error if the JSON value is not convertible to T,
+        // not just on parse failure. This must never propagate to callers.
+        nlohmann::json j = nlohmann::json::parse(encoded);
+
+        const std::string type = j.value("type", std::string());
+        if (type == "hello") {
+            out.type = MessageType::Hello;
+        } else if (type == "sessionEndClean") {
+            out.type = MessageType::SessionEndClean;
+        } else {
+            return false;
+        }
+        out.payload = j.value("payload", std::string());
+        return true;
     } catch (...) {
         return false;
     }
-
-    const std::string type = j.value("type", std::string());
-    if (type == "hello") {
-        out.type = MessageType::Hello;
-    } else if (type == "sessionEndClean") {
-        out.type = MessageType::SessionEndClean;
-    } else {
-        return false;
-    }
-    out.payload = j.value("payload", std::string());
-    return true;
 }
 
 }  // namespace maro::ipc

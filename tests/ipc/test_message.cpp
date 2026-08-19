@@ -48,4 +48,10 @@ TEST(Message, DecodeFailsOnUnknownType) {
     EXPECT_FALSE(maro::ipc::decodeMessage(R"({"type":"nonsense","payload":""})", decoded));
 }
 
+// JSON이 형식상 맞아도 필드 타입이 맞지 않으면(예: type이 정수) 예외 없이 false를 돌려준다.
+TEST(Message, DecodeFailsCleanlyWhenTypeFieldHasWrongJsonType) {
+    maro::ipc::Message decoded;
+    EXPECT_FALSE(maro::ipc::decodeMessage(R"({"type":123,"payload":""})", decoded));
+}
+
 }  // namespace
