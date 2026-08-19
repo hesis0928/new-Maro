@@ -1831,6 +1831,13 @@ struct MainThreadQueueGuard {
     const MainThreadQueueGuard queueGuardOnExit;
 ```
 
+`uninitializePlugin`의 `plugin.deregisterCommand("maroDiagEmitMarked");` 바로 아래에 추가(등록의 역순 규율 — 이 두 테스트 전용 커맨드도 다른 모든 `registerCommand`와 마찬가지로 짝을 이루는 `deregisterCommand`가 있어야 한다. 안 지우면 언로드 후에도 Maya의 전역 커맨드 레지스트리가 이미 언로드된 DLL을 가리키는 함수 포인터를 들고 있다가, 누가 그 커맨드를 부르면 크래시한다):
+
+```cpp
+        plugin.deregisterCommand("maroQueueTestCounter");
+        plugin.deregisterCommand("maroQueueTestEnqueueIncrement");
+```
+
 - [ ] **Step 7: 빌드에 등록**
 
 `src/maro_plugin/CMakeLists.txt`의 `SOURCE_FILES` 목록에 `MaroMainThreadQueue.cpp`를 추가:
