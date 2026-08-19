@@ -16,12 +16,14 @@
 #include <maya/MArgList.h>
 #include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
+#include <maya/MSelectionList.h>
 #include <maya/MStringArray.h>
 
 #include "MaroDiag.h"
 #include "maro_diag/BookStore.h"
 #include "maro_diag/PanelPresenter.h"
 #include "maro_diag/PanelView.h"
+#include "maro_diag/RemedyAction.h"
 
 namespace maro {
 
@@ -67,6 +69,33 @@ const char* presenceName(ContextPresence p) {
         case ContextPresence::NotCaptured: return "notCaptured";
     }
     return "notApplicable";
+}
+
+// name이 "node" 또는 "node.attribute" 모양의 이름을 가진 무언가로
+// 존재하면 true. MSelectionList::add가 둘 다 그대로 받으므로 노드
+// 하나짜리(selectNode/setAttribute)와 플러그짜리(disconnect)를 같은
+// 방법으로 확인할 수 있다 -- 플러그 쪽은 부수적으로 그 노드에 그
+// 어트리뷰트가 실제로 있는지까지 확인해 준다.
+bool nameStillExists(const std::string& name) {
+    if (name.empty()) return false;
+    MSelectionList sel;
+    return sel.add(MString(name.c_str())) == MS::kSuccess;
+}
+
+// 이 해법이 손대는 노드/플러그가 전부 지금 씬에 존재하는가. 프레젠터는
+// 살아있는 씬을 조회하지 않으므로(설계 스펙 §3.3) 이 판단은 여기, 메인
+// 스레드에서 커맨드가 대신 한다.
+bool remedyTargetsExist(const RemedyAction& remedy) {
+    switch (remedy.kind) {
+        case RemedyActionKind::None:
+            return false;  // 해법이 없으면 이 질문 자체가 성립하지 않는다.
+        case RemedyActionKind::SelectNode:
+        case RemedyActionKind::SetAttribute:
+            return nameStillExists(remedy.nodeName);
+        case RemedyActionKind::Disconnect:
+            return nameStillExists(remedy.sourcePlug) && nameStillExists(remedy.destPlug);
+    }
+    return false;
 }
 
 // boad의 스트림을 통째로 복사해 온다. 프레젠터는 순수해야 하므로 살아있는
@@ -212,7 +241,8 @@ MStatus MaroDiagPanelDetailCommand::doIt(const MArgList& args) {
             !chosen->errorHash.empty() && BoadMaro::lookupBook(chosen->errorHash, entry);
 
         const PanelDetail detail =
-            buildPanelDetail(*chosen, haveEntry ? &entry : nullptr, false,
+            buildPanelDetail(*chosen, haveEntry ? &entry : nullptr,
+                              remedyTargetsExist(chosen->remedyAction),
                               BoadMaro::crashAdjacency());
 
         MStringArray result;
