@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 
+#include "maro_ipc/JobEscape.h"
 #include "maro_ipc/NamedPipe.h"
 #include "maro_ipc/Naming.h"
 #include "maro_ipc/SentinelRecord.h"
@@ -131,6 +132,22 @@ TEST(SentinelProcess, CleanSessionEndsAndSentinelExits) {
     EXPECT_FALSE(record.lastSessionEndedCleanly.has_value())
         << "clean session end was judged as an abnormal exit (value = "
         << (record.lastSessionEndedCleanly.value_or(false) ? "true" : "false") << ")";
+
+    // sentinelInJob이 기록 파일에 실제로 남는지 -- Task 9가 파이프 없이
+    // 이 필드 하나로 "감시자가 정말 job을 빠져나왔는지"를 판단하려면 이
+    // 값이 기본값(false)이 아니라 감시자 자신의 self-check 결과여야 한다.
+    // 테스트 프로세스(gtest)와 감시자 서브프로세스는 CreateProcess로
+    // 직결된 부모-자식이므로, 둘 다 같은 job 소속 여부를 관측해야 정상이다
+    // -- 이 샌드박스 CI 환경은 프로세스 트리 전체가 이미 앰비언트 job
+    // 안에 있다는 것이 Task 6에서 확인된 사실이라(그래서 true가 나올
+    // 가능성이 높다), 어느 쪽 값이어야 하는지 하드코딩하지 않고 실측값과
+    // 비교한다.
+    const bool testProcessInJob = maro::ipc::isCurrentProcessInJob();
+    EXPECT_EQ(record.sentinelInJob, testProcessInJob)
+        << "record's sentinelInJob (" << (record.sentinelInJob ? "true" : "false")
+        << ") does not match what isCurrentProcessInJob() reports for this test "
+           "process ("
+        << (testProcessInJob ? "true" : "false") << ")";
 }
 
 TEST(SentinelProcess, DisconnectWithoutSessionEndIsRecordedAsAbnormal) {

@@ -15,6 +15,7 @@ bool writeSentinelRecord(const std::filesystem::path& path, const SentinelRecord
         j["sentinelPid"] = record.sentinelPid;
         j["ownerMayaPid"] = record.ownerMayaPid;
         j["startTimeMs"] = record.startTimeMs;
+        j["sentinelInJob"] = record.sentinelInJob;
         if (record.lastSessionEndedCleanly.has_value()) {
             j["lastSessionEndedCleanly"] = *record.lastSessionEndedCleanly;
         }
@@ -40,6 +41,7 @@ bool readSentinelRecord(const std::filesystem::path& path, SentinelRecord& out) 
         record.sentinelPid = j.at("sentinelPid").get<std::uint64_t>();
         record.ownerMayaPid = j.at("ownerMayaPid").get<std::uint64_t>();
         record.startTimeMs = j.at("startTimeMs").get<std::uint64_t>();
+        record.sentinelInJob = j.at("sentinelInJob").get<bool>();
         if (j.contains("lastSessionEndedCleanly")) {
             record.lastSessionEndedCleanly = j.at("lastSessionEndedCleanly").get<bool>();
         }

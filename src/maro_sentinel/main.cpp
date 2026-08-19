@@ -92,11 +92,12 @@ struct ScopedHandle {
 };
 
 void markAbnormalExit(const std::filesystem::path& recordPath, std::uint64_t sentinelPid,
-                      std::uint64_t ownerPid, std::uint64_t startTimeMs) {
+                      std::uint64_t ownerPid, std::uint64_t startTimeMs, bool sentinelInJob) {
     maro::ipc::SentinelRecord record;
     record.sentinelPid = sentinelPid;
     record.ownerMayaPid = ownerPid;
     record.startTimeMs = startTimeMs;
+    record.sentinelInJob = sentinelInJob;
     record.lastSessionEndedCleanly = false;
     maro::ipc::writeSentinelRecord(recordPath, record);
 }
@@ -123,21 +124,22 @@ int main(int argc, char** argv) {
 
     const auto recordPath = maro::ipc::recordFilePath(bookDir, ownerPid);
 
+    // job 자가 점검. 실제 판단(탈출 실패 시 무엇을 할지)은 플러그인 쪽
+    // (Task 9)이 spawn 방식을 고를 때 이미 내렸다 -- 감시자 자신의
+    // self-check는 "빠져나왔겠지가 아니라 빠져나왔다를 안다"를 만족시키는
+    // 확인일 뿐이다. 이 자리에서(기록 파일을 쓰기 전에) 실행해야, 아래
+    // initialRecord가 진짜 관측값을 담는다 -- 그렇지 않으면 플러그인
+    // (Task 9)이 파이프 없이 이 사실을 알 방법이 기록 파일 하나뿐인데,
+    // 그 파일이 낡은 기본값을 담게 된다.
+    const bool inJob = maro::ipc::isCurrentProcessInJob();
+
     maro::ipc::SentinelRecord initialRecord;
     initialRecord.sentinelPid = sentinelPid;
     initialRecord.ownerMayaPid = ownerPid;
     initialRecord.startTimeMs = startTimeMs;
+    initialRecord.sentinelInJob = inJob;
     // lastSessionEndedCleanly는 아직 미설정 -- 판정 전이라는 뜻.
     maro::ipc::writeSentinelRecord(recordPath, initialRecord);
-
-    // job 자가 점검. 지금 이 골격 단계에서는 기록만 남긴다 -- 실제 판단
-    // (탈출 실패 시 무엇을 할지)은 플러그인 쪽(Task 9)이 spawn 방식을
-    // 고를 때 이미 내렸다. 감시자 자신의 self-check는 "빠져나왔겠지가
-    // 아니라 빠져나왔다를 안다"를 만족시키는 확인일 뿐이다.
-    const bool inJob = maro::ipc::isCurrentProcessInJob();
-    (void)inJob;  // C-1은 이 사실을 파이프로 보고하지 않는다 -- 플러그인이
-                  // spawn 성공 여부만으로 이미 판단을 마쳤기 때문이다. 이후
-                  // 조각(C-2+)이 진단 용도로 쓸 수 있게 자리는 마련해 둔다.
 
     // 좀비 방지: 킬 스위치 이벤트. bManualReset=TRUE로 만들어 한 번
     // Set되면 계속 신호 상태로 남게 한다(폴링하는 쪽마다 개별로 리셋할
@@ -212,7 +214,7 @@ int main(int argc, char** argv) {
     if (disconnected) {
         // SESSION_END_CLEAN 없이 파이프가 끊겼다 -- 원 스펙 §3.2가 말하는
         // 크래시 신호 그 자체다. 추측이 아니라 관측이다.
-        markAbnormalExit(recordPath, sentinelPid, ownerPid, startTimeMs);
+        markAbnormalExit(recordPath, sentinelPid, ownerPid, startTimeMs, inJob);
         return 0;
     }
 
