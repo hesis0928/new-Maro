@@ -2116,6 +2116,7 @@ private:
 ```cpp
 #include "MaroRemedyCommands.h"
 
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <string>
@@ -2310,7 +2311,15 @@ MStatus MaroApplyRemedyCommand::doIt(const MArgList& args) {
                 MPlug plug = fn.findPlug(MString(remedy.attributeName.c_str()), false,
                                          &plugStatus);
                 if (!plugStatus) return plugStatus;
-                m_modifier.newPlugValueInt(plug, static_cast<int>(remedy.value));
+                // describeRemedyAction()(RemedyAction.cpp)이 같은 값을
+                // std::llround로 반올림해 문구를 만든다. 여기서 그냥
+                // static_cast<int>로 잘라내면 소수 값에서 실제로 적용되는
+                // 정수와 boad 기록/패널 문구가 서로 다른 숫자를 말할 수
+                // 있다 -- 적용 전후를 기록하는 것이 이 커맨드의 존재
+                // 이유인데 그 기록 자체가 거짓을 말하면 안 된다. 같은
+                // 반올림으로 맞춘다.
+                m_modifier.newPlugValueInt(
+                    plug, static_cast<int>(std::llround(remedy.value)));
                 break;
             }
             case RemedyActionKind::Disconnect: {
