@@ -189,7 +189,12 @@ void MaroRosRuntime::drainAndPublish() {
 
             sensor_msgs::msg::PointCloud2 cloud;
             cloud.header.stamp = m_impl->node->now();
-            cloud.header.frame_id = sample.frameId;
+            // sample.points는 라이다 로컬 프레임이 아니라 월드 좌표(mayaToRosPosition은
+            // 기저/단위만 바꿀 뿐 원점을 옮기지 않는다)이므로, 축 경로(158행)와 같은
+            // "world"를 찍는다. sample.frameId(노드의 frameId 어트리뷰트)를 여기 쓰려면
+            // 먼저 히트를 라이다 로컬 프레임으로 변환하고 world->frameId TF를 함께
+            // 발행해야 한다 -- 워킹 스켈레톤에서는 의도적으로 보류.
+            cloud.header.frame_id = "world";
             cloud.height = 1;
             cloud.width = packed.width;
             cloud.is_bigendian = false;
