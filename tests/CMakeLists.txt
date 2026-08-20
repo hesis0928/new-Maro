@@ -161,13 +161,18 @@ if(MARO_BUILD_PLUGIN)
 
     # 플러그인만 있으면 되는 테스트. robustness는 순수 DG 조작/평가만 하고
     # 브리지(rclcpp)를 켜지 않으므로 이 그룹에 속한다.
+    # 브리프 Step 5는 이 foreach 목록에 이미 `sentinel`이 들어있다고 가정했지만,
+    # 현재 브랜치(feature/maro-lidar-walking-skeleton)는 sentinel 작업이 있는
+    # design/maro-sentinel-c1 브랜치의 자손이 아니다(git merge-base
+    # --is-ancestor로 확인) -- 즉 sentinel은 아직 이 브랜치에 존재하지 않는다.
+    # 목록 실제 마지막 항목(remedy_apply)에 lidar_node를 이어 붙였다.
     foreach(maya_test load axis_node binding capability_stack delete_rules
                       robustness diag_boad diag_onfix diag_book
                       diag_book_cross_session diag_remedy
                       diag_degraded diag_degraded_remedy diag_thread
                       panel_commands journal remedy_capture
                       remedy_availability remedy_ambiguous_names
-                      main_thread_queue remedy_apply)
+                      main_thread_queue remedy_apply lidar_node)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
