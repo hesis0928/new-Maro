@@ -33,12 +33,30 @@ target_link_libraries(maro_ipc_tests PRIVATE
 target_compile_definitions(maro_ipc_tests PRIVATE
     MARO_SENTINEL_EXE_PATH="$<TARGET_FILE:maro_sentinel>"
     # test_console_window.cpp도 같은 이유로 정확한 경로를 컴파일 타임에 받는다.
-    MARO_CONSOLE_PROBE_EXE_PATH="$<TARGET_FILE:maro_console_window_probe>")
+    MARO_CONSOLE_PROBE_EXE_PATH="$<TARGET_FILE:maro_console_window_probe>"
+    # SentinelStuckInAJobRecordsThatItIsInAJob이 띄우는 job 격리 도우미도 마찬가지.
+    MARO_SENTINEL_IN_JOB_HELPER_EXE_PATH="$<TARGET_FILE:maro_sentinel_in_job_helper>")
 
 gtest_discover_tests(maro_ipc_tests)
 
 add_executable(maro_job_escape_test_helper ipc/job_escape_test_helper.cpp)
 target_link_libraries(maro_job_escape_test_helper PRIVATE maro_ipc)
+# 아래 콘솔 프로브와 같은 이유로 명시적 의존이 필요하다: 테스트는 이 도우미를
+# 경로로만 찾으므로(SpawnWithBreakawayFailsInsideARestrictiveJob이
+# GetModuleFileNameA로 자기 옆 경로를 조립한다) CMake가 의존을 추론하지
+# 못한다. 이것이 없으면 maro_ipc_tests 타깃만 골라 빌드했을 때 도우미가
+# 빌드되지 않은 채 남아 그 테스트가 "도우미를 못 찾았다"로 실패한다.
+add_dependencies(maro_ipc_tests maro_job_escape_test_helper)
+
+# 감시자를 breakaway 불허 job 안에서 띄우는 도우미(최종 리뷰 I1). 감시자
+# 실행 파일 경로는 maro_ipc_tests와 똑같은 이유로 컴파일 타임에 박아 준다 --
+# 멀티 컨피그 제너레이터에서는 "내 옆에 있겠지"가 성립하지 않는다.
+add_executable(maro_sentinel_in_job_helper ipc/sentinel_in_job_helper.cpp)
+target_link_libraries(maro_sentinel_in_job_helper PRIVATE maro_ipc)
+target_compile_definitions(maro_sentinel_in_job_helper PRIVATE
+    MARO_SENTINEL_EXE_PATH="$<TARGET_FILE:maro_sentinel>")
+add_dependencies(maro_sentinel_in_job_helper maro_sentinel)
+add_dependencies(maro_ipc_tests maro_sentinel_in_job_helper)
 
 # 콘솔 창 검증용 프로브. maro_sentinel.exe와 같은 조건을 만들어야 하므로
 # 반드시 *콘솔 서브시스템*으로 둔다 -- WIN32_EXECUTABLE을 붙이면 GUI
