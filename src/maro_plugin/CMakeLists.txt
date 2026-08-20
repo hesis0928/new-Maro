@@ -108,7 +108,17 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             "${ROS2_INSTALL}/opt/spdlog_vendor/bin" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${ROS2_INSTALL}/opt/console_bridge_vendor/bin" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMENT "Maro: staging ROS 2 runtime DLLs next to the plugin"
+    # I1: embree4.dll도 여기 있어야 한다. ROS 2 DLL과 달리 이건 vcpkg에서
+    # 오므로 위의 copy_directory 어디에도 걸리지 않는다 -- 지금까지 이
+    # 빌드가 돌아간 것은 오직 이 개발 머신의 PATH에
+    # C:/src/vcpkg/installed/x64-windows/bin이 들어 있었기 때문이고,
+    # 그건 저장소가 만들어내는 상태가 아니다. 여기 복사해 두면 README가
+    # 이미 요구하는 "빌드 출력 디렉터리를 PATH에 넣어라" 한 줄로 충분해진다.
+    # (embree 타깃은 src/maro_lidar/CMakeLists.txt에서 IMPORTED_GLOBAL로
+    # 승격시켜 뒀다 -- 그러지 않으면 형제 디렉터리인 여기서는 안 보인다.)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:embree>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    COMMENT "Maro: staging ROS 2 + Embree runtime DLLs next to the plugin"
 )
 
 # 패널 UI 모듈은 플러그인 .mll 옆에 둔다. maroDiagPanel 커맨드가 그

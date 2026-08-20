@@ -25,7 +25,33 @@ mode.
 - Windows, Visual Studio 2022 (MSVC), CMake >= 3.22
 - Maya 2026 devkit
 - ROS 2 Jazzy, built/installed for the same MSVC toolset
-- vcpkg (for GoogleTest, used by the transform unit tests) — see `vcpkg.json`
+- vcpkg — see `vcpkg.json`. Two packages come from it:
+  - **GoogleTest**, used by the transform/lidar unit tests.
+  - **Embree 4**, a *runtime* dependency of the Maya plugin (the LiDAR
+    raycaster links it, so `embree4.dll` is loaded into the Maya process).
+    It **must** be installed without vcpkg's default `tasking-tbb` feature —
+    an Embree that imports `tbb12.dll` cannot load inside Maya, because Maya
+    already has its own `tbb12.dll` in the process and the Windows loader
+    reuses a module by base name. The symptom is `loadPlugin` failing with a
+    bare `ERROR_PROC_NOT_FOUND` and no hint at the cause. The configure step
+    now checks the resolved DLL's import table and fails loudly instead
+    (`src/maro_lidar/CMakeLists.txt`).
+
+> **vcpkg resolution trap:** `vcpkg.json` in this repo pins the feature set
+> but does **not** drive resolution for the usual `out/build` tree — that
+> tree is configured without `CMAKE_TOOLCHAIN_FILE`, so `find_package(embree)`
+> resolves against the **global classic-mode** install tree
+> (`C:/src/vcpkg/installed/x64-windows`). Packages must be installed there by
+> hand, e.g.:
+>
+> ```powershell
+> vcpkg install "embree[core,filter-function,geometry-curve,geometry-grid,geometry-instance,geometry-point,geometry-quad,geometry-subdivision,geometry-triangle,geometry-user,ray-packets]:x64-windows"
+> ```
+>
+> (that is `vcpkg.json`'s `embree` feature list, with `tasking-tbb` absent —
+> keep the two in sync)
+>
+> Editing `vcpkg.json` alone changes nothing about what the build links.
 
 ## Configuring the build
 
@@ -53,9 +79,9 @@ cmake --build out/build
 
 ## The PATH requirement (read this before your first `loadPlugin`)
 
-The build stages every ROS 2 runtime DLL (and the `libyaml`/`spdlog`/
-`console_bridge` vendor DLLs) next to the built plugin (`maro.mll`). That is
-not sufficient by itself: Maya's plugin loader does not open `.mll` files
+The build stages every ROS 2 runtime DLL (the `libyaml`/`spdlog`/
+`console_bridge` vendor DLLs, and `embree4.dll`) next to the built plugin
+(`maro.mll`). That is not sufficient by itself: Maya's plugin loader does not open `.mll` files
 with `LOAD_WITH_ALTERED_SEARCH_PATH`, so Windows will not automatically search
 the plugin's own directory for those dependencies.
 
