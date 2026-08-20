@@ -117,7 +117,7 @@ domain and would otherwise interfere with each other.
 | `maroSetControlMode(axis, 0\|1)` | Switch an axis between Manual (0) and ROS (1) control. |
 | `maroStartBridge(robotName)` | Start the ROS 2 bridge: publishes `/<robotName>/joint_states` and `/tf`, and creates the command-device node that subscribes to `/<robotName>/joint_commands`. |
 | `maroStopBridge()` | Stop the bridge and tear down the ROS 2 runtime. |
-| `maroBridgeStats()` | Diagnostic counters: `[collected, drained, applied, threadTicks, publishErrors]`. |
+| `maroBridgeStats()` | Diagnostic counters: `[collected, drained, applied, threadTicks, publishErrors, drainedLidarScans]`. `drained` counts axis samples only; LiDAR scans are counted separately in the sixth slot. |
 
 ## Layout
 

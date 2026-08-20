@@ -812,6 +812,10 @@ MStatus MaroBridgeStatsCommand::doIt(const MArgList&) {
         stats.append(static_cast<int>(MaroCommandDeviceNode::threadTickCount()));
         stats.append(static_cast<int>(
             g_runtime ? g_runtime->publishErrorCount() : 0));
+        // 여섯 번째다 -- 항상 뒤에 붙인다 (Finding M1). 앞의 다섯 개는
+        // 자리도 뜻도 그대로여야 기존 진단/테스트가 안 깨진다.
+        stats.append(static_cast<int>(
+            g_runtime ? g_runtime->drainedLidarScanCount() : 0));
         setResult(stats);
         return MS::kSuccess;
     } catch (const std::exception& e) {

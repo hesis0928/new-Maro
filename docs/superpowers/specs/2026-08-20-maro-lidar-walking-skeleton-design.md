@@ -86,6 +86,7 @@
 - 실제 스펙 스케일(16~64채널, 1024~2048 해상도) — 워킹 스켈레톤은 검증 목적의 작은 값(예: 4채널) 사용
 - `ring`/`intensity` 외 추가 PointCloud2 필드, 가우시안 노이즈 모델(`<noise>`, 실제 SDF에서 확인됨 — 나중에 추가 가치 있음)
 - `rpm` 파라미터 병기 여부
+- 라이다 로컬 프레임 + `world`→`frameId` TF: `maroLidar.frameId` 어트리뷰트는 노드에 있지만 발행 경로가 아직 읽지 않는다. 히트 좌표가 월드 좌표라 `PointCloud2.header.frame_id`는 항상 `"world"`다 — `frameId`를 실제로 쓰려면 히트를 라이다 로컬 프레임으로 옮기고 `world`→`frameId` TF를 함께 발행하는 층이 필요하다.
 
 ## 8. 테스트 전략
 

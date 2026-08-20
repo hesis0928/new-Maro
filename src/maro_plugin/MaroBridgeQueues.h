@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -27,8 +28,14 @@ struct AxisSample {
 // 변환 전(Maya 좌표계 그대로) 값을 나른다 -- 변환은 drainAndPublish()가
 // 한다. points는 이미 레이캐스팅이 끝난 충돌 지점들(월드 공간, Maya
 // 좌표계)이다.
+//
+// frameId는 여기 없다 (최종 리뷰 Finding I4). 발행 경로가 PointCloud2의
+// header.frame_id에 항상 "world"를 찍기 때문이다(MaroRosRuntime.cpp의
+// drainAndPublish 주석 참고 -- points가 라이다 로컬이 아니라 월드
+// 좌표라서 그것만이 참이다). 노드의 frameId 어트리뷰트 자체는 남아
+// 있지만 아직 아무도 읽지 않으므로, 스캔마다 죽은 std::string을 스레드
+// 경계 너머로 깊은 복사해 나르지 않는다.
 struct LidarSample {
-    std::string frameId;
     SceneUnit unit;
     std::vector<Vec3> points;
 };
@@ -56,7 +63,12 @@ public:
 
     std::vector<T> drain() {
         std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<T> out(m_items.begin(), m_items.end());
+        // 이동 반복자다 (최종 리뷰 Finding M3). 바로 다음 줄에서 덱을
+        // 비우므로 원소를 복사해 둘 이유가 없다 -- LidarSample은 스캔
+        // 하나치 포인트 벡터를 통째로 들고 있어서(실제 스펙 스케일이면
+        // 스캔당 수 MB) 복사본을 만들자마자 버리는 것이 순수한 낭비다.
+        std::vector<T> out(std::make_move_iterator(m_items.begin()),
+                           std::make_move_iterator(m_items.end()));
         m_items.clear();
         return out;
     }

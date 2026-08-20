@@ -62,7 +62,7 @@ def _wait_for_peer(proc, backstop_sec):
     while time.time() < deadline and proc.poll() is None:
         _qapp.processEvents()
         time.sleep(0.05)
-        collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()
+        collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()[:5]
 
     if proc.poll() is None:
         # 안전망 데드라인에 걸렸는데도 피어가 아직 살아있다 -- 정상 경로라면

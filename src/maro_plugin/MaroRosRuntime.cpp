@@ -176,42 +176,52 @@ void MaroRosRuntime::drainAndPublish() {
     // Maya 좌표계 그대로 실어 보내고, 변환은 이 백그라운드 스레드 한 곳에서만
     // 일어난다.
     const std::vector<LidarSample> lidarSamples = m_lidarQueue.drain();
-    if (!lidarSamples.empty() && m_impl->lidarPub) {
-        m_drainedSamples.fetch_add(lidarSamples.size(), std::memory_order_relaxed);
-        for (const LidarSample& sample : lidarSamples) {
-            std::vector<Vec3> rosPoints;
-            rosPoints.reserve(sample.points.size());
-            for (const Vec3& p : sample.points) {
-                rosPoints.push_back(mayaToRosPosition(p, sample.unit));
+    if (!lidarSamples.empty()) {
+        // 축과 별개인 전용 계수기다 (Finding M1) -- 예전에는 여기서도
+        // m_drainedSamples를 밀어서 두 생산자가 한 숫자에 섞였다.
+        // 그리고 증가는 퍼블리셔 유무보다 위에 있다 (Finding M2): 축
+        // 분기(위 141행)가 이미 "드레인한 만큼 무조건" 올리는데 LiDAR만
+        // lidarPub이 있을 때만 올리면 같은 이름의 계수기가 생산자에 따라
+        // 다른 뜻을 갖는다.
+        m_drainedLidarScans.fetch_add(lidarSamples.size(), std::memory_order_relaxed);
+
+        if (m_impl->lidarPub) {
+            for (const LidarSample& sample : lidarSamples) {
+                std::vector<Vec3> rosPoints;
+                rosPoints.reserve(sample.points.size());
+                for (const Vec3& p : sample.points) {
+                    rosPoints.push_back(mayaToRosPosition(p, sample.unit));
+                }
+                const maro::lidar::PackedPointCloud packed =
+                    maro::lidar::packPointCloud(rosPoints, {});
+
+                sensor_msgs::msg::PointCloud2 cloud;
+                cloud.header.stamp = m_impl->node->now();
+                // sample.points는 라이다 로컬 프레임이 아니라 월드 좌표(mayaToRosPosition은
+                // 기저/단위만 바꿀 뿐 원점을 옮기지 않는다)이므로, 축 경로(158행)와 같은
+                // "world"를 찍는다. 노드의 frameId 어트리뷰트를 여기 쓰려면 먼저 히트를
+                // 라이다 로컬 프레임으로 변환하고 world->frameId TF를 함께 발행해야 한다
+                // -- 워킹 스켈레톤에서는 의도적으로 보류. 그래서 LidarSample은 아예
+                // frameId를 나르지 않는다 (Finding I4, MaroBridgeQueues.h 참고).
+                cloud.header.frame_id = "world";
+                cloud.height = 1;
+                cloud.width = packed.width;
+                cloud.is_bigendian = false;
+                cloud.is_dense = true;
+                cloud.point_step = packed.pointStep;
+                cloud.row_step = packed.pointStep * packed.width;
+
+                sensor_msgs::msg::PointField fieldX, fieldY, fieldZ, fieldIntensity;
+                fieldX.name = "x"; fieldX.offset = 0; fieldX.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldX.count = 1;
+                fieldY.name = "y"; fieldY.offset = 4; fieldY.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldY.count = 1;
+                fieldZ.name = "z"; fieldZ.offset = 8; fieldZ.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldZ.count = 1;
+                fieldIntensity.name = "intensity"; fieldIntensity.offset = 12; fieldIntensity.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldIntensity.count = 1;
+                cloud.fields = {fieldX, fieldY, fieldZ, fieldIntensity};
+
+                cloud.data = packed.data;
+
+                m_impl->lidarPub->publish(cloud);
             }
-            const maro::lidar::PackedPointCloud packed =
-                maro::lidar::packPointCloud(rosPoints, {});
-
-            sensor_msgs::msg::PointCloud2 cloud;
-            cloud.header.stamp = m_impl->node->now();
-            // sample.points는 라이다 로컬 프레임이 아니라 월드 좌표(mayaToRosPosition은
-            // 기저/단위만 바꿀 뿐 원점을 옮기지 않는다)이므로, 축 경로(158행)와 같은
-            // "world"를 찍는다. sample.frameId(노드의 frameId 어트리뷰트)를 여기 쓰려면
-            // 먼저 히트를 라이다 로컬 프레임으로 변환하고 world->frameId TF를 함께
-            // 발행해야 한다 -- 워킹 스켈레톤에서는 의도적으로 보류.
-            cloud.header.frame_id = "world";
-            cloud.height = 1;
-            cloud.width = packed.width;
-            cloud.is_bigendian = false;
-            cloud.is_dense = true;
-            cloud.point_step = packed.pointStep;
-            cloud.row_step = packed.pointStep * packed.width;
-
-            sensor_msgs::msg::PointField fieldX, fieldY, fieldZ, fieldIntensity;
-            fieldX.name = "x"; fieldX.offset = 0; fieldX.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldX.count = 1;
-            fieldY.name = "y"; fieldY.offset = 4; fieldY.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldY.count = 1;
-            fieldZ.name = "z"; fieldZ.offset = 8; fieldZ.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldZ.count = 1;
-            fieldIntensity.name = "intensity"; fieldIntensity.offset = 12; fieldIntensity.datatype = sensor_msgs::msg::PointField::FLOAT32; fieldIntensity.count = 1;
-            cloud.fields = {fieldX, fieldY, fieldZ, fieldIntensity};
-
-            cloud.data = packed.data;
-
-            m_impl->lidarPub->publish(cloud);
         }
     }
 }

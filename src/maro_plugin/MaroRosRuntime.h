@@ -40,6 +40,13 @@ public:
     // 발행이 붙기 전에도 스레드 경계를 넘는 흐름을 관측할 수 있다.
     std::uint64_t drainedSampleCount() const { return m_drainedSamples.load(); }
 
+    // LiDAR 스캔 전용 계수기 (최종 리뷰 Finding M1). 예전에는 축 샘플과
+    // LiDAR 스캔이 같은 m_drainedSamples를 밀어서, 축과 라이다가 같이
+    // 있는 씬에서는 "라이다가 실제로 뭔가 내보내고 있는가"를 그 숫자만
+    // 보고는 알 수 없었다 -- test_lidar_publish.py가 "씬에 축이 하나도
+    // 없다"는 전제를 깔아야 했던 이유다.
+    std::uint64_t drainedLidarScanCount() const { return m_drainedLidarScans.load(); }
+
     // drainAndPublish()에서 예외가 나 한 틱을 건너뛴 횟수. spinLoop()의
     // try가 while 바깥이 아니라 루프 안쪽(각 반복)을 감싸므로 예외가 나도
     // 스레드는 계속 돌지만, 그 사실이 겉으로 안 보이면 "조용히 죽은 스레드"
@@ -59,6 +66,7 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequested{false};
     std::atomic<std::uint64_t> m_drainedSamples{0};
+    std::atomic<std::uint64_t> m_drainedLidarScans{0};
     std::atomic<std::uint64_t> m_publishErrors{0};
 
     BoundedQueue<AxisSample> m_publishQueue;
