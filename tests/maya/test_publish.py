@@ -14,7 +14,7 @@
 브리프의 초안 대비 두 가지 의도적 편차 (모두 앞선 세션에서 확인됨):
 
 1. 상단에서 cmds.currentUnit(angle="rad")를 고정한다. maroRotation.angle과
-   maroAxis.outValue는 둘 다 MFnUnitAttribute::kAngle이라, cmds.setAttr/getAttr이
+   maroAxis.position은 둘 다 MFnUnitAttribute::kAngle이라, cmds.setAttr/getAttr이
    Maya의 UI 각도 단위(기본 도)로 값을 여닫는다. 고정하지 않으면 이 스크립트가
    "도"로 값을 쓰고, MaroPump는 라디안으로 발행하므로 피어가 받은 값과 이 스크립트가
    기대하는 값이 어긋난다 (test_capability_stack.py의 "단위 계약" 절이 같은 함정을
@@ -62,7 +62,7 @@ def _wait_for_peer(proc, backstop_sec):
     while time.time() < deadline and proc.poll() is None:
         _qapp.processEvents()
         time.sleep(0.05)
-        collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()
+        collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()[:5]
 
     if proc.poll() is None:
         # 안전망 데드라인에 걸렸는데도 피어가 아직 살아있다 -- 정상 경로라면
@@ -155,11 +155,11 @@ def main():
         _maya_quat[3],
     )
 
-    # 피어가 받아야 할 값을 미리 로컬로도 확인해 둔다 -- outValue가 0.75가 아니면
+    # 피어가 받아야 할 값을 미리 로컬로도 확인해 둔다 -- position이 0.75가 아니면
     # 발행 파이프라인이 아니라 캡ability 스택 자체가 문제라는 뜻이라 바로 갈린다.
-    outVal = cmds.getAttr(axis + ".outValue")
+    outVal = cmds.getAttr(axis + ".position")
     assert abs(outVal - 0.75) < 1e-9, \
-        f"capability stack did not drive outValue to 0.75 rad before the bridge even starts (got {outVal})"
+        f"capability stack did not drive position to 0.75 rad before the bridge even starts (got {outVal})"
 
     # 피어가 받아야 할 정확한 문자열. maro_test_peer의 runEcho()가
     # "joint <name> = <position>"로, runTf()가 "tf <frame> translation/rotation = ..."로

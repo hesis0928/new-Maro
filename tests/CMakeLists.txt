@@ -80,6 +80,20 @@ target_link_libraries(maro_transform_tests PRIVATE
 
 gtest_discover_tests(maro_transform_tests)
 
+add_executable(maro_lidar_tests
+    lidar/test_ray_pattern.cpp
+    lidar/test_scan_engine.cpp
+    lidar/test_point_cloud_packing.cpp
+)
+
+target_link_libraries(maro_lidar_tests PRIVATE
+    maro_lidar
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_discover_tests(maro_lidar_tests)
+
 add_executable(maro_diag_tests
     diag/test_error_hash.cpp
     diag/test_book_store.cpp
@@ -223,13 +237,15 @@ if(MARO_BUILD_PLUGIN)
 
     # 플러그인만 있으면 되는 테스트. robustness는 순수 DG 조작/평가만 하고
     # 브리지(rclcpp)를 켜지 않으므로 이 그룹에 속한다.
+    # main 병합(sentinel, PR #1)과 이 브랜치(lidar_node)가 같은 목록 끝에
+    # 각자 새 항목을 붙여서 생긴 충돌 -- 둘 다 유지한다.
     foreach(maya_test load axis_node binding capability_stack delete_rules
                       robustness diag_boad diag_onfix diag_book
                       diag_book_cross_session diag_remedy
                       diag_degraded diag_degraded_remedy diag_thread
                       panel_commands journal remedy_capture
                       remedy_availability remedy_ambiguous_names
-                      main_thread_queue remedy_apply sentinel)
+                      main_thread_queue remedy_apply sentinel lidar_node)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
@@ -251,6 +267,23 @@ if(MARO_BUILD_PLUGIN)
         ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_bridge_pump"
+        FIXTURES_REQUIRED MaroDiagBookRoot
+        TIMEOUT 240
+        RUN_SERIAL TRUE)
+
+    # lidar_publish도 bridge_pump와 같은 이유로 이 그룹에 못 들어간다:
+    # maroStartBridge()로 실제 rclcpp 컨텍스트(DDS 도메인)를 띄우므로
+    # publish/contract/bridge_pump와 동시에 돌면 서로 간섭한다. 브리프는 위
+    # foreach 목록("플러그인만 있으면 되는 테스트")에 넣으라고 했지만 그
+    # 목록에는 RUN_SERIAL이 없다 -- 그 그룹의 전제를 깨는 대신 bridge_pump와
+    # 같은 모양으로 따로 등록한다.
+    add_test(NAME maya_lidar_publish
+             COMMAND "${MAYAPY}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_lidar_publish.py")
+    set_tests_properties(maya_lidar_publish PROPERTIES
+        ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_lidar_publish"
         FIXTURES_REQUIRED MaroDiagBookRoot
         TIMEOUT 240
         RUN_SERIAL TRUE)

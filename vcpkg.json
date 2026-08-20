@@ -4,6 +4,22 @@
   "version-string": "0.1.0",
   "dependencies": [
     "gtest",
-    "nlohmann-json"
+    "nlohmann-json",
+    {
+      "name": "embree",
+      "default-features": false,
+      "features": [
+        "filter-function",
+        "geometry-curve",
+        "geometry-grid",
+        "geometry-instance",
+        "geometry-point",
+        "geometry-quad",
+        "geometry-subdivision",
+        "geometry-triangle",
+        "geometry-user",
+        "ray-packets"
+      ]
+    }
   ]
 }

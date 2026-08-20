@@ -171,7 +171,7 @@ MStatus MaroAxisNode::initialize() {
     // 라디안 값을 UI 단위(도)로 오인해 잘못된 unitConversion 배율을
     // 끼워 넣는다 (실측: plainVal(1.0 rad 의도) -> rotateX 연결 시
     // conversionFactor 0.0174533로 1도로 둔갑).
-    aOutValue = angFn.create("outValue", "otv", MFnUnitAttribute::kAngle, 0.0);
+    aOutValue = angFn.create("position", "otv", MFnUnitAttribute::kAngle, 0.0);
     angFn.setStorable(false);
     angFn.setWritable(false);
     addAttribute(aOutValue);

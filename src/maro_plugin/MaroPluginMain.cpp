@@ -9,6 +9,7 @@
 #include "MaroDeleteWatcher.h"
 #include "MaroDiag.h"
 #include "MaroDiagCommands.h"
+#include "MaroLidarNode.h"
 #include "MaroMainThreadQueue.h"
 #include "MaroPanelCommands.h"
 #include "MaroRemedyCommands.h"
@@ -76,6 +77,13 @@ MStatus initializePlugin(MObject obj) {
         MPxNode::kLocatorNode);
     if (!status) {
         status.perror("Maro: failed to register maroAxis");
+        return status;
+    }
+
+    status = plugin.registerNode("maroLidar", maro::MaroLidarNode::id, &maro::MaroLidarNode::creator,
+                                  &maro::MaroLidarNode::initialize, MPxNode::kLocatorNode);
+    if (!status) {
+        status.perror("Maro: failed to register maroLidar node");
         return status;
     }
 
@@ -386,7 +394,17 @@ MStatus uninitializePlugin(MObject obj) {
         plugin.deregisterNode(maro::MaroLimitNode::id);
         plugin.deregisterNode(maro::MaroRotationNode::id);
 
-        MStatus status = plugin.deregisterNode(maro::MaroAxisNode::id);
+        // 브리프 Step 4는 이 dereg 호출을 maroAxis dereg "바로 다음"에 두라고
+        // 했지만, 그 자리는 등록 역순이 아니다 -- initializePlugin에서
+        // maroLidar는 maroAxis 바로 "다음"에 등록되므로, 이 파일이 스스로
+        // 내건 규율(등록 역순 dereg -- 위 라인 328-334의 maroApplyRemedy/
+        // maroDiagRequestRemedy 선례와 같은 논리)을 따르면 maroLidar dereg는
+        // maroAxis dereg "바로 앞"에 와야 한다(가장 나중에 등록된 것부터
+        // 먼저 해제). 여기서도 그 규율을 우선했다.
+        MStatus status = plugin.deregisterNode(maro::MaroLidarNode::id);
+        if (!status) status.perror("Maro: failed to deregister maroLidar node");
+
+        status = plugin.deregisterNode(maro::MaroAxisNode::id);
         if (!status) {
             status.perror("Maro: failed to deregister maroAxis");
         }

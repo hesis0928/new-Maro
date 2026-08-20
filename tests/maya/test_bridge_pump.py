@@ -60,7 +60,7 @@ cmds.connectAttr(rot + ".capabilityOut", axis + ".capabilityIn[0]")
 cmds.setAttr(rot + ".angle", 0.4)
 
 # 브리지를 켜기 전에는 아무것도 흐르지 않는다.
-collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()
+collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()[:5]
 assert collected == 0 and drained == 0 and ticks == 0, \
     f"nothing should flow before the bridge starts: stats={(collected, drained, applied, ticks, pub_errors)}"
 print("idle stats OK")
@@ -88,7 +88,7 @@ try:
     while time.time() < deadline:
         _qapp.processEvents()
         time.sleep(0.05)
-        collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()
+        collected, drained, applied, ticks, pub_errors = cmds.maroBridgeStats()[:5]
         if collected > 0 and drained > 0 and ticks > 0:
             break
 
@@ -103,9 +103,9 @@ try:
     print(f"pump + command thread flow OK (collected={collected}, drained={drained}, ticks={ticks})")
 
     cmds.maroStopBridge()
-    collected_after, _, _, ticks_after, _ = cmds.maroBridgeStats()
+    collected_after, _, _, ticks_after, _ = cmds.maroBridgeStats()[:5]
     _pump(1.0)
-    collected_now, _, _, ticks_now, _ = cmds.maroBridgeStats()
+    collected_now, _, _, ticks_now, _ = cmds.maroBridgeStats()[:5]
     assert collected_now == collected_after, \
         f"pump kept running after maroStopBridge (before={collected_after}, after={collected_now})"
     assert ticks_now == ticks_after, \

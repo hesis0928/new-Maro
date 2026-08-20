@@ -23,7 +23,7 @@ expected = [
     "conventionAxis",
     "conventionInvert",
     "controlMode",
-    "outValue",
+    "position",
     "outTransform",
     "enabled",
 ]

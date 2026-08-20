@@ -7,6 +7,7 @@ set(SOURCE_FILES
     MaroPluginMain.cpp
     MaroAxisNode.cpp
     MaroCapabilityNodes.cpp
+    MaroLidarNode.cpp
     MaroCommands.cpp
     MaroDeleteWatcher.cpp
     MaroRosRuntime.cpp
@@ -51,6 +52,20 @@ build_plugin()
 # keyword(PRIVATE/PUBLIC) 시그니처를 섞어 쓰는 것을 금지하므로, 여기서도
 # PRIVATE 없이 plain 형태로 이어 붙인다.
 target_link_libraries(${PROJECT_NAME} maro_transform)
+# maro_lidar를 여기 링크하면 embree4.dll이 *Maya 프로세스 안으로* 끌려
+# 들어온다. 그래서 이 라이브러리는 반드시 TBB 없이(EMBREE_TASKING_SYSTEM=
+# INTERNAL) 빌드된 것이어야 한다 -- vcpkg 기본값인 `tasking-tbb` 피처로
+# 빌드하면 embree4.dll이 tbb12.dll을 임포트하는데, Maya 2026은 자기
+# tbb12.dll을 시작 시점에 이미 로드해 두고 그것이 embree가 요구하는
+# `tbb::detail::r1::get_thread_reference_vertex`를 export하지 않는다.
+# 로더는 같은 베이스 이름의 모듈이 이미 로드돼 있으면 그것을 재사용하므로
+# (실측: vcpkg tbb12.dll을 절대 경로로 먼저 LoadLibrary해도 Maya 것이
+# 그대로 남는다) PATH 순서나 옆에 복사하기로는 절대 못 이긴다 --
+# loadPlugin이 "지정된 프로시저를 찾을 수 없습니다"(ERROR_PROC_NOT_FOUND)로
+# 실패한다. 피처 목록은 vcpkg.json에 고정해 뒀다. 이 프로젝트는
+# rtcIntersect1(단일 레이)만 쓰므로 내부 태스킹으로 잃는 것은 BVH 빌드
+# 병렬성뿐이다.
+target_link_libraries(${PROJECT_NAME} maro_lidar)
 target_link_libraries(${PROJECT_NAME} maro_diag)
 target_link_libraries(${PROJECT_NAME} maro_ipc)
 
@@ -95,7 +110,17 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             "${ROS2_INSTALL}/opt/spdlog_vendor/bin" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${ROS2_INSTALL}/opt/console_bridge_vendor/bin" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMENT "Maro: staging ROS 2 runtime DLLs next to the plugin"
+    # I1: embree4.dll도 여기 있어야 한다. ROS 2 DLL과 달리 이건 vcpkg에서
+    # 오므로 위의 copy_directory 어디에도 걸리지 않는다 -- 지금까지 이
+    # 빌드가 돌아간 것은 오직 이 개발 머신의 PATH에
+    # C:/src/vcpkg/installed/x64-windows/bin이 들어 있었기 때문이고,
+    # 그건 저장소가 만들어내는 상태가 아니다. 여기 복사해 두면 README가
+    # 이미 요구하는 "빌드 출력 디렉터리를 PATH에 넣어라" 한 줄로 충분해진다.
+    # (embree 타깃은 src/maro_lidar/CMakeLists.txt에서 IMPORTED_GLOBAL로
+    # 승격시켜 뒀다 -- 그러지 않으면 형제 디렉터리인 여기서는 안 보인다.)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:embree>" "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    COMMENT "Maro: staging ROS 2 + Embree runtime DLLs next to the plugin"
 )
 
 # 패널 UI 모듈은 플러그인 .mll 옆에 둔다. maroDiagPanel 커맨드가 그
