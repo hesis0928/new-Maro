@@ -43,12 +43,40 @@ Maya가 매번 재평가를 한다.
 
 ### 3.1 메커니즘
 
-`applyToMatchingAxis()`에서 `setDouble()` 호출 직전에 현재 값을 먼저 읽어
-비교한다:
+비교 판단(값이 바뀌었는지)과 Maya 배선(플러그 읽기/쓰기)을 분리한다.
+판단은 Maya API에 전혀 의존하지 않는 순수 함수로 뽑아낸다 — 이유는 §4에서
+설명한다.
+
+**`src/maro_plugin/CommandDeltaCheck.h`(신규, 헤더 온리, Maya 헤더 없음):**
+
+```cpp
+#pragma once
+
+#include <cmath>
+
+namespace maro {
+
+// 라디안 스케일에서 의미 있는 움직임은 절대 걸러지지 않고, 부동소수점
+// 표현 오차로 생기는 노이즈만 제거하는 수준.
+constexpr double kUnchangedCommandEpsilon = 1e-9;
+
+// 들어온 명령값이 현재값과 사실상 같아서 적용을 건너뛰어도 되는지 판단한다.
+// Maya API에 의존하지 않는다 -- MaroCommandDeviceNode.cpp가 이 판단 결과로
+// setDouble() 호출 여부만 가른다.
+constexpr bool shouldSkipUnchangedCommand(double current, double incoming,
+                                          double epsilon = kUnchangedCommandEpsilon) {
+    return std::abs(incoming - current) < epsilon;
+}
+
+}  // namespace maro
+```
+
+**`applyToMatchingAxis()`(`src/maro_plugin/MaroCommandDeviceNode.cpp`)는
+이 함수를 부르는 얇은 배선만 남는다:**
 
 ```cpp
 const double current = axisFn.findPlug(MaroAxisNode::aRosCommand, false).asDouble();
-if (std::abs(value - current) < kUnchangedEpsilon) {
+if (shouldSkipUnchangedCommand(current, value)) {
     s_skippedUnchanged.fetch_add(1, std::memory_order_relaxed);
     continue;
 }
@@ -66,14 +94,11 @@ Parallel Evaluation Manager 하에서 워커 스레드에 돌 수 있다는
 
 ### 3.2 epsilon
 
-```cpp
-constexpr double kUnchangedEpsilon = 1e-9;
-```
-
-이 축 시스템은 현재 회전(라디안) 조인트만 다룬다(`MaroAxisNode::aOutValue`가
-`MFnUnitAttribute::kAngle`, 내부 라디안 — 선형/프리즈매틱 조인트 흔적 없음).
-`1e-9`는 라디안 스케일에서 의미 있는 움직임은 절대 걸러지지 않고, 부동소수점
-표현 오차로 생기는 노이즈만 제거하는 수준이다.
+`kUnchangedCommandEpsilon = 1e-9`(§3.1). 이 축 시스템은 현재 회전(라디안)
+조인트만 다룬다(`MaroAxisNode::aOutValue`가 `MFnUnitAttribute::kAngle`,
+내부 라디안 — 선형/프리즈매틱 조인트 흔적 없음). `1e-9`는 라디안 스케일에서
+의미 있는 움직임은 절대 걸러지지 않고, 부동소수점 표현 오차로 생기는
+노이즈만 제거하는 수준이다.
 
 **사용자가 조정 가능한 어트리뷰트로 만들지 않는다.** 이 스펙의 목적은
 "눈에 안 보이는 떨림까지 의도적으로 무시해서 성능을 더 아끼는 것"이
@@ -110,20 +135,46 @@ static std::atomic<std::uint64_t> s_skippedUnchanged;
 
 ## 4. 테스트
 
-기존 `tests/maya/test_axis_node.py`(마야파이 기반, 실제 Maya DG 동작을
-검증하는 이 프로젝트의 기존 패턴)에 시나리오를 추가한다:
+### 4.1 mayapy로는 검증할 수 없다 (브레인스토밍 중 발견, 스펙 최초 승인 이후 정정)
 
-1. **같은 값을 두 번 보낸다.** 두 번째 호출 후 `skippedUnchangedCount()`가
-   1 늘고, `appliedCommandCount()`는 첫 번째 호출 이후로 그대로인지 확인한다.
-2. **회귀 방지**: 값이 실제로 다르면 여전히 `appliedCommandCount()`가
-   늘고 축 플러그 값이 실제로 갱신되는지 확인한다(델타체크가 진짜로
-   변경을 놓치지 않는지).
-3. **경계값**: epsilon보다 아주 살짝 큰 차이(예: `kUnchangedEpsilon * 10`)는
-   여전히 "변경"으로 취급되는지 확인한다.
+`tests/maya/test_contract.py`의 docstring에 이미 문서화·검증돼 있다:
+**`MaroCommandDeviceNode::compute()`(그리고 그 안에서 불리는
+`applyToMatchingAxis()`)는 mayapy(배치 모드)에서 전혀 실행되지 않는다.**
+`MPxThreadedDeviceNode`의 인바운드 배선이 Maya의 유휴(idle) 이벤트 큐에
+의존하는데, 배치 모드는 그 큐를 돌리지 않는다(devkit 헤더 자체가 "it will
+not work in Maya batch mode"라고 명시). 이전 태스크가 이미 여러 펌핑
+방식을 5~8초씩 시도했지만 `applied` 카운터가 단 한 번도 안 움직였다고
+기록돼 있다.
+
+즉 `applyToMatchingAxis()`(델타체크가 들어갈 자리)는 mayapy로 절대
+도달할 수 없다. §3.1에서 판단 로직을 Maya API에 의존하지 않는 순수 함수
+`shouldSkipUnchangedCommand()`로 뽑아낸 이유가 이것이다 — mayapy가 아니라
+**gtest**로 직접, 완전히 신뢰성 있게 검증한다.
+
+### 4.2 gtest (신규)
+
+`tests/plugin/test_command_delta_check.cpp`(신규) — Maya에 의존하지 않으므로
+`ctest`의 기존 `maya_*` 테스트들과 달리 mayapy가 필요 없다:
+
+1. **같은 값**: `shouldSkipUnchangedCommand(1.2, 1.2)` → `true`.
+2. **다른 값**: `shouldSkipUnchangedCommand(1.2, 1.5)` → `false`.
+3. **경계값**: `epsilon`보다 아주 살짝 큰 차이(예: `kUnchangedCommandEpsilon * 10`)는
+   여전히 "변경"(`false`)으로 취급되는지 확인한다.
+4. **epsilon 미만의 아주 작은 차이**: `kUnchangedCommandEpsilon / 10`만큼
+   차이 나면 "변경 없음"(`true`)으로 취급되는지 확인한다.
 
 이 프로젝트의 기존 TDD 규율(모든 새 테스트는 구현을 일부러 깨서 실패하는
-것까지 확인)에 따라, 구현 단계에서 `setDouble()` 호출을 원래대로(조건 없이)
-되돌려 위 1번 테스트가 실제로 실패하는지 확인한 뒤 되돌린다.
+것까지 확인)에 따라, 구현 단계에서 `shouldSkipUnchangedCommand()`가 항상
+`false`를 돌려주도록 임시로 깨서 위 1번 테스트가 실제로 실패하는지 확인한
+뒤 되돌린다.
+
+### 4.3 `applyToMatchingAxis()`의 Maya 배선 자체는 코드 리뷰로 검증
+
+`shouldSkipUnchangedCommand()`를 부르는 부분(플러그 읽기/쓰기, 카운터 증가)은
+§4.1과 같은 이유로 자동화 테스트가 불가능하다. 이 부분은 기존
+`applyToMatchingAxis()`의 나머지 코드(예: `aControlMode`/`aJointName` 매칭)와
+같은 수준으로, 코드 리뷰로 검증한다 — 새로운 검증 공백이 아니라 이미
+이 함수 전체가 갖고 있던 제약이다.
 
 ## 5. 범위 밖 (의도적)
 
@@ -138,9 +189,14 @@ static std::atomic<std::uint64_t> s_skippedUnchanged;
 
 ## 6. 전역 제약
 
-- 변경 파일: `src/maro_plugin/MaroCommandDeviceNode.h`,
+- 변경/생성 파일: `src/maro_plugin/CommandDeltaCheck.h`(신규),
+  `src/maro_plugin/MaroCommandDeviceNode.h`,
   `src/maro_plugin/MaroCommandDeviceNode.cpp`,
-  `tests/maya/test_axis_node.py`. 그 외 어떤 파일도 건드리지 않는다.
+  `tests/plugin/test_command_delta_check.cpp`(신규), `tests/CMakeLists.txt`.
+  그 외 어떤 파일도 건드리지 않는다(§4.1의 발견에 따라 `tests/maya/test_axis_node.py`는
+  더 이상 이 스펙의 대상이 아니다).
+- `CommandDeltaCheck.h`는 Maya 헤더를 포함하지 않는다 — `maro_ipc`/`maro_transform`이
+  이미 따르는 "Maya 없이 순수 로직" 원칙과 같다.
 - 기존 카운터(`s_applied`, `s_dropped`, `s_poolExhausted`)와 정확히 같은
   네이밍/메모리 순서(`memory_order_relaxed`) 규칙을 따른다.
 - undo 스택 관련 기존 동작(런타임 데이터 흐름이므로 undo에 안 남김)은
