@@ -17,6 +17,7 @@ set(SOURCE_FILES
     MaroPanelCommands.cpp
     MaroMainThreadQueue.cpp
     MaroRemedyCommands.cpp
+    MaroSentinelClient.cpp
 )
 
 set(LIBRARIES
@@ -51,6 +52,7 @@ build_plugin()
 # PRIVATE 없이 plain 형태로 이어 붙인다.
 target_link_libraries(${PROJECT_NAME} maro_transform)
 target_link_libraries(${PROJECT_NAME} maro_diag)
+target_link_libraries(${PROJECT_NAME} maro_ipc)
 
 foreach(ros_lib rclcpp rcl rcutils rcpputils rmw rosidl_runtime_c
                 rosidl_typesupport_cpp
@@ -128,3 +130,49 @@ add_custom_command(
     COMMENT "Copying maroDiagPanel.py next to the plug-in")
 add_custom_target(maro_diag_panel_py ALL DEPENDS "${MARO_DIAG_PANEL_PY_OUT}")
 add_dependencies(${PROJECT_NAME} maro_diag_panel_py)
+
+# 감시자 실행 파일을 플러그인 옆에 둔다. MaroSentinelClient.cpp가 자기
+# 모듈(.mll) 경로 기준으로 그 디렉터리에서 maro_sentinel.exe를 찾는다.
+#
+# [최종 리뷰 3i] 예전에는 이것이 ${PROJECT_NAME}의 POST_BUILD였고, 위 I9
+# 주석과 같은 함정("maro_sentinel 소스만 바뀌면 플러그인이 relink되지 않아
+# 복사가 스킵되고 스테일한 exe가 배포된 채 테스트만 통과한다")을 알려진
+# 위험으로 안고 있었다. 위 maroDiagPanel.py와 같은 OUTPUT 기반 규칙으로
+# 바꿔 그 의존을 없앤다.
+#
+# 실측으로 확인한 사실 하나를 남겨 둔다(고친 이유가 바뀌므로): **지금 이
+# 빌드 트리(Visual Studio 멀티 컨피그 제너레이터)에서는 그 함정이 실제로
+# 발현하지 않았다.** CMake의 VS 제너레이터는 POST_BUILD를 MSBuild의
+# <PostBuildEvent>로 내보내고, RunPostBuildEvent를 지정하지 않으면 기본값이
+# OnBuildSuccess라 링크가 스킵돼도 이벤트는 매 빌드 실행된다(생성된
+# maro.vcxproj에 RunPostBuildEvent 항목이 없음을 확인했고, main.cpp만 고친
+# 빌드에서 maro.mll의 mtime은 그대로인데 복사는 실행됐다). 함정이 진짜인
+# 것은 POST_BUILD가 링크 규칙에 직접 묶이는 Ninja/Makefile 제너레이터이며,
+# I9 주석은 이 저장소가 Ninja를 쓰던 시절에 쓰였다. 즉 지금의 정확성은
+# "MSBuild의 기본값이 마침 우리에게 유리하다"에 기대고 있었다 --
+# RunPostBuildEvent를 OnOutputUpdated로 바꾸거나 제너레이터를 되돌리면 조용히
+# 사라지는 종류의 정확성이다. 아래 규칙은 제너레이터와 무관하게 성립한다.
+#
+# DEPENDS에 타깃 이름(maro_sentinel)을 주는 것이 핵심이다: CMake는 그것이
+# 실행 파일/라이브러리 타깃이면 타깃 수준 의존(순서)과 **파일 수준
+# 의존(재실행)** 을 둘 다 만든다. 그래서 maro_sentinel이 다시 링크되면
+# 이 복사도 반드시 다시 돈다 -- 플러그인이 relink되는지와 무관하게.
+#
+# OUTPUT 경로에 $<TARGET_FILE_DIR:...> 대신 CMAKE_CURRENT_BINARY_DIR/$<CONFIG>를
+# 쓰는 이유는 위 maroDiagPanel.py 블록의 주석과 같다(build_plugin()이 함수
+# 안에서 타깃을 만들어 OUTPUT 자리의 타깃 조회가 해소되지 않는다). 다만 이쪽은
+# 멀티 컨피그 제너레이터라 컨피그별 하위 디렉터리가 붙으므로 $<CONFIG>를
+# 반드시 함께 넣어야 한다 -- 그것이 곧 $<TARGET_FILE_DIR:${PROJECT_NAME}>과
+# 같은 경로다(maro.mll이 out/build/src/maro_plugin/<config>/에 놓이는 것을
+# 디스크에서 확인). COMMAND 안에서는 TARGET_FILE_DIR 젠엑스가 정상 동작하므로
+# 디렉터리 생성에는 그것을 그대로 쓴다.
+set(MARO_SENTINEL_EXE_OUT "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/maro_sentinel.exe")
+add_custom_command(
+    OUTPUT "${MARO_SENTINEL_EXE_OUT}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:maro_sentinel>" "${MARO_SENTINEL_EXE_OUT}"
+    DEPENDS maro_sentinel
+    COMMENT "Copying maro_sentinel.exe next to the plug-in")
+add_custom_target(maro_sentinel_exe ALL DEPENDS "${MARO_SENTINEL_EXE_OUT}")
+add_dependencies(${PROJECT_NAME} maro_sentinel_exe)

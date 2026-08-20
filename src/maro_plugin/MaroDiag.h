@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -187,6 +188,20 @@ public:
     // 저널 writer/crashAdjacency 저장소를 새로 더했는데도 여기 반영하지
     // 않았다면 정확히 같은 함정이 재발했을 것이다).
     static void resetForTest();
+
+    // 이 세션이 book/저널에 쓰는 디렉터리. journalDirectory()(MaroDiag.cpp)의
+    // 이미 해소된 결과를 그대로 돌려준다 -- MARO_DIAG_BOOK_DIR 환경변수
+    // 해석이든 internalVar -userAppDir 해석이든 여기서 다시 하지 않는다.
+    // 감시자를 spawn할 때 같은 디렉터리를 넘겨야 하는 MaroSentinelClient.cpp를
+    // 위해 존재한다.
+    //
+    // 동작 순서상 지금은 실패하지 않는다 -- markMainThread()가 bookPaths()의
+    // 지연 초기화를 이미 끝내 둔 뒤라 이 함수는 그 값을 읽기만 한다. 다만
+    // 그것은 호출 순서에 기댄 성질이지 이 함수가 보장하는 것이 아니다:
+    // 반환 타입을 만드는 parent_path()만 해도 원리적으로 bad_alloc을 던질 수
+    // 있다. 호출부(MaroSentinelClient::connectOrSpawn)가 try/catch 안에서
+    // 부르는 이유가 그것이다 -- "실패할 수 없다"고 읽고 방어를 걷어내면 안 된다.
+    static std::filesystem::path bookDirectory();
 
     // sequence로 레코드 하나를 찾는다. 순번은 세션 전역에서 유일하고
     // 재사용되지 않으므로(MaroPanelCommands.cpp가 이미 이 방식으로

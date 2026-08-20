@@ -727,6 +727,24 @@ void BoadMaro::resetForTest() {
     crashAdjacencyStorage() = CrashAdjacency{};
 }
 
+// Task 9 Step 2: 감시자를 spawn하는 쪽(MaroSentinelClient.cpp)이 같은
+// 디렉터리를 넘길 수 있도록, 이미 해소된 결과 하나만 내보낸다. 여기서
+// MARO_DIAG_BOOK_DIR/internalVar -userAppDir 해석을 다시 하지 않는다 --
+// 두 곳에서 각자 해석하면 저널이 겪었던 "우연히만 맞아떨어지던 두 번째
+// 정의" 함정이 재발한다(MaroDiag.h의 선언 주석 참고).
+//
+// [브리프에서 자리를 옮김] 브리프 Step 2는 이 정의를 journalDirectory()
+// "바로 아래"에 두라고 했지만, journalDirectory()는 이 파일의 익명
+// 네임스페이스 안(위쪽 `namespace { ... }`)에 있다. 클래스 멤버 함수의
+// 정의는 그 클래스를 감싸는 네임스페이스에서만 할 수 있는데, 익명
+// 네임스페이스는 maro::BoadMaro를 감싸지 않으므로 그 자리에 두면 컴파일이
+// 안 된다. 그래서 journalDirectory()의 유일한 다른 소비자인 openJournal()
+// 바로 위, 익명 네임스페이스 바깥에 둔다 -- "이미 해소된 결과를 그대로
+// 돌려준다"는 브리프의 의도는 그대로다.
+std::filesystem::path BoadMaro::bookDirectory() {
+    return journalDirectory();
+}
+
 void BoadMaro::openJournal() {
     try {
         // 리뷰 Finding C1: 이 프로세스는 자기 자신의 저널 파일에만 쓴다 --
