@@ -102,6 +102,21 @@ target_link_libraries(maro_diag_tests PRIVATE
 
 gtest_discover_tests(maro_diag_tests)
 
+add_executable(maro_plugin_logic_tests
+    plugin/test_command_delta_check.cpp
+)
+
+target_include_directories(maro_plugin_logic_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/maro_plugin
+)
+
+target_link_libraries(maro_plugin_logic_tests PRIVATE
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_discover_tests(maro_plugin_logic_tests)
+
 if(MARO_BUILD_PLUGIN)
     set(MAYAPY "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe")
 
