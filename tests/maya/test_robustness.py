@@ -45,7 +45,7 @@ except RuntimeError:
 # src/maro_plugin/MaroAxisNode.cpp, MaroAxisNode::initialize() -- attributeAffects를
 # 거는 for 루프(aConventionAxis/aConventionInvert/aEnabled/aControlMode/
 # aRosCommand)와 aCapabilityIn 두 줄이 전부이고, aParentAxis는 그 목록에
-# 없다). 그래서 위에서 만든 순환 연결은 DG 그래프상으로는 존재해도 outValue를
+# 없다). 그래서 위에서 만든 순환 연결은 DG 그래프상으로는 존재해도 position을
 # 계산하는 평가 경로에는 들어가지 않아 evaluate가 멈추지 않는다.
 #
 # 이 가정이 깨지는 시점: 나중에 축 체인 평가(예: 로봇 관절 체인 합성)를 위해
@@ -54,9 +54,9 @@ except RuntimeError:
 # MaroAxisNode.cpp의 attributeAffects 목록에 aParentAxis를 추가하는 사람은
 # 이 시나리오도 함께 재검토해야 한다.
 cmds.connectAttr(c + ".message", a + ".parentAxis", force=True)
-cmds.getAttr(a + ".outValue")
-cmds.getAttr(b + ".outValue")
-cmds.getAttr(c + ".outValue")
+cmds.getAttr(a + ".position")
+cmds.getAttr(b + ".position")
+cmds.getAttr(c + ".position")
 print("raw cycle evaluation survived OK")
 
 # 2) NaN/inf 주입 -> 축이 유한값을 유지한다.
@@ -69,7 +69,7 @@ cmds.connectAttr(rot + ".capabilityOut", axis + ".capabilityIn[0]")
 cmds.setAttr(rot + ".angle", float("inf"))
 # rot.angle은 MFnUnitAttribute::kAngle이다. setAttr(inf)가 실제로 inf를
 # 저장했는지 먼저 확인한다 -- Maya가 kAngle 어트리뷰트에서 inf를
-# 클램프하거나 거부한다면, 아래 outValue 유한성 검사는 애초에 유한한
+# 클램프하거나 거부한다면, 아래 position 유한성 검사는 애초에 유한한
 # 입력을 유한한 출력으로 통과시키는 것뿐이라 MaroAxisNode::compute()의
 # std::isfinite 가드를 지워도 이 테스트는 여전히 통과한다.
 angle_in = cmds.getAttr(rot + ".angle")
@@ -79,9 +79,9 @@ assert math.isinf(angle_in) or math.isnan(angle_in), (
     "deleted and this scenario would still pass"
 )
 
-value = cmds.getAttr(axis + ".outValue")
-assert value == value, "outValue became NaN"
-assert abs(value) < 1e308, "outValue became infinite"
+value = cmds.getAttr(axis + ".position")
+assert value == value, "position became NaN"
+assert abs(value) < 1e308, "position became infinite"
 print("non-finite input contained OK")
 
 # 3) 바인딩 대상이 사라진 뒤 평가 -> 축도 사라졌으므로 접근이 안전해야 한다.
@@ -103,7 +103,7 @@ assert rot in orphan_members, f"orphan not registered in set: {orphan_members}"
 axis2 = cmds.createNode("maroAxis", name="axR2")
 cmds.connectAttr(rot + ".capabilityOut", axis2 + ".capabilityIn[0]")
 cmds.setAttr(rot + ".angle", 0.3)
-assert abs(cmds.getAttr(axis2 + ".outValue") - 0.3) < 1e-9
+assert abs(cmds.getAttr(axis2 + ".position") - 0.3) < 1e-9
 print("orphan reuse OK")
 
 # 5) 능력 노드 없는 축을 평가 -> 0
@@ -117,7 +117,7 @@ print("orphan reuse OK")
 # 값을 덮어써서 시드가 무엇이든 상관없기 때문). 즉 이 시나리오는 빈 스택일
 # 때 결과값의 기본 시드가 0이어야 한다는 것을 지키는, 자명하지 않은 검사다.
 bare = cmds.createNode("maroAxis", name="axBare")
-assert abs(cmds.getAttr(bare + ".outValue")) < 1e-9
+assert abs(cmds.getAttr(bare + ".position")) < 1e-9
 print("empty stack OK")
 
 # Maya는 커스텀 노드 인스턴스가 씬에 남아 있으면 플러그인을 언로드하지 않는다.

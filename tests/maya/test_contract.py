@@ -120,9 +120,9 @@ try:
     )
     pump_idle(1.0)  # 처리할 기회를 더 준다.
 
-    manual_out = cmds.getAttr(axis + ".outValue")
+    manual_out = cmds.getAttr(axis + ".position")
     assert abs(manual_out - 0.2) < 1e-6, (
-        f"Manual axis moved despite ignoring commands; outValue={manual_out}, "
+        f"Manual axis moved despite ignoring commands; position={manual_out}, "
         f"maroBridgeStats={cmds.maroBridgeStats()}"
     )
     print("manual ignores command OK")
@@ -135,16 +135,16 @@ try:
     cmds.maroSetControlMode(axis, 1)
     assert cmds.getAttr(axis + ".controlMode") == 1, "maroSetControlMode did not flip controlMode"
 
-    # 시딩 검증: 모드 전환 직후, 새 명령이 아직 도착하기 전에는 outValue가
+    # 시딩 검증: 모드 전환 직후, 새 명령이 아직 도착하기 전에는 position이
     # Manual에서 가졌던 값 그대로여야 한다 -- maroSetControlMode가
-    # rosCommand를 현재 outValue로 시딩하지 않으면(또는 시딩 순서가
+    # rosCommand를 현재 position으로 시딩하지 않으면(또는 시딩 순서가
     # 뒤바뀌면) 이 시점에 0(또는 이전 rosCommand의 stale 값)으로 튄다.
-    post_switch_out = cmds.getAttr(axis + ".outValue")
+    post_switch_out = cmds.getAttr(axis + ".position")
     assert abs(post_switch_out - manual_out) < 1e-6, (
         "axis jumped on mode switch instead of being seeded with its prior "
         f"Manual value; manual_out={manual_out}, post_switch_out={post_switch_out}"
     )
-    print("mode switch seeds rosCommand from outValue (no jump) OK")
+    print("mode switch seeds rosCommand from position (no jump) OK")
 
     publish_command(1.2)
     delivered = wait_until(lambda: cmds.maroBridgeStats()[2] > applied_before, timeout=8)
@@ -154,9 +154,9 @@ try:
         # 이 환경에서 안 될 거라 예상했는데 실제로 됐다면 억지로 SKIP 처리
         # 하지 않고 진짜로 검증한다.
         assert wait_until(
-            lambda: abs(cmds.getAttr(axis + ".outValue") - 1.2) < 1e-6, timeout=5), (
-            "applied count rose but outValue never reflected the delivered "
-            f"command; outValue={cmds.getAttr(axis + '.outValue')}, "
+            lambda: abs(cmds.getAttr(axis + ".position") - 1.2) < 1e-6, timeout=5), (
+            "applied count rose but position never reflected the delivered "
+            f"command; position={cmds.getAttr(axis + '.position')}, "
             f"maroBridgeStats={cmds.maroBridgeStats()}"
         )
         print("ros mode applies REAL delivered command OK (verified end-to-end)")
@@ -183,20 +183,20 @@ try:
     # 이건 평범한 DG pull evaluation이라 유휴 큐와 무관하게 배치 모드에서도
     # 완전히 신뢰할 수 있다. ----
     cmds.setAttr(axis + ".rosCommand", 1.2)
-    ros_out = cmds.getAttr(axis + ".outValue")
+    ros_out = cmds.getAttr(axis + ".position")
     assert abs(ros_out - 1.2) < 1e-6, (
-        f"ROS mode did not source outValue from rosCommand; outValue={ros_out}"
+        f"ROS mode did not source position from rosCommand; position={ros_out}"
     )
-    print("ros mode sources outValue from rosCommand OK")
+    print("ros mode sources position from rosCommand OK")
 
     # 다시 Manual로: 명령을 통해 되돌린다. rosCommand(1.2)를 무시하고
     # rotation 노드 값(0.2)으로 돌아가야 한다.
     cmds.maroSetControlMode(axis, 0)
     assert cmds.getAttr(axis + ".controlMode") == 0
-    back_out = cmds.getAttr(axis + ".outValue")
+    back_out = cmds.getAttr(axis + ".position")
     assert abs(back_out - 0.2) < 1e-6, (
         "switching back to Manual via maroSetControlMode did not restore "
-        f"the rotation-driven value (rosCommand leaked through); outValue={back_out}"
+        f"the rotation-driven value (rosCommand leaked through); position={back_out}"
     )
     print("maroSetControlMode toggles both directions OK")
 
@@ -219,9 +219,9 @@ try:
     cmds.setAttr(lim + ".maxY", 0.5)
     cmds.connectAttr(lim + ".capabilityOut", axis + ".capabilityIn[1]")
 
-    limited_out = cmds.getAttr(axis + ".outValue")
+    limited_out = cmds.getAttr(axis + ".position")
     assert abs(limited_out - 0.5) < 1e-6, (
-        f"limit did not clamp a ROS-sourced value; outValue={limited_out}"
+        f"limit did not clamp a ROS-sourced value; position={limited_out}"
     )
     print("limit clamps ros value OK")
 

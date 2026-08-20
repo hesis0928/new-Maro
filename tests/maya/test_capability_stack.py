@@ -13,7 +13,7 @@ plugin = os.environ["MARO_PLUGIN_PATH"]
 cmds.loadPlugin(plugin)
 cmds.file(new=True, force=True)
 
-# maroRotation.angle, maroLimit's min/max, and maroAxis.outValue are all
+# maroRotation.angle, maroLimit's min/max, and maroAxis.position are all
 # MFnUnitAttribute::kAngle now, so cmds.setAttr/getAttr read and write them
 # in Maya's *current UI angle unit* (degrees by default), not raw radians.
 # Every literal below was written in radians (matching the compute()
@@ -32,7 +32,7 @@ rot = cmds.createNode("maroRotation", name="rot1")
 
 cmds.connectAttr(rot + ".capabilityOut", axis + ".capabilityIn[0]")
 cmds.setAttr(rot + ".angle", 1.0)
-assert abs(cmds.getAttr(axis + ".outValue") - 1.0) < 1e-9, "rotation did not drive outValue"
+assert abs(cmds.getAttr(axis + ".position") - 1.0) < 1e-9, "rotation did not drive position"
 print("rotation OK")
 
 # limit을 얹으면 클램프된다. 축 보정 기본값은 Y이므로 Y 리밋을 건다.
@@ -42,7 +42,7 @@ cmds.setAttr(lim + ".minY", -0.5)
 cmds.setAttr(lim + ".maxY", 0.5)
 cmds.connectAttr(lim + ".capabilityOut", axis + ".capabilityIn[1]")
 
-assert abs(cmds.getAttr(axis + ".outValue") - 0.5) < 1e-9, "limit did not clamp"
+assert abs(cmds.getAttr(axis + ".position") - 0.5) < 1e-9, "limit did not clamp"
 print("limit OK")
 
 # 두 번째 limit이 더 좁으면 그쪽이 이긴다 (순차 클램프).
@@ -52,7 +52,7 @@ cmds.setAttr(lim2 + ".minY", -0.25)
 cmds.setAttr(lim2 + ".maxY", 0.25)
 cmds.connectAttr(lim2 + ".capabilityOut", axis + ".capabilityIn[2]")
 
-assert abs(cmds.getAttr(axis + ".outValue") - 0.25) < 1e-9, "second limit did not clamp"
+assert abs(cmds.getAttr(axis + ".position") - 0.25) < 1e-9, "second limit did not clamp"
 print("stacked limits OK")
 
 # 스택은 노드 종류가 아니라 인덱스 순서로 평가된다.
@@ -71,7 +71,7 @@ cmds.connectAttr(limFirst + ".capabilityOut", axisOrder + ".capabilityIn[0]")
 cmds.connectAttr(rotSecond + ".capabilityOut", axisOrder + ".capabilityIn[1]")
 cmds.setAttr(rotSecond + ".angle", 1.0)
 
-ordered = cmds.getAttr(axisOrder + ".outValue")
+ordered = cmds.getAttr(axisOrder + ".position")
 assert abs(ordered - 1.0) < 1e-9, \
     f"stack must evaluate in index order, not grouped by capType (got {ordered})"
 print("index ordering OK")
@@ -84,11 +84,11 @@ cmds.connectAttr(rotRos + ".capabilityOut", axisRos + ".capabilityIn[0]")
 cmds.setAttr(rotRos + ".angle", 0.3)
 cmds.setAttr(axisRos + ".rosCommand", 0.9)
 
-assert abs(cmds.getAttr(axisRos + ".outValue") - 0.3) < 1e-9, \
+assert abs(cmds.getAttr(axisRos + ".position") - 0.3) < 1e-9, \
     "Manual mode must use the rotation node, not rosCommand"
 
 cmds.setAttr(axisRos + ".controlMode", 1)
-assert abs(cmds.getAttr(axisRos + ".outValue") - 0.9) < 1e-9, \
+assert abs(cmds.getAttr(axisRos + ".position") - 0.9) < 1e-9, \
     "ROS mode must use rosCommand, not the rotation node"
 print("control mode source OK")
 
@@ -98,7 +98,7 @@ cmds.setAttr(limRos + ".minY", -0.5)
 cmds.setAttr(limRos + ".maxY", 0.5)
 cmds.connectAttr(limRos + ".capabilityOut", axisRos + ".capabilityIn[1]")
 
-assert abs(cmds.getAttr(axisRos + ".outValue") - 0.5) < 1e-9, \
+assert abs(cmds.getAttr(axisRos + ".position") - 0.5) < 1e-9, \
     "limits must clamp a ROS-driven value too"
 print("limit clamps in ros mode OK")
 
@@ -113,7 +113,7 @@ cmds.connectAttr(sensorDir + ".capabilityOut", axisSensor + ".capabilityIn[1]")
 cmds.connectAttr(sensorRange + ".capabilityOut", axisSensor + ".capabilityIn[2]")
 cmds.setAttr(rotSensor + ".angle", 0.6)
 
-assert abs(cmds.getAttr(axisSensor + ".outValue") - 0.6) < 1e-9, \
+assert abs(cmds.getAttr(axisSensor + ".position") - 0.6) < 1e-9, \
     "sensor capabilities must not alter the driving value"
 assert cmds.getAttr(sensorDir + ".capabilityOut.capType") == 2, "sensorDirection capType"
 assert cmds.getAttr(sensorRange + ".capabilityOut.capType") == 3, "sensorRange capType"
@@ -121,13 +121,13 @@ print("sensor nodes OK")
 
 # 비활성 축은 구동값을 내지 않는다.
 cmds.setAttr(axis + ".enabled", False)
-assert abs(cmds.getAttr(axis + ".outValue")) < 1e-9, "disabled axis must output zero"
+assert abs(cmds.getAttr(axis + ".position")) < 1e-9, "disabled axis must output zero"
 print("disabled OK")
 
 # 단위 계약: MFnUnitAttribute는 데이터블록(항상 라디안)과 cmds/Attribute
 # Editor 표면(현재 UI 각도 단위, 기본 도) 사이를 변환한다. 그 변환이 실제로
 # 걸려 있는지 끝까지 증명한다 -- rotation을 180 "도"로 설정하고 axis의
-# outValue를 "라디안"으로 읽어 pi가 나오는지 확인한다. cmds.currentUnit()로
+# position을 "라디안"으로 읽어 pi가 나오는지 확인한다. cmds.currentUnit()로
 # 각 cmds.setAttr/getAttr 호출이 어느 단위로 말하는지 명시적으로 통제한다.
 axisUnit = cmds.createNode("maroAxis", name="axisUnitContract")
 rotUnit = cmds.createNode("maroRotation", name="rotUnitContract")
@@ -137,7 +137,7 @@ cmds.currentUnit(angle="deg")
 cmds.setAttr(rotUnit + ".angle", 180.0)
 
 cmds.currentUnit(angle="rad")
-outRad = cmds.getAttr(axisUnit + ".outValue")
+outRad = cmds.getAttr(axisUnit + ".position")
 assert abs(outRad - math.pi) < 1e-9, \
     f"180 degrees in must read back as pi radians out (got {outRad})"
 print("unit contract (180 deg in -> pi rad out) OK")
