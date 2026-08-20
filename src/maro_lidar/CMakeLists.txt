@@ -6,6 +6,7 @@ find_package(embree 4 CONFIG REQUIRED)
 add_library(maro_lidar STATIC
     src/RayPattern.cpp
     src/ScanEngine.cpp
+    src/PointCloudPacking.cpp
 )
 
 target_include_directories(maro_lidar PUBLIC
