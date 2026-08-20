@@ -39,6 +39,7 @@ public:
     static void resetStats();
     static std::uint64_t appliedCommandCount();
     static std::uint64_t threadTickCount();
+    static std::uint64_t skippedUnchangedCount();
     static bool isThreadAlive();
 
     static MTypeId id;
@@ -55,6 +56,9 @@ private:
     static std::atomic<std::uint64_t> s_ticks;
     static std::atomic<std::uint64_t> s_dropped;         // 관절 이름이 너무 길어 버려진 개수
     static std::atomic<std::uint64_t> s_poolExhausted;    // 버퍼 풀이 꽉 차 버려진 개수
+    // 델타체크로 건너뛴 개수 -- 값이 실제로 안 바뀌어 setDouble()을 호출하지
+    // 않은 경우. s_applied와 합치면 이 노드가 처리한 명령 총수가 된다.
+    static std::atomic<std::uint64_t> s_skippedUnchanged;
     // 살아있는 threadHandler() 인스턴스 개수 (bool 아님). maroCommandDevice는
     // 사용자가 여러 개 만들 수 있는 등록 노드 타입이라, 인스턴스 하나가
     // 끝난다고 다른 인스턴스의 스레드까지 죽었다고 해선 안 된다.
