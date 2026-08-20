@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cmath>
-
 namespace maro {
 
 // 라디안 스케일에서 의미 있는 움직임은 절대 걸러지지 않고, 부동소수점
