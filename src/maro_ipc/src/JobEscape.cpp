@@ -33,7 +33,19 @@ std::optional<PROCESS_INFORMATION> spawnWithBreakaway(const std::string& exePath
         exePath.c_str(),
         commandLine.data(),  // CreateProcessA가 이 버퍼를 수정할 수 있다 -- data()는 non-const.
         nullptr, nullptr, FALSE,
-        CREATE_BREAKAWAY_FROM_JOB,
+        // CREATE_NO_WINDOW가 없으면 사용자 화면에 콘솔 창이 뜬다. 감시자
+        // (maro_sentinel.exe)는 콘솔 서브시스템 실행 파일이고 이것을 띄우는
+        // Maya.exe는 GUI 서브시스템이라 콘솔이 없다 -- 콘솔 없는 부모가 콘솔
+        // 프로그램을 자식으로 만들면 Windows가 *새 콘솔을 할당하고 그 창을
+        // 보여 준다*. 그 창은 감시자가 사는 내내(최대 12시간,
+        // kMaxSessionLifetimeMs) 화면에 남는다.
+        //
+        // 이 함수를 mayapy나 gtest에서 호출하면 이 문제가 보이지 않는다:
+        // 둘 다 콘솔 프로그램이라 자식이 부모 콘솔을 물려받아 새 창이 아예
+        // 안 뜨기 때문이다. 그래서 tests/ipc/test_console_window.cpp는
+        // DETACHED_PROCESS로 콘솔 없는 부모를 일부러 만들어 진짜 Maya 조건을
+        // 재현한다(실측: 이 플래그를 빼면 자식이 visible=1인 콘솔 창을 얻는다).
+        CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW,
         nullptr, nullptr, &startupInfo, &processInfo);
 
     if (!created) return std::nullopt;
@@ -145,6 +157,71 @@ std::optional<std::uint64_t> spawnViaWmi(const std::string& exePath, const std::
     ::VariantClear(&commandLineVariant);
     if (FAILED(hr)) {
         return std::nullopt;
+    }
+
+    // 콘솔 창 억제 -- tier 1(spawnWithBreakaway)의 CREATE_NO_WINDOW에 대응하는
+    // WMI 쪽 장치다. 이 경로로 만든 프로세스도 콘솔 창을 얻는다는 것을 실측으로
+    // 확인했다(tests/ipc/test_console_window.cpp, 수정 전 결과 console!=0,
+    // visible=1) -- tier 1과 별개의 코드 경로지만 구멍은 똑같았다.
+    //
+    // Win32_Process::Create는 선택 인자 ProcessStartupInformation으로
+    // Win32_ProcessStartup 인스턴스를 받고, 그 CreateFlags가 CreateProcess의
+    // dwCreationFlags로 전달된다.
+    //
+    // 왜 CREATE_NO_WINDOW가 아니라 DETACHED_PROCESS인가 (실측 근거):
+    //   - CreateFlags = CREATE_NO_WINDOW(0x08000000) 단독 -> Create가
+    //     ReturnValue 21(Invalid Parameter)로 *거부*된다(3/3 재현). 이 값은
+    //     Win32_ProcessStartup 문서의 CreateFlags 값 목록에 없다 -- 제공자가
+    //     자기 ValueMap으로 검증한다. 그대로 넣었으면 tier 2 폴백 자체가
+    //     통째로 망가졌을 것이다.
+    //   - CreateFlags = DETACHED_PROCESS(8) -> ReturnValue 0, 그리고 자식의
+    //     GetConsoleWindow()가 NULL(console=0). 문서에 있는 값이고, 결과는
+    //     tier 1의 CREATE_NO_WINDOW와 관측상 동일하다.
+    //   - ShowWindow = SW_HIDE 단독 -> 콘솔은 그대로 생기고(console!=0) 창만
+    //     숨겨진다(visible=0). 그래서 이것만으로는 부족하다고 보고, 아래처럼
+    //     둘 다 건다: 어떤 제공자가 CreateFlags를 무시하더라도 창은 숨는다.
+    //
+    // 감시자에게 콘솔이 없어도 되는 이유: src/maro_sentinel/main.cpp가
+    // 콘솔에 쓰는 곳은 인자 개수가 틀렸을 때의 usage 한 줄(stderr)뿐이고,
+    // 플러그인은 항상 올바른 인자로 띄운다.
+    //
+    // 실패해도 spawn 자체는 계속 진행한다(best-effort). 창이 보이는 감시자는
+    // 나쁘지만, 감시자가 아예 없는 것보다는 낫다.
+    ComPtr<IWbemClassObject> startupClass;
+    ComPtr<IWbemClassObject> startupInstance;
+    if (SUCCEEDED(services->GetObject(_bstr_t(L"Win32_ProcessStartup"), 0, nullptr,
+                                      startupClass.addressOf(), nullptr)) &&
+        SUCCEEDED(startupClass->SpawnInstance(0, startupInstance.addressOf()))) {
+        // CIM uint32/uint16은 둘 다 VARIANT VT_I4로 넘긴다.
+        VARIANT createFlagsVariant;
+        ::VariantInit(&createFlagsVariant);
+        createFlagsVariant.vt = VT_I4;
+        createFlagsVariant.lVal = static_cast<LONG>(DETACHED_PROCESS);
+        startupInstance->Put(L"CreateFlags", 0, &createFlagsVariant, 0);
+        ::VariantClear(&createFlagsVariant);
+
+        VARIANT showWindowVariant;
+        ::VariantInit(&showWindowVariant);
+        showWindowVariant.vt = VT_I4;
+        showWindowVariant.lVal = SW_HIDE;
+        startupInstance->Put(L"ShowWindow", 0, &showWindowVariant, 0);
+        ::VariantClear(&showWindowVariant);
+
+        // 내장 객체(embedded object) 인자를 넘기는 WMI 규약: IID_IUnknown으로
+        // QueryInterface한 포인터를 VT_UNKNOWN VARIANT에 담아 Put한다. Put은
+        // 객체를 *복사*하므로 이 뒤에 startupInstance를 더 고쳐도 소용없다.
+        // QueryInterface가 올린 참조는 아래 VariantClear가 되돌린다 --
+        // startupInstance 자신의 참조는 ComPtr이 스코프 끝에서 따로 놓아준다.
+        VARIANT startupVariant;
+        ::VariantInit(&startupVariant);
+        if (SUCCEEDED(startupInstance->QueryInterface(
+                IID_IUnknown, reinterpret_cast<void**>(&startupVariant.punkVal)))) {
+            // vt는 QI가 성공한 뒤에 세운다. 실패했는데 VT_UNKNOWN으로
+            // 표시해 두면 VariantClear가 쓰레기 포인터를 Release한다.
+            startupVariant.vt = VT_UNKNOWN;
+            inParams->Put(L"ProcessStartupInformation", 0, &startupVariant, 0);
+        }
+        ::VariantClear(&startupVariant);
     }
 
     ComPtr<IWbemClassObject> outParams;

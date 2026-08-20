@@ -16,6 +16,7 @@ add_executable(maro_ipc_tests
     ipc/test_named_pipe.cpp
     ipc/test_job_escape.cpp
     ipc/test_sentinel_process.cpp
+    ipc/test_console_window.cpp
 )
 
 target_link_libraries(maro_ipc_tests PRIVATE
@@ -30,12 +31,24 @@ target_link_libraries(maro_ipc_tests PRIVATE
 # "테스트 실행 파일 옆에 있겠지"라는 가정이 성립하지 않는다. 빌드 시스템이
 # 아는 정확한 경로를 컴파일 타임에 넘긴다.
 target_compile_definitions(maro_ipc_tests PRIVATE
-    MARO_SENTINEL_EXE_PATH="$<TARGET_FILE:maro_sentinel>")
+    MARO_SENTINEL_EXE_PATH="$<TARGET_FILE:maro_sentinel>"
+    # test_console_window.cpp도 같은 이유로 정확한 경로를 컴파일 타임에 받는다.
+    MARO_CONSOLE_PROBE_EXE_PATH="$<TARGET_FILE:maro_console_window_probe>")
 
 gtest_discover_tests(maro_ipc_tests)
 
 add_executable(maro_job_escape_test_helper ipc/job_escape_test_helper.cpp)
 target_link_libraries(maro_job_escape_test_helper PRIVATE maro_ipc)
+
+# 콘솔 창 검증용 프로브. maro_sentinel.exe와 같은 조건을 만들어야 하므로
+# 반드시 *콘솔 서브시스템*으로 둔다 -- WIN32_EXECUTABLE을 붙이면 GUI
+# 서브시스템이 되어 애초에 콘솔이 할당되지 않고, 그러면 이 테스트가 무엇을
+# 하든 통과하는 무의미한 테스트가 된다.
+add_executable(maro_console_window_probe ipc/console_window_probe.cpp)
+target_link_libraries(maro_console_window_probe PRIVATE maro_ipc)
+# 테스트가 실행될 때 프로브가 이미 빌드돼 있어야 한다(경로만 넘겨받으므로
+# CMake가 의존을 자동으로 추론하지 못한다).
+add_dependencies(maro_ipc_tests maro_console_window_probe)
 
 add_executable(maro_transform_tests
     transform/test_convert.cpp
