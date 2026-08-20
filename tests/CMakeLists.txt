@@ -196,7 +196,7 @@ if(MARO_BUILD_PLUGIN)
                       diag_degraded diag_degraded_remedy diag_thread
                       panel_commands journal remedy_capture
                       remedy_availability remedy_ambiguous_names
-                      main_thread_queue remedy_apply)
+                      main_thread_queue remedy_apply sentinel)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
