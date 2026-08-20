@@ -31,6 +31,12 @@ public:
 
     bool sendMessage(const Message& message);
 
+    // 주의: 서버의 close()는 DisconnectNamedPipe를 부르고, 그것은 상대가
+    // **아직 읽지 않은 데이터를 버린다**(MSDN). 즉 sendMessage() 직후에
+    // close()를 부르면 그 마지막 메시지가 사라질 수 있다. 마지막 말을
+    // 반드시 전하고 싶으면 상대가 읽고 나갈 때까지(=receiveMessage가
+    // 끊김으로 실패할 때까지) 기다렸다 닫아야 한다. 자세한 근거와 실측은
+    // NamedPipe.cpp의 close() 구현 주석 참고.
     void close();
 
 private:

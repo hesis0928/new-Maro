@@ -36,6 +36,14 @@ bool waitOverlapped(HANDLE handle, OVERLAPPED& overlapped, std::uint32_t timeout
         // CancelIoEx가 실패하면(ERROR_NOT_FOUND: 걸려 있는 I/O가 없다)
         // 기다리지 않는다 -- 그 경우 커널이 건드릴 것이 애초에 없고,
         // 반대로 기다리면 영원히 신호되지 않을 이벤트를 붙잡게 된다.
+        //
+        // **의도된 예외, 지우지 말 것**: 아래 bWait=TRUE는 이 저장소에서
+        // "모든 대기에 타임아웃"이라는 규칙을 지키지 않는 유일한 자리이며,
+        // 그것이 맞다. 여기 도달했다는 것은 CancelIoEx가 방금 성공했다는
+        // 뜻 -- 즉 취소 대상 I/O가 실제로 걸려 있었고, 커널이 그것을 반드시
+        // ERROR_OPERATION_ABORTED로 완료시킨다. 대기는 구조적으로 유한하다.
+        // 여기에 타임아웃을 넣어 "고치면" 완료 전에 스택 프레임을 벗어나는
+        // use-after-free가 되살아난다(Task 5 리뷰가 찾아 고친 바로 그 버그).
         if (::CancelIoEx(handle, &overlapped)) {
             DWORD cancelledBytes = 0;
             ::GetOverlappedResult(handle, &overlapped, &cancelledBytes, TRUE);
@@ -104,11 +112,29 @@ bool writeOneMessage(HANDLE pipe, const Message& message) {
 NamedPipeServer::NamedPipeServer(const std::string& pipeName) {
     pipe_ = ::CreateNamedPipeA(
         pipeName.c_str(),
-        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        // [최종 리뷰 I3] FILE_FLAG_FIRST_PIPE_INSTANCE: 이 이름의 **첫**
+        // 인스턴스가 아니면 만들지 않고 ERROR_ACCESS_DENIED로 실패한다.
+        // 파이프 이름은 완전히 예측 가능하므로(\\.\pipe\maro_sentinel_<PID>)
+        // 아무 로컬 프로세스나 진짜 감시자보다 먼저 같은 이름을 선점할 수
+        // 있다. 이 플래그가 없으면 그 상황에서 감시자의 생성이 조용히
+        // 성공해(두 번째 인스턴스로) 아무도 붙지 않는 파이프를 붙들고
+        // 앉아 있게 된다 -- 실제 접속은 선점한 쪽이 받는다. 시끄럽게
+        // 실패하는 편이 낫다.
+        //
+        // 정상 시나리오에는 영향이 없다: 감시자는 자기 Maya PID로 키가
+        // 걸린 이 이름의 유일한 생성자이고, nMaxInstances가 1이라 애초에
+        // 두 번째 인스턴스가 만들어질 수 없었다.
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
         1,  // 이 감시자는 자기 Maya 하나만 상대한다 -- §3.1의 1:1 모델.
         kBufferSize, kBufferSize,
         0,  // 기본 타임아웃 -- 실제 대기는 전부 오버랩+WaitForSingleObject로 직접 건다.
+        // 보안 속성은 기본(nullptr) -- 생성자의 기본 DACL이 걸린다. 명시적
+        // DACL로 현재 사용자만 남기는 것은 심층 방어로서 의미가 있지만, 위
+        // FILE_FLAG_FIRST_PIPE_INSTANCE와 클라이언트 쪽 SQOS가 실제 공격
+        // 경로(이름 선점 + 사칭)를 이미 닫는다. 남는 위험은 권한 상승이
+        // 아니라 같은 사용자 세션의 다른 로컬 프로세스가 감시자에게 먼저
+        // 붙어 세션을 가로채는 정도의 방해다.
         nullptr);
 }
 
@@ -177,8 +203,23 @@ bool NamedPipeClient::connect(const std::string& pipeName, std::uint32_t timeout
     // GetTickCount64는 넘치지 않는다.
     const ULONGLONG deadlineTick = ::GetTickCount64() + timeoutMs;
     for (;;) {
+        // [최종 리뷰 I3] SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION은
+        // 선택이 아니다. 명명된 파이프 클라이언트가 SQOS를 지정하지 않으면
+        // 서버 쪽에 **SecurityImpersonation**이 기본으로 주어진다 -- 즉 파이프
+        // 반대편을 쥔 쪽이 ImpersonateNamedPipeClient()로 접속한 사용자(=Maya를
+        // 돌리는 사람) 행세를 하며 그 권한으로 행동할 수 있다. 파이프 이름은
+        // 완전히 예측 가능하므로(\\.\pipe\maro_sentinel_<PID>) 낮은 권한의
+        // 로컬 프로세스가 진짜 감시자보다 먼저 그 이름을 만들어 두면, 여기서
+        // 우리가 그 가짜에 붙는 순간 사칭 토큰을 넘겨주게 된다.
+        // SECURITY_IDENTIFICATION은 상대가 우리 신원을 *조회*만 할 수 있게
+        // 하고 그 신원으로 행동하지는 못하게 막는다 -- 이 권한 상승 통로가
+        // 그것으로 닫힌다. (서버 쪽 FILE_FLAG_FIRST_PIPE_INSTANCE가 이름
+        // 선점 자체를 시끄럽게 만드는 것과 짝을 이루는 조치다.)
         pipe_ = ::CreateFileA(pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+                              OPEN_EXISTING,
+                              FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT |
+                                  SECURITY_IDENTIFICATION,
+                              nullptr);
         if (pipe_ != INVALID_HANDLE_VALUE) {
             // [브리프에서 고침] CreateFile로 연 클라이언트 핸들은 서버 쪽이
             // 메시지 타입 파이프여도 *바이트* 읽기 모드로 시작한다(MSDN
