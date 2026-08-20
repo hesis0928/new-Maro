@@ -12,6 +12,11 @@ plugin = os.environ["MARO_PLUGIN_PATH"]
 cmds.loadPlugin(plugin)
 
 cmds.file(new=True, force=True)
+# 각도 어트리뷰트(MFnUnitAttribute::kAngle)는 내부적으로 라디안이지만
+# cmds.getAttr은 기본적으로 Maya의 UI 각도 단위(기본값 도)로 변환해
+# 돌려준다 -- 고정하지 않으면 기본값 검증이 라디안 기댓값과 어긋난다.
+cmds.currentUnit(angle="rad")
+
 lidar = cmds.createNode("maroLidar")
 print("created:", lidar)
 
@@ -41,6 +46,18 @@ assert cmds.getAttr(lidar + ".updateRate") == 10.0
 assert cmds.getAttr(lidar + ".frameId") == "lidar_link"
 assert cmds.getAttr(lidar + ".enabled") is True
 print("defaults OK")
+
+# 각도 어트리뷰트 기본값 -- currentUnit(angle="rad")를 위에서 고정했으므로
+# getAttr이 라디안 그대로 돌려준다.
+def close(actual, expected, eps=1e-6):
+    return abs(actual - expected) < eps
+
+
+assert close(cmds.getAttr(lidar + ".verticalMinAngle"), -0.1)
+assert close(cmds.getAttr(lidar + ".verticalMaxAngle"), 0.1)
+assert close(cmds.getAttr(lidar + ".horizontalMinAngle"), -3.14159265358979)
+assert close(cmds.getAttr(lidar + ".horizontalMaxAngle"), 3.14159265358979)
+print("angle defaults OK")
 
 # targetMeshes에 실제 메쉬를 연결할 수 있는지 확인한다(capabilityIn과
 # 같은 방식 -- 새 바인딩 커맨드 없이 connectAttr로 직접).
