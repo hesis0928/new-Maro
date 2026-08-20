@@ -14,7 +14,7 @@
 브리프의 초안 대비 두 가지 의도적 편차 (모두 앞선 세션에서 확인됨):
 
 1. 상단에서 cmds.currentUnit(angle="rad")를 고정한다. maroRotation.angle과
-   maroAxis.position는 둘 다 MFnUnitAttribute::kAngle이라, cmds.setAttr/getAttr이
+   maroAxis.position은 둘 다 MFnUnitAttribute::kAngle이라, cmds.setAttr/getAttr이
    Maya의 UI 각도 단위(기본 도)로 값을 여닫는다. 고정하지 않으면 이 스크립트가
    "도"로 값을 쓰고, MaroPump는 라디안으로 발행하므로 피어가 받은 값과 이 스크립트가
    기대하는 값이 어긋난다 (test_capability_stack.py의 "단위 계약" 절이 같은 함정을
