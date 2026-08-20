@@ -19,6 +19,18 @@ target_link_libraries(maro_transform_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(maro_transform_tests)
 
+add_executable(maro_lidar_tests
+    lidar/test_ray_pattern.cpp
+)
+
+target_link_libraries(maro_lidar_tests PRIVATE
+    maro_lidar
+    GTest::gtest
+    GTest::gtest_main
+)
+
+gtest_discover_tests(maro_lidar_tests)
+
 add_executable(maro_diag_tests
     diag/test_error_hash.cpp
     diag/test_book_store.cpp
