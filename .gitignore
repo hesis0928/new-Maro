@@ -6,3 +6,4 @@ log/
 CMakeLists.txt.bak
 .superpowers/
 out/
+vcpkg_installed/
