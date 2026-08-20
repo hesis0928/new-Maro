@@ -17,6 +17,7 @@ set(SOURCE_FILES
     MaroPanelCommands.cpp
     MaroMainThreadQueue.cpp
     MaroRemedyCommands.cpp
+    MaroSentinelClient.cpp
 )
 
 set(LIBRARIES
@@ -51,6 +52,7 @@ build_plugin()
 # PRIVATE 없이 plain 형태로 이어 붙인다.
 target_link_libraries(${PROJECT_NAME} maro_transform)
 target_link_libraries(${PROJECT_NAME} maro_diag)
+target_link_libraries(${PROJECT_NAME} maro_ipc)
 
 foreach(ros_lib rclcpp rcl rcutils rcpputils rmw rosidl_runtime_c
                 rosidl_typesupport_cpp
@@ -128,3 +130,26 @@ add_custom_command(
     COMMENT "Copying maroDiagPanel.py next to the plug-in")
 add_custom_target(maro_diag_panel_py ALL DEPENDS "${MARO_DIAG_PANEL_PY_OUT}")
 add_dependencies(${PROJECT_NAME} maro_diag_panel_py)
+
+# 감시자 실행 파일을 플러그인 옆에 둔다. MaroSentinelClient.cpp가 자기
+# 모듈(.mll) 경로 기준으로 그 디렉터리에서 maro_sentinel.exe를 찾는다.
+#
+# 주의(브리프 Task 9 Step 4가 명시적으로 남긴 알려진 위험): 이 POST_BUILD는
+# 위 I9 주석이 설명하는 것과 정확히 같은 함정을 안고 있다 -- POST_BUILD는
+# ${PROJECT_NAME}의 relink 엣지에 묶여 있으므로, maro_sentinel 쪽 소스만
+# 바뀌고 플러그인 쪽 C++ 소스가 안 바뀌면 relink가 안 일어나 이 COMMAND도
+# 조용히 스킵되고 스테일한 maro_sentinel.exe가 그대로 배포된다. 위
+# maroDiagPanel.py처럼 add_custom_command(OUTPUT ...) 기반으로 바꾸면 없앨
+# 수 있는 위험이지만, 이 플랜에서는 두 타깃이 거의 항상 같은 태스크 안에서
+# 함께 바뀌므로 당장은 허용한다. 이 태스크에서 고치지 않고 최종 리뷰에서
+# 짚기로 한 항목이다.
+#
+# add_dependencies는 빌드 *순서*만 보장한다(maro_sentinel이 먼저 링크된다) --
+# 위의 스테일 복사 위험과는 별개의 문제이며, 그것을 해결해 주지는 않는다.
+set(MARO_SENTINEL_EXE_OUT "$<TARGET_FILE_DIR:${PROJECT_NAME}>/maro_sentinel.exe")
+add_custom_command(
+    TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:maro_sentinel>" "${MARO_SENTINEL_EXE_OUT}"
+    COMMENT "Copying maro_sentinel.exe next to the plug-in")
+add_dependencies(${PROJECT_NAME} maro_sentinel)

@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -186,6 +187,14 @@ public:
     // 이름이 거짓말이 된다 (carried-forward Minor finding -- 이 배치가
     // 저널 writer/crashAdjacency 저장소를 새로 더했는데도 여기 반영하지
     // 않았다면 정확히 같은 함정이 재발했을 것이다).
+    // 이 세션이 book/저널에 쓰는 디렉터리. journalDirectory()(MaroDiag.cpp)의
+    // 이미 해소된 결과를 그대로 돌려준다 -- MARO_DIAG_BOOK_DIR 환경변수
+    // 해석이든 internalVar -userAppDir 해석이든 여기서 다시 하지 않는다.
+    // 감시자를 spawn할 때 같은 디렉터리를 넘겨야 하는 MaroSentinelClient.cpp를
+    // 위해 존재한다. 실패할 수 없다 -- markMainThread()가 이미 지연
+    // 초기화를 끝내 둔 값을 읽을 뿐이다.
+    static std::filesystem::path bookDirectory();
+
     static void resetForTest();
 
     // sequence로 레코드 하나를 찾는다. 순번은 세션 전역에서 유일하고

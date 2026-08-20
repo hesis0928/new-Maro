@@ -12,6 +12,7 @@
 #include "MaroMainThreadQueue.h"
 #include "MaroPanelCommands.h"
 #include "MaroRemedyCommands.h"
+#include "MaroSentinelClient.h"
 
 namespace {
 constexpr char kVendor[] = "Maro";
@@ -35,6 +36,12 @@ struct JournalCloseGuard {
 struct MainThreadQueueGuard {
     ~MainThreadQueueGuard() { maro::MaroMainThreadQueue::uninstall(); }
 };
+
+// 저널/큐와 같은 이유로 가드를 쓴다 -- 이 함수를 어떤 경로로 빠져나가든
+// 파이프를 반드시 닫는다.
+struct SentinelGuard {
+    ~SentinelGuard() { maro::MaroSentinelClient::shutdown(); }
+};
 }  // namespace
 
 MStatus initializePlugin(MObject obj) {
@@ -48,6 +55,10 @@ MStatus initializePlugin(MObject obj) {
     // 저널을 연다. markMainThread()가 book 경로를 이미 확정했으므로
     // 저널 경로도 여기서 안전하게 해소된다.
     maro::BoadMaro::openJournal();
+
+    // 감시자 spawn/접속은 실패해도 로드를 막지 않는다 -- 함수 내부가
+    // 스스로 그 규율을 지킨다(MaroSentinelClient.cpp).
+    maro::MaroSentinelClient::connectOrSpawn();
 
     MStatus queueStatus = maro::MaroMainThreadQueue::install();
     if (!queueStatus) {
@@ -304,8 +315,18 @@ MStatus uninitializePlugin(MObject obj) {
     // 나중에 유지보수할 때 더 읽기 쉽다.
     const MainThreadQueueGuard queueGuardOnExit;
 
+    // 파이프도 같은 규율로 닫는다. 선언 순서 덕분에 소멸은 역순이 되어
+    // (감시자 -> 큐 -> 저널) 가장 바깥의 저널 닫기가 언제나 마지막이다.
+    const SentinelGuard sentinelGuardOnExit;
+
     try {
         MFnPlugin plugin(obj);
+
+        // 언로드가 시작됐다는 것 자체가 "정상 종료 경로에 들어왔다"는
+        // 뜻이다 -- 아래에서 무엇이 실패하든 이 신호는 이미 보내는 게
+        // 맞다. closeJournal()이 그렇듯, 감시자에게도 "이 세션은 의도적
+        // 종료였다"를 최대한 일찍 알린다.
+        maro::MaroSentinelClient::notifyCleanExit();
 
         maro::shutdownBridge();
         maro::MaroDeleteWatcher::uninstall();
