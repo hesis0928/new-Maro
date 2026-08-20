@@ -2299,7 +2299,7 @@ git commit -m "feat: assemble the sentinel's main loop from the pieces built so 
 - Produces: `maro::MaroSentinelClient`(`static void connectOrSpawn()`, `static void notifyCleanExit()`, `static void shutdown()`), `maro::BoadMaro::bookDirectory() -> std::filesystem::path`(새 공개 접근자)
 
 **spawn 3단계는 플러그인이 지휘한다(설계 스펙 §3.3):**
-1. `CREATE_BREAKAWAY_FROM_JOB`으로 `maro_sentinel.exe`를 spawn(`spawnWithBreakaway`). 성공하면 그 프로세스가 실제로 job을 빠져나왔는지는 감시자 자신이 기록 파일에 `inJob` 정보를 남기지 않으므로(Task 8은 그 값을 안 씀) — 이 골격 단계에서는 **spawn 성공 자체를 tier 1 성공으로 친다.** `CreateProcess`가 breakaway를 거부하면 실패로 돌아오므로 그것으로 충분한 신호다
+1. `CREATE_BREAKAWAY_FROM_JOB`으로 `maro_sentinel.exe`를 spawn(`spawnWithBreakaway`). 이 골격 단계에서는 **spawn 성공 자체를 tier 1 성공으로 친다** — `CreateProcess`가 breakaway를 거부하면 실패로 돌아오므로 그것으로 충분한 신호로 본다. (원래 근거였던 "감시자가 `inJob` 정보를 기록 파일에 남기지 않는다"는 이제 사실이 아니다: Task 8이 `SentinelRecord::sentinelInJob`을 추가해 감시자가 자기 self-check 결과를 실제로 기록한다. 그래도 **플러그인은 그 값을 읽지 않는다** — 필드는 있지만 소비하지 않는 것이 이 조각의 의도적 축소다.) 이 축소가 놓치는 경우는 하나다: 중첩 job에서 breakaway가 직속 job에 대해서만 성공하면 `CreateProcess`는 성공하는데 감시자는 여전히 바깥 조상 job 안에 남는다. 그 경우를 알아내려면 기록 파일의 `sentinelInJob`을 읽어 tier 2(WMI)로 승격해야 하며, 그 승격 로직은 이 플랜의 범위 밖이다
 2. tier 1이 실패하면 `spawnViaWmi`
 3. 그마저 실패하면 spawn을 포기한다. 파이프 접속도 시도하지 않는다 — 플러그인은 감시자 없이 그대로 진행한다(기존 저널이 이미 항상 돌고 있다)
 

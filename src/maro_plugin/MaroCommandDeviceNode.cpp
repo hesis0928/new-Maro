@@ -19,6 +19,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 
 #include "MaroAxisNode.h"
+#include "CommandDeltaCheck.h"
 #include "MaroDiag.h"
 
 namespace maro {
@@ -98,6 +99,7 @@ std::atomic<std::uint64_t> MaroCommandDeviceNode::s_applied{0};
 std::atomic<std::uint64_t> MaroCommandDeviceNode::s_ticks{0};
 std::atomic<std::uint64_t> MaroCommandDeviceNode::s_dropped{0};
 std::atomic<std::uint64_t> MaroCommandDeviceNode::s_poolExhausted{0};
+std::atomic<std::uint64_t> MaroCommandDeviceNode::s_skippedUnchanged{0};
 std::atomic<int> MaroCommandDeviceNode::s_threadAliveCount{0};
 std::uint64_t MaroCommandDeviceNode::s_lastReportedDropped{0};
 std::uint64_t MaroCommandDeviceNode::s_lastReportedPoolExhausted{0};
@@ -233,6 +235,7 @@ void MaroCommandDeviceNode::resetStats() {
     s_ticks.store(0);
     s_dropped.store(0);
     s_poolExhausted.store(0);
+    s_skippedUnchanged.store(0);
     // compute()의 방울 경고 기준선도 함께 되돌린다 (M9): 안 그러면 재시작
     // 후 dropped(0) != lastReported(N)에서 unsigned 뺄셈이 언더플로우해
     // 터무니없는 개수를 찍는다.
@@ -242,6 +245,7 @@ void MaroCommandDeviceNode::resetStats() {
 
 std::uint64_t MaroCommandDeviceNode::appliedCommandCount() { return s_applied.load(); }
 std::uint64_t MaroCommandDeviceNode::threadTickCount() { return s_ticks.load(); }
+std::uint64_t MaroCommandDeviceNode::skippedUnchangedCount() { return s_skippedUnchanged.load(); }
 // 개수 > 0 이면 인스턴스 중 최소 하나는 스레드가 살아있다는 뜻이다 -- 여러
 // maroCommandDevice 인스턴스가 있어도 정확하다 (I5/M10).
 bool MaroCommandDeviceNode::isThreadAlive() { return s_threadAliveCount.load() > 0; }
@@ -271,6 +275,16 @@ void MaroCommandDeviceNode::applyToMatchingAxis(const std::string& jointName, do
             continue;
         }
 
+        // 값이 실제로 안 바뀌었으면 dirty 전파(및 그에 따른 재평가)를
+        // 아예 안 일으킨다 -- setDouble()은 이전 값과 같아도 무조건 dirty를
+        // 퍼뜨린다. 판단 자체는 Maya에 의존하지 않는 순수 함수다
+        // (CommandDeltaCheck.h) -- 여기서는 플러그를 읽고 그 결과로
+        // 쓸지 말지만 가른다.
+        const double current = axisFn.findPlug(MaroAxisNode::aRosCommand, false).asDouble();
+        if (shouldSkipUnchangedCommand(current, value)) {
+            s_skippedUnchanged.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
         // 런타임 데이터 흐름이므로 직접 쓴다. undo 스택에 남기지 않는다.
         axisFn.findPlug(MaroAxisNode::aRosCommand, false).setDouble(value);
         s_applied.fetch_add(1, std::memory_order_relaxed);
