@@ -54,4 +54,22 @@ TEST(Message, DecodeFailsCleanlyWhenTypeFieldHasWrongJsonType) {
     EXPECT_FALSE(maro::ipc::decodeMessage(R"({"type":123,"payload":""})", decoded));
 }
 
+// [최종 리뷰 3k] Message.h가 약속하는 것은 "false면 out은 건드리지 않는다"이지
+// "false면 out의 일부만 건드린다"가 아니다. type은 알아볼 수 있는데 payload가
+// 엉뚱한 JSON 타입인 입력이 정확히 그 경계를 찌른다: type을 먼저 대입한 뒤
+// payload를 꺼내다 type_error.302가 날아가면, 콜러의 out은 실패했는데도
+// 새 type을 갖게 된다. 감시자의 루프(main.cpp)는 같은 Message 객체를 재사용해
+// 반복 수신하므로, 그 오염이 다음 판정까지 따라간다.
+TEST(Message, DecodeLeavesOutUntouchedWhenPayloadFieldHasWrongJsonType) {
+    maro::ipc::Message decoded;
+    decoded.type = maro::ipc::MessageType::SessionEndClean;
+    decoded.payload = "value from a previous message";
+
+    EXPECT_FALSE(maro::ipc::decodeMessage(R"({"type":"hello","payload":123})", decoded));
+    EXPECT_EQ(decoded.type, maro::ipc::MessageType::SessionEndClean)
+        << "a failed decode overwrote the caller's type field";
+    EXPECT_EQ(decoded.payload, "value from a previous message")
+        << "a failed decode overwrote the caller's payload field";
+}
+
 }  // namespace

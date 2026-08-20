@@ -45,7 +45,16 @@ std::filesystem::path sentinelExeDirectory() {
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCSTR>(&sentinelExeDirectory), &thisModule);
     if (thisModule == nullptr) return {};
-    if (::GetModuleFileNameA(thisModule, modulePath, MAX_PATH) == 0) return {};
+    // [최종 리뷰 3e] GetModuleFileNameA의 실패는 두 가지다. 0은 명백한
+    // 실패지만, **버퍼가 모자라면 0이 아니라 nSize를 그대로 돌려준다** --
+    // 경로를 MAX_PATH에 맞춰 자르고 (XP 이후로는) 널 종결까지 해서. 즉
+    // 반환값이 정확히 MAX_PATH면 그것은 "딱 맞았다"가 아니라 거의 확실히
+    // "잘렸다"이고, 그 잘린 경로의 parent_path()는 존재하지 않거나 --
+    // 더 나쁘게는 존재하는 *엉뚱한* -- 디렉터리를 가리킨다. 거기서
+    // maro_sentinel.exe를 찾아 띄우는 것은 spawnSentinel()의 빈 경로 주석이
+    // 막으려는 것과 같은 종류의 사고다. 실패로 취급한다.
+    const DWORD moduleNameLength = ::GetModuleFileNameA(thisModule, modulePath, MAX_PATH);
+    if (moduleNameLength == 0 || moduleNameLength >= MAX_PATH) return {};
     return std::filesystem::path(modulePath).parent_path();
 }
 

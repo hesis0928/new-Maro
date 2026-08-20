@@ -3,10 +3,19 @@
 // test_job_escape.cpp가 이것을 서브프로세스로 띄워 종료 코드를 읽는다 --
 // 위험한 job 조작을 gtest 프로세스 자신이 아니라 여기에 격리한다.
 //
-// 종료 코드: 0 = 예상대로 거부됨(탈출 실패), 1 = 예상과 다르게 성공함
-// (job이 breakaway를 막았어야 하는데 자식이 spawn됨), 2 = 설정 자체가 실패
-// (job 생성/할당 실패 -- 이 머신의 권한 문제일 수 있어 테스트가 이 경우를
-// 스킵으로 처리한다), 3 = --child로 재실행된 손자가 즉시 빠져나감.
+// 종료 코드: 0 = 예상대로, **job 정책 때문에** 거부됨(탈출 실패), 1 = 예상과
+// 다르게 성공함 (job이 breakaway를 막았어야 하는데 자식이 spawn됨), 2 = 설정
+// 자체가 실패 (job 생성/할당 실패 -- 이 머신의 권한 문제일 수 있어 테스트가
+// 이 경우를 스킵으로 처리한다), 3 = --child로 재실행된 손자가 즉시 빠져나감,
+// 4 = spawn이 실패하긴 했는데 **job 정책과 무관한 이유**로 실패했다.
+//
+// [최종 리뷰 3f] 4번이 새로 생긴 이유: 예전에는 spawnWithBreakaway가
+// nullopt를 주면 무조건 0("보안 장치가 제대로 동작했다")을 돌려줬다. 그런데
+// nullopt는 CreateProcess가 어떤 이유로 실패하든 나온다 -- 실행 파일 경로가
+// 틀렸거나(ERROR_FILE_NOT_FOUND), 메모리가 모자라거나. 그러면 "테스트하려던
+// 보안 메커니즘이 동작했다"와 "엉뚱한 데서 사고가 났다"가 같은 통과로
+// 뭉개진다. 이제 GetLastError를 보고 job 정책 거부(ERROR_ACCESS_DENIED)일
+// 때만 0을 돌려준다.
 #include <windows.h>
 
 #include <cstdio>
@@ -76,6 +85,13 @@ int main(int argc, char** argv) {
     // 자기 자신을 --child로 다시 실행해 손자로 삼는다 -- 존재하는 실행
     // 파일이면 뭐든 되므로 새 바이너리를 안 만들어도 된다.
     const auto childInfo = maro::ipc::spawnWithBreakaway(selfPath, "--child");
+    // 이 줄은 반드시 위 호출 **바로 다음**이어야 한다. spawnWithBreakaway가
+    // nullopt를 돌려주는 경로는 CreateProcessA 실패 하나뿐이고(JobEscape.cpp),
+    // 그 실패가 세운 스레드-로컬 last-error를 여기서 읽는다. 사이에 Win32
+    // 호출을 하나라도 끼우면(예: 원래 여기 있던 CloseHandle(job)) 그 호출이
+    // 값을 덮어써서 아래 판정이 무의미해진다 -- 그래서 CloseHandle을 이
+    // 캡처 뒤로 옮겼다.
+    const DWORD spawnError = ::GetLastError();
 
     ::CloseHandle(job);
 
@@ -89,8 +105,23 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "helper: spawnWithBreakaway UNEXPECTEDLY SUCCEEDED, exiting 1\n");
         return 1;
     }
+    // spawn이 실패했다. 그 실패가 이 테스트가 확인하려는 것 -- job 정책에
+    // 의한 거부 -- 인지를 last-error로 가른다. job이 CREATE_BREAKAWAY_FROM_JOB을
+    // 허용하지 않을 때 CreateProcess가 세우는 값은 ERROR_ACCESS_DENIED다.
+    if (spawnError != ERROR_ACCESS_DENIED) {
+        std::fprintf(stderr,
+                     "helper: spawnWithBreakaway failed for an unexpected reason "
+                     "(GetLastError=%lu, not ERROR_ACCESS_DENIED) -- this says nothing "
+                     "about job breakaway policy, exiting 4\n",
+                     spawnError);
+        return 4;
+    }
+
     // 여기까지 왔다는 것 자체가 증거다: 이 프로세스는 CloseHandle(job)에서
     // 죽지 않고 살아남아, 실제 거부를 직접 관측한 뒤 0을 돌려준다.
-    std::fprintf(stderr, "helper: spawnWithBreakaway refused as expected, exiting 0\n");
+    std::fprintf(stderr,
+                 "helper: spawnWithBreakaway refused by job policy as expected "
+                 "(GetLastError=%lu), exiting 0\n",
+                 spawnError);
     return 0;
 }

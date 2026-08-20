@@ -185,6 +185,16 @@ def orchestrate():
     childPid = session_pid("clean", out1)
     sentinelPid, record = settled_record("clean", bookDir, childPid)
 
+    # [최종 리뷰 3j] 이 기록이 정말 *이* 세션의 것인지는 지금까지 파일 이름
+    # 규칙(maro_sentinel.<pid>.json)으로만 암묵적으로 보장됐다. 파일 안의
+    # ownerMayaPid를 실제 자식 PID와 맞춰 보면, 플러그인이 감시자에게 넘긴
+    # 소유자 PID와 감시자가 기록에 남긴 값이 같은 것이라는 사실까지
+    # 명시적으로 고정된다 -- 이름은 맞는데 내용이 딴 세션인 기록을 잡는다.
+    assert record["ownerMayaPid"] == childPid, (
+        f"the clean session's record claims owner pid {record['ownerMayaPid']} but the "
+        f"mayapy child that spawned it was {childPid} -- got {record}"
+    )
+
     # 정상 종료의 증거는 "false가 아니다"가 아니라 "필드가 아예 없다"이다.
     # 감시자는 정상 종료 신호를 받으면 판정을 남길 자격이 생기기 전에
     # 종료하므로(SentinelRecord.h), true도 false도 쓰여선 안 된다.
@@ -203,6 +213,12 @@ def orchestrate():
 
     crashChildPid = session_pid("crash", out2)
     crashSentinelPid, crashRecord = settled_record("crash", bookDir, crashChildPid)
+
+    # 정상 세션과 같은 교차 확인(위 [최종 리뷰 3j] 주석 참고).
+    assert crashRecord["ownerMayaPid"] == crashChildPid, (
+        f"the crash session's record claims owner pid {crashRecord['ownerMayaPid']} but "
+        f"the mayapy child that spawned it was {crashChildPid} -- got {crashRecord}"
+    )
 
     assert crashRecord.get("lastSessionEndedCleanly") is False, (
         f"a session that died without SESSION_END_CLEAN must be recorded as "
