@@ -23,6 +23,16 @@ struct AxisSample {
     SceneUnit unit;
 };
 
+// 메인 스레드 -> 백그라운드(발행 방향). AxisSample과 같은 이유로 좌표
+// 변환 전(Maya 좌표계 그대로) 값을 나른다 -- 변환은 drainAndPublish()가
+// 한다. points는 이미 레이캐스팅이 끝난 충돌 지점들(월드 공간, Maya
+// 좌표계)이다.
+struct LidarSample {
+    std::string frameId;
+    SceneUnit unit;
+    std::vector<Vec3> points;
+};
+
 // 상한이 있는 큐. 넘치면 오래된 것부터 버린다.
 // 실시간 제어에서 의미 있는 건 최신 값이고, 상한이 없으면 ROS 2가 Maya보다
 // 느릴 때 메모리가 고갈된다.

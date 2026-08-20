@@ -198,6 +198,23 @@ if(MARO_BUILD_PLUGIN)
         TIMEOUT 240
         RUN_SERIAL TRUE)
 
+    # lidar_publish도 bridge_pump와 같은 이유로 이 그룹에 못 들어간다:
+    # maroStartBridge()로 실제 rclcpp 컨텍스트(DDS 도메인)를 띄우므로
+    # publish/contract/bridge_pump와 동시에 돌면 서로 간섭한다. 브리프는 위
+    # foreach 목록("플러그인만 있으면 되는 테스트")에 넣으라고 했지만 그
+    # 목록에는 RUN_SERIAL이 없다 -- 그 그룹의 전제를 깨는 대신 bridge_pump와
+    # 같은 모양으로 따로 등록한다.
+    add_test(NAME maya_lidar_publish
+             COMMAND "${MAYAPY}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_lidar_publish.py")
+    set_tests_properties(maya_lidar_publish PROPERTIES
+        ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_lidar_publish"
+        FIXTURES_REQUIRED MaroDiagBookRoot
+        TIMEOUT 240
+        RUN_SERIAL TRUE)
+
     # ROS 2 상대역이 필요한 테스트는 피어 경로도 받는다.
     foreach(maya_test publish contract)
         add_test(NAME maya_${maya_test}

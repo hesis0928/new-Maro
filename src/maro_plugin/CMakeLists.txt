@@ -51,6 +51,20 @@ build_plugin()
 # keyword(PRIVATE/PUBLIC) 시그니처를 섞어 쓰는 것을 금지하므로, 여기서도
 # PRIVATE 없이 plain 형태로 이어 붙인다.
 target_link_libraries(${PROJECT_NAME} maro_transform)
+# maro_lidar를 여기 링크하면 embree4.dll이 *Maya 프로세스 안으로* 끌려
+# 들어온다. 그래서 이 라이브러리는 반드시 TBB 없이(EMBREE_TASKING_SYSTEM=
+# INTERNAL) 빌드된 것이어야 한다 -- vcpkg 기본값인 `tasking-tbb` 피처로
+# 빌드하면 embree4.dll이 tbb12.dll을 임포트하는데, Maya 2026은 자기
+# tbb12.dll을 시작 시점에 이미 로드해 두고 그것이 embree가 요구하는
+# `tbb::detail::r1::get_thread_reference_vertex`를 export하지 않는다.
+# 로더는 같은 베이스 이름의 모듈이 이미 로드돼 있으면 그것을 재사용하므로
+# (실측: vcpkg tbb12.dll을 절대 경로로 먼저 LoadLibrary해도 Maya 것이
+# 그대로 남는다) PATH 순서나 옆에 복사하기로는 절대 못 이긴다 --
+# loadPlugin이 "지정된 프로시저를 찾을 수 없습니다"(ERROR_PROC_NOT_FOUND)로
+# 실패한다. 피처 목록은 vcpkg.json에 고정해 뒀다. 이 프로젝트는
+# rtcIntersect1(단일 레이)만 쓰므로 내부 태스킹으로 잃는 것은 BVH 빌드
+# 병렬성뿐이다.
+target_link_libraries(${PROJECT_NAME} maro_lidar)
 target_link_libraries(${PROJECT_NAME} maro_diag)
 
 foreach(ros_lib rclcpp rcl rcutils rcpputils rmw rosidl_runtime_c

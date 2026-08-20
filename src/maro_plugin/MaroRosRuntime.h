@@ -34,6 +34,8 @@ public:
 
     BoundedQueue<AxisSample>& publishQueue() { return m_publishQueue; }
 
+    BoundedQueue<LidarSample>& lidarQueue() { return m_lidarQueue; }
+
     // 펌프가 넣은 샘플이 백그라운드까지 실제로 건너왔는지 보기 위한 계수기.
     // 발행이 붙기 전에도 스레드 경계를 넘는 흐름을 관측할 수 있다.
     std::uint64_t drainedSampleCount() const { return m_drainedSamples.load(); }
@@ -60,6 +62,7 @@ private:
     std::atomic<std::uint64_t> m_publishErrors{0};
 
     BoundedQueue<AxisSample> m_publishQueue;
+    BoundedQueue<LidarSample> m_lidarQueue;
 };
 
 }  // namespace maro

@@ -1,23 +1,33 @@
 #include "MaroPump.h"
 
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 #include <maya/MAngle.h>
 #include <maya/MDagPath.h>
 #include <maya/MDistance.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MFnMesh.h>
 #include <maya/MGlobal.h>
+#include <maya/MIntArray.h>
 #include <maya/MItDependencyNodes.h>
 #include <maya/MMatrix.h>
 #include <maya/MPlug.h>
 #include <maya/MPlugArray.h>
+#include <maya/MPoint.h>
+#include <maya/MPointArray.h>
 #include <maya/MQuaternion.h>
 #include <maya/MTimerMessage.h>
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
+#include "maro_lidar/RayPattern.h"
+#include "maro_lidar/ScanEngine.h"
+
 #include "MaroAxisNode.h"
 #include "MaroDiag.h"
+#include "MaroLidarNode.h"
 #include "MaroRosRuntime.h"
 
 namespace maro {
@@ -97,6 +107,9 @@ void MaroPump::onTimer(float, float, void*) {
     try {
         if (s_runtime == nullptr) return;
         collectSamples(*s_runtime);
+        // 같은 try 안이다 -- LiDAR 캡처가 던져도 Maya 콜백 경계를 넘지 않고
+        // 아래 catch가 잡는다.
+        collectLidarScans(*s_runtime);
     } catch (const std::exception& e) {
         maro::BoadMaro::error("MaroPump.onTimer.Exception",
                               MString("Maro: pump tick failed: ") + e.what(),
@@ -185,6 +198,154 @@ void MaroPump::collectSamples(MaroRosRuntime& runtime) {
 
         runtime.publishQueue().push(std::move(sample));
         s_collected.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+namespace {
+
+// meshNode는 targetMeshes에 연결된 노드다. 사용자는 보통 트랜스폼의
+// .message를 잇는다(test_lidar_node.py가 이미 그 관례로 바인딩한다) --
+// MFnMesh는 트랜스폼을 받지 않으므로 여기서 셰이프까지 내려간다.
+//
+// MObject가 아니라 MDagPath로 함수 세트를 만드는 것이 중요하다:
+// MSpace::kWorld는 경로 컨텍스트가 있어야 조상 체인을 포함한 진짜 월드
+// 좌표를 준다 -- collectSamples()가 MDagPath::getAPathTo를 쓰는 것과 같은
+// 이유이고, 이 프로젝트가 이미 세 번 걸린 함정이다.
+bool extractMeshBuffers(const MObject& meshNode, std::vector<float>& vertices,
+                        std::vector<std::uint32_t>& indices) {
+    MDagPath meshPath;
+    if (MDagPath::getAPathTo(meshNode, meshPath) != MS::kSuccess) return false;
+    if (!meshPath.hasFn(MFn::kMesh)) {
+        if (meshPath.extendToShape() != MS::kSuccess) return false;
+        if (!meshPath.hasFn(MFn::kMesh)) return false;
+    }
+
+    MStatus status;
+    MFnMesh meshFn(meshPath, &status);
+    if (!status) return false;
+
+    MPointArray points;
+    if (meshFn.getPoints(points, MSpace::kWorld) != MS::kSuccess) return false;
+    vertices.clear();
+    vertices.reserve(static_cast<std::size_t>(points.length()) * 3);
+    for (unsigned int i = 0; i < points.length(); ++i) {
+        vertices.push_back(static_cast<float>(points[i].x));
+        vertices.push_back(static_cast<float>(points[i].y));
+        vertices.push_back(static_cast<float>(points[i].z));
+    }
+
+    MIntArray triangleCounts, triangleVertices;
+    if (meshFn.getTriangles(triangleCounts, triangleVertices) != MS::kSuccess) return false;
+    indices.clear();
+    indices.reserve(static_cast<std::size_t>(triangleVertices.length()));
+    for (unsigned int i = 0; i < triangleVertices.length(); ++i) {
+        indices.push_back(static_cast<std::uint32_t>(triangleVertices[i]));
+    }
+    return true;
+}
+
+// targetMeshes(메시지 배열)에서 처음으로 연결된 소스 노드를 찾는다.
+// elementByLogicalIndex(0)가 아니라 evaluateNumElements()+
+// elementByPhysicalIndex()를 쓴다: 논리 인덱스 접근은 없는 원소를 요구하면
+// 데이터블록에 빈 원소를 만들어 넣는다(MPlug.h의 설명) -- 매 틱 30Hz로
+// 도는 캡처 경로가 씬을 조용히 바꾸면 안 된다. 물리 인덱스는 이미 있는
+// 원소만 본다. (evaluateNumElements()는 compute() 안에서는 금지지만 여기는
+// 메인 스레드 타이머 콜백이라 허용된다.)
+bool firstConnectedMesh(MPlug meshesPlug, MObject& meshNode) {
+    const unsigned int count = meshesPlug.evaluateNumElements();
+    for (unsigned int i = 0; i < count; ++i) {
+        MPlugArray sources;
+        meshesPlug.elementByPhysicalIndex(i).connectedTo(sources, true, false);
+        if (sources.length() > 0) {
+            meshNode = sources[0].node();
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+void MaroPump::collectLidarScans(MaroRosRuntime& runtime) {
+    const SceneUnit unit = currentSceneUnit();
+
+    for (MItDependencyNodes it(MFn::kPluginLocatorNode); !it.isDone(); it.next()) {
+        MFnDependencyNode lidarFn(it.thisNode());
+        if (lidarFn.typeId() != MaroLidarNode::id) continue;
+        if (!lidarFn.findPlug(MaroLidarNode::aEnabled, false).asBool()) continue;
+
+        MObject meshNode;
+        if (!firstConnectedMesh(lidarFn.findPlug(MaroLidarNode::aTargetMeshes, false),
+                                meshNode)) {
+            continue;
+        }
+
+        std::vector<float> vertices;
+        std::vector<std::uint32_t> indices;
+        if (!extractMeshBuffers(meshNode, vertices, indices)) continue;
+
+        // 워킹 스켈레톤은 더티 체크를 하지 않는다 -- 매 스캔마다 새로 만든다
+        // (§범위 밖). 지역 변수라 이 반복이 끝날 때 소멸자가 Embree
+        // 씬/디바이스를 반납한다.
+        maro::lidar::ScanEngine engine;
+        if (!engine.setMesh(vertices, indices)) continue;
+
+        const int verticalSamples =
+            lidarFn.findPlug(MaroLidarNode::aVerticalSamples, false).asInt();
+        const double verticalMinAngle =
+            lidarFn.findPlug(MaroLidarNode::aVerticalMinAngle, false).asMAngle().asRadians();
+        const double verticalMaxAngle =
+            lidarFn.findPlug(MaroLidarNode::aVerticalMaxAngle, false).asMAngle().asRadians();
+        const int horizontalSamples =
+            lidarFn.findPlug(MaroLidarNode::aHorizontalSamples, false).asInt();
+        const double horizontalMinAngle =
+            lidarFn.findPlug(MaroLidarNode::aHorizontalMinAngle, false).asMAngle().asRadians();
+        const double horizontalMaxAngle =
+            lidarFn.findPlug(MaroLidarNode::aHorizontalMaxAngle, false).asMAngle().asRadians();
+        const double rangeMin = lidarFn.findPlug(MaroLidarNode::aRangeMin, false).asDouble();
+        const double rangeMax = lidarFn.findPlug(MaroLidarNode::aRangeMax, false).asDouble();
+        const MString frameId = lidarFn.findPlug(MaroLidarNode::aFrameId, false).asString();
+
+        const auto localDirections = maro::lidar::computeRayDirections(
+            verticalSamples, verticalMinAngle, verticalMaxAngle, horizontalSamples,
+            horizontalMinAngle, horizontalMaxAngle);
+
+        MDagPath lidarPath;
+        if (MDagPath::getAPathTo(it.thisNode(), lidarPath) != MS::kSuccess) continue;
+        const MMatrix worldMatrix = lidarPath.inclusiveMatrix();
+        const MVector worldOrigin(MPoint(0, 0, 0) * worldMatrix);
+
+        const Vec3 origin{worldOrigin.x, worldOrigin.y, worldOrigin.z};
+        // 이 값들은 백그라운드 스레드를 거쳐 그대로 ROS 2 와이어로 나간다.
+        // collectSamples()가 위치/회전에 거는 것과 같은 가드다.
+        if (!isFinite(origin)) continue;
+
+        LidarSample sample;
+        sample.frameId = frameId.asChar();
+        sample.unit = unit;
+
+        // 방향 벡터에서 평행이동 성분을 제거하기 위해 함께 뺄 기준점 --
+        // 점이 아니라 벡터를 옮기는 표준 트릭(영벡터를 같은 행렬로 옮겨
+        // 빼면 평행이동이 상쇄된다). MVector와 MMatrix의 곱이 평행이동을
+        // 포함하든 안 하든 결과가 같으므로 그 관례에 의존하지 않는다.
+        // 레이마다 다시 계산할 이유가 없어 루프 밖에서 한 번만 구한다.
+        const MVector directionBias = MVector(0, 0, 0) * worldMatrix;
+
+        for (const Vec3& localDir : localDirections) {
+            const MVector localVec(localDir.x, localDir.y, localDir.z);
+            // normal()은 행렬의 스케일을 걷어내 rangeMin/rangeMax가 실제
+            // 거리 단위로 남게 한다 -- ScanEngine이 origin + direction * t로
+            // 충돌점을 만들기 때문에 방향은 반드시 단위 벡터여야 한다.
+            const MVector worldDir = (localVec * worldMatrix - directionBias).normal();
+
+            const maro::lidar::RayHit hit = engine.castRay(
+                origin, Vec3{worldDir.x, worldDir.y, worldDir.z}, rangeMin, rangeMax);
+            if (hit.hit && isFinite(hit.position)) sample.points.push_back(hit.position);
+        }
+
+        if (!sample.points.empty()) {
+            runtime.lidarQueue().push(std::move(sample));
+        }
     }
 }
 

@@ -29,6 +29,7 @@ public:
 private:
     static void onTimer(float elapsed, float last, void* clientData);
     static void collectSamples(MaroRosRuntime& runtime);
+    static void collectLidarScans(MaroRosRuntime& runtime);
 
     static MCallbackId s_timerId;
     static MaroRosRuntime* s_runtime;
