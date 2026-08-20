@@ -21,6 +21,7 @@ gtest_discover_tests(maro_transform_tests)
 
 add_executable(maro_lidar_tests
     lidar/test_ray_pattern.cpp
+    lidar/test_scan_engine.cpp
 )
 
 target_link_libraries(maro_lidar_tests PRIVATE
