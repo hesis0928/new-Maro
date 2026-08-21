@@ -130,8 +130,9 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 # 빌드하면 C++ 쪽에 변경이 없어 relink가 안 일어나고, 그러면 이 COMMAND도
 # 조용히 스킵되어 스테일 모듈이 그대로 배포된 채 테스트가 통과해 버린다.
 # 대신 OUTPUT 기반 add_custom_command로 python/maroDiagPanel.py 자체를
-# 빌드 입력으로 만든다: DEPENDS가 소스 파일을 직접 가리키므로 Ninja가 그
-# mtime을 보고 재실행 여부를 판단하고, .py만 바뀌어도 다시 복사된다.
+# 빌드 입력으로 만든다: DEPENDS가 소스 파일을 직접 가리키므로 빌드 도구(Ninja든
+# MSBuild든)가 그 mtime을 보고 재실행 여부를 판단하고, .py만 바뀌어도 다시
+# 복사된다 -- 이 메커니즘 자체는 제너레이터와 무관하다.
 # OUTPUT 자리에는 $<TARGET_FILE_DIR:...>가 더 깔끔한 표기지만, 여기서는
 # 생성 시점에 "No target maro"로 실패한다 -- 컨피그 시점에는 타깃이 분명히
 # 존재하는데도 그렇다. build_plugin()(devkit의 pluginEntry.cmake)이 function()
