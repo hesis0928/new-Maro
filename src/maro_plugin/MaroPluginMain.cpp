@@ -43,6 +43,39 @@ struct MainThreadQueueGuard {
 struct SentinelGuard {
     ~SentinelGuard() { maro::MaroSentinelClient::shutdown(); }
 };
+
+// [최종 리뷰 I-2] initializePlugin 전용 되감기 가드. 위 세 가드가
+// uninitializePlugin에 대해 하는 일을, 로드가 실패했을 때 initializePlugin에
+// 대해 한다.
+//
+// 핵심 사실: Maya는 initializePlugin이 실패 상태를 반환하면
+// uninitializePlugin을 **부르지 않는다**. 그런데 이 함수는 저널을 열고
+// 감시자에 접속한 뒤에야 스물몇 개의 registerNode/registerCommand를 하고,
+// 그 하나하나가 실패 시 그냥 return status로 빠져나간다. 가드가 없으면 그
+// 경로들에서 파이프가 열린 채 남고 SESSION_END_CLEAN도 안 나가므로, 감시자는
+// 나중에 파이프가 끊기는 것만 보고 이 세션을 크래시로 기록한다 -- 로드에
+// 실패했을 뿐인 세션이 크래시로 오판되는 것이고, 이는 감시자(Layer C-1)가
+// 막으려고 존재하는 바로 그 오진이다.
+//
+// 소멸자가 건드리는 것들은 이 가드가 선언되는 지점에서 이미 무조건
+// 실행됐거나(openJournal, connectOrSpawn), 실행된 적이 없어도 부르는 것이
+// 안전하다(MaroMainThreadQueue::uninstall()은 s_timerId == 0이면 무동작,
+// notifyCleanExit()는 미접속이면 즉시 반환, shutdown()은 무조건 호출해도
+// 안전하다). 정리 순서는 uninitializePlugin과 같게 맞춘다
+// (감시자 -> 큐 -> 저널, 저널 닫기가 언제나 마지막).
+//
+// committed는 성공 경로에서만, 마지막 return MS::kSuccess 직전에 세운다 --
+// 그 지점보다 앞의 모든 return은 정의상 실패 경로다.
+struct InitFailureGuard {
+    bool committed = false;
+    ~InitFailureGuard() {
+        if (committed) return;
+        maro::MaroSentinelClient::notifyCleanExit();
+        maro::MaroSentinelClient::shutdown();
+        maro::MaroMainThreadQueue::uninstall();
+        maro::BoadMaro::closeJournal();
+    }
+};
 }  // namespace
 
 MStatus initializePlugin(MObject obj) {
@@ -60,6 +93,11 @@ MStatus initializePlugin(MObject obj) {
     // 감시자 spawn/접속은 실패해도 로드를 막지 않는다 -- 함수 내부가
     // 스스로 그 규율을 지킨다(MaroSentinelClient.cpp).
     maro::MaroSentinelClient::connectOrSpawn();
+
+    // 여기서부터 아래의 모든 return은 실패 경로다 -- Maya가 그 경우
+    // uninitializePlugin을 부르지 않으므로, 저널/감시자/큐 정리를 이 가드가
+    // 대신한다. 성공 경로에서는 맨 아래에서 committed를 세워 무동작이 된다.
+    InitFailureGuard rollbackOnFailure;
 
     MStatus queueStatus = maro::MaroMainThreadQueue::install();
     if (!queueStatus) {
@@ -307,6 +345,10 @@ MStatus initializePlugin(MObject obj) {
     }
 
     maro::BoadMaro::info("Maro: plugin loaded.");
+    // 로드가 끝까지 성공한 유일한 지점이다. 여기서 가드를 해제해야 정상
+    // 로드된 세션의 저널/감시자/큐가 살아남는다 -- 이 줄이 없으면 모든
+    // 플러그인 로드가 곧바로 스스로를 정리해 버린다.
+    rollbackOnFailure.committed = true;
     return MS::kSuccess;
 }
 
