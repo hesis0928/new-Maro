@@ -75,7 +75,7 @@ print("second invocation OK (re-entrancy only, not the restore branch)")
 import maroMainWindow  # noqa: E402
 
 # C++와 공유하는 이름 계약. MaroPluginMain.cpp의 uninitializePlugin이 언로드할
-# 때 이 두 문자열을 MEL로 다시 부른다 -- 어긋나면 창을 띄운 채 언로드했을 때
+# 때 이 세 문자열을 MEL로 다시 부른다 -- 어긋나면 창을 띄운 채 언로드했을 때
 # 정리가 조용히 아무 것도 안 하게 되고, 그 결함은 사람이 대화형 Maya에서
 # 크래시로 만나기 전에는 드러나지 않는다. 여기서 값으로 고정한다.
 assert maroMainWindow.CONTROL_NAME == "maroMainWindowControl", (
@@ -91,11 +91,11 @@ assert maroMainWindow.VIEWPORT_NAME_ROS == "maroMainWindowViewportRos", (
     f"got {maroMainWindow.VIEWPORT_NAME_ROS!r}"
 )
 
-# [최종 리뷰 I7] 위 두 assert는 Python 쪽 값이 우리가 기대하는 리터럴과
+# [최종 리뷰 I7] 위 세 assert는 Python 쪽 값이 우리가 기대하는 리터럴과
 # 같은지만 본다 -- MaroPluginMain.cpp의 MEL 정리 문자열이 나중에 바뀌어도
 # 이 테스트는 계속 통과한다(Python 쪽만 보니까). 그러면 어긋남은 사람이
 # 대화형 Maya에서 언로드 크래시로 만나기 전에는 드러나지 않는다. C++ 소스
-# 자체를 읽어서 두 리터럴이 실제로 거기 있는지 대조해 계약을 양쪽 다
+# 자체를 읽어서 세 리터럴이 실제로 거기 있는지 대조해 계약을 양쪽 다
 # 고정한다(setStyleSheet 점검이 이미 쓰는 것과 같은 소스-읽기 기법).
 _thisDir = os.path.dirname(os.path.abspath(__file__))
 _pluginMainCpp = os.path.join(_thisDir, "..", "..", "src", "maro_plugin", "MaroPluginMain.cpp")

@@ -1,10 +1,14 @@
-"""Maro 메인 창 — 네이티브 컨테이너 안에 modelPanel + PySide6 위젯 (Phase 0-1 스파이크).
+"""Maro 메인 창 — 네이티브 컨테이너 안에 modelPanel 두 개 + PySide6 위젯.
 
-이 모듈이 증명하려는 것 하나: **컨테이너를 끝까지 네이티브로 유지한 채**
-(workspaceControl + formLayout, maroDiagPanel과 같은 패턴) 그 안에
+Phase 0-1 스파이크(설계 스펙 §4.2)가 증명한 것: **컨테이너를 끝까지 네이티브로
+유지한 채**(workspaceControl + formLayout, maroDiagPanel과 같은 패턴) 그 안에
 `cmds.modelPanel()`로 진짜 3D 뷰포트를 직접 만들고, 커스텀 PySide6 위젯만
 `MQtUtil.addWidgetToMayaLayout()`로 같은 폼레이아웃에 끼워 넣어도, 둘이
-공존하고 플러그인을 언로드해도 Maya가 죽지 않는다는 것(설계 스펙 §4.2).
+공존하고 플러그인을 언로드해도 Maya가 죽지 않는다는 것. Phase 2(현재)는 그
+결론 위에 뷰포트를 하나 더 놓는다 — `paneLayout(configuration="vertical2")`
+안에 좌("Maya")/우("ROS") 뷰포트를 각각 라벨과 함께 배치한다(설계 스펙
+`2026-08-25-maro-main-ui-phase2-dual-viewport-design.md`). 우측은 아직 좌표
+변환 없이 좌측과 같은 씬을 별개 카메라로 보여줄 뿐이다.
 
 인터넷에 흔한 반대 방향(모델패널을 만든 뒤 Maya가 만든 부모에서 뜯어내
 손으로 만든 QMainWindow에 옮겨 붙이기)은 Autodesk가 안정성을 보장하지 않는
@@ -128,9 +132,12 @@ def buildUI():
 
     form = cmds.formLayout()
 
+    # 반환값(패널의 control 이름)은 지금은 안 쓴다 -- Phase 3가 ROS 쪽
+    # 뷰포트를 좌표 변환 대상으로 지목할 때가 돼야 필요해진다. 그때 다시
+    # 받아 쓴다(YAGNI -- 지금 안 쓰는 변수를 미리 만들어두지 않는다).
     pane = cmds.paneLayout(configuration="vertical2", parent=form)
-    mayaPanelControl = _buildLabeledViewport(pane, "Maya", VIEWPORT_NAME_MAYA)
-    rosPanelControl = _buildLabeledViewport(pane, "ROS", VIEWPORT_NAME_ROS)
+    _buildLabeledViewport(pane, "Maya", VIEWPORT_NAME_MAYA)
+    _buildLabeledViewport(pane, "ROS", VIEWPORT_NAME_ROS)
 
     # --- 여기부터가 이 스파이크의 핵심 두 줄 -----------------------------
     # MQtUtil의 파이썬 바인딩은 QWidget*를 **정수 포인터**로 주고받는다.
