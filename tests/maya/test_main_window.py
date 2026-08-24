@@ -15,7 +15,7 @@ maroDiagPanel도 같은 이유로 docs/maro-panel-manual-checklist.md를 갖고 
     디렉터리를 찾아 sys.path에 넣고 모듈을 import하는 데까지 성공했다).
   - 그 import가 실제로 일어났다(sys.modules로 확인) -- CMake 스테이징이
     .py를 .mll 옆에 놓았고 runPluginPythonModule이 그것을 찾았다는 뜻.
-  - C++/Python이 공유하는 UI 이름 두 개가 실제로 같다.
+  - C++/Python이 공유하는 UI 이름 세 개가 실제로 같다.
   - 배치 모드에서 buildUI()를 부르면 프로세스가 죽는 대신 예외가 난다.
   - 새 모듈이 setStyleSheet()를 부르지 않는다(설계 스펙 §4.2의 규율).
   - 언로드하면 커맨드가 사라진다.
@@ -82,9 +82,13 @@ assert maroMainWindow.CONTROL_NAME == "maroMainWindowControl", (
     f"CONTROL_NAME must match the MEL cleanup in MaroPluginMain.cpp, "
     f"got {maroMainWindow.CONTROL_NAME!r}"
 )
-assert maroMainWindow.VIEWPORT_NAME == "maroMainWindowViewport", (
-    f"VIEWPORT_NAME must match the MEL cleanup in MaroPluginMain.cpp, "
-    f"got {maroMainWindow.VIEWPORT_NAME!r}"
+assert maroMainWindow.VIEWPORT_NAME_MAYA == "maroMainWindowViewportMaya", (
+    f"VIEWPORT_NAME_MAYA must match the MEL cleanup in MaroPluginMain.cpp, "
+    f"got {maroMainWindow.VIEWPORT_NAME_MAYA!r}"
+)
+assert maroMainWindow.VIEWPORT_NAME_ROS == "maroMainWindowViewportRos", (
+    f"VIEWPORT_NAME_ROS must match the MEL cleanup in MaroPluginMain.cpp, "
+    f"got {maroMainWindow.VIEWPORT_NAME_ROS!r}"
 )
 
 # [최종 리뷰 I7] 위 두 assert는 Python 쪽 값이 우리가 기대하는 리터럴과
@@ -101,11 +105,15 @@ assert maroMainWindow.CONTROL_NAME in _pluginMainSource, (
     f"MaroPluginMain.cpp no longer mentions {maroMainWindow.CONTROL_NAME!r} -- "
     "unload cleanup would silently no-op"
 )
-assert maroMainWindow.VIEWPORT_NAME in _pluginMainSource, (
-    f"MaroPluginMain.cpp no longer mentions {maroMainWindow.VIEWPORT_NAME!r} -- "
+assert maroMainWindow.VIEWPORT_NAME_MAYA in _pluginMainSource, (
+    f"MaroPluginMain.cpp no longer mentions {maroMainWindow.VIEWPORT_NAME_MAYA!r} -- "
     "unload cleanup would silently no-op"
 )
-print("C++/Python UI name contract OK (pinned on both sides)")
+assert maroMainWindow.VIEWPORT_NAME_ROS in _pluginMainSource, (
+    f"MaroPluginMain.cpp no longer mentions {maroMainWindow.VIEWPORT_NAME_ROS!r} -- "
+    "unload cleanup would silently no-op"
+)
+print("C++/Python UI name contract OK (pinned on both sides, 3 names)")
 
 # 배치 모드에서 buildUI()를 부르면 QWidget 생성으로 프로세스가 abort한다 --
 # 가드가 그것을 잡을 수 있는 예외로 바꾼다. 이 테스트가 통과한다는 것 자체가

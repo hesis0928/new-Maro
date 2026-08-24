@@ -30,12 +30,13 @@ import maya.OpenMayaUI as omui
 import shiboken6
 from PySide6 import QtWidgets
 
-# 이 두 이름은 C++와의 계약이다. MaroPluginMain.cpp의 uninitializePlugin이
+# 이 세 이름은 C++와의 계약이다. MaroPluginMain.cpp의 uninitializePlugin이
 # 언로드할 때 이 이름들을 MEL로 다시 부른다(창을 띄운 채 언로드하면 Maya가
 # 사라진 코드의 UI를 계속 붙들기 때문 -- maroDiagPanel과 같은 이유, 같은
 # 처리). 바꾸면 양쪽을 함께 고쳐야 한다.
 CONTROL_NAME = "maroMainWindowControl"
-VIEWPORT_NAME = "maroMainWindowViewport"
+VIEWPORT_NAME_MAYA = "maroMainWindowViewportMaya"
+VIEWPORT_NAME_ROS = "maroMainWindowViewportRos"
 
 # 끼워 넣은 PySide6 위젯을 컨트롤 이름별로 하나씩만 붙들어 둔다.
 #
@@ -74,17 +75,45 @@ def _hideViewportChrome(panel):
         cmds.frameLayout(bar, edit=True, collapse=True)
 
 
-def _deleteStalePanel():
+def _deleteStalePanel(panelName):
     """같은 이름의 modelPanel이 남아 있으면 지운다.
 
     modelPanel은 부모 레이아웃의 자식이면서 동시에 Maya의 전역 패널
     레지스트리에 등록되는 객체다 -- 부모가 사라져도 등록이 남아 있을 수
     있고, 그러면 다음 buildUI()의 생성이 이름 충돌로 실패한다.
     workspaceControl은 -uiScript로 재생성되므로(도킹/복원/플러그인 재로드)
-    buildUI()는 한 세션에 여러 번 불릴 수 있다.
+    buildUI()는 한 세션에 여러 번 불릴 수 있다. 뷰포트가 두 개(Phase 2)라
+    호출하는 쪽에서 이름을 넘긴다.
     """
-    if cmds.modelPanel(VIEWPORT_NAME, exists=True):
-        cmds.deleteUI(VIEWPORT_NAME, panel=True)
+    if cmds.modelPanel(panelName, exists=True):
+        cmds.deleteUI(panelName, panel=True)
+
+
+def _buildLabeledViewport(parent, label, panelName):
+    """`parent`(paneLayout의 한 칸) 안에 라벨 한 줄 + modelPanel 하나를 쌓는다.
+
+    Phase 0-1의 단일 뷰포트 조립을 두 번 반복하는 대신 함수로 뽑았다 --
+    Maya/ROS 두 뷰포트가 라벨 문구만 다르고 나머지 조립(스테일 패널 정리,
+    chrome 숨김, formLayout attach)은 완전히 같기 때문이다. 반환값은
+    formLayout attach에 쓸 수 있는 패널의 **컨트롤** 이름이다(패널 이름
+    자체가 아니다 -- Phase 0-1의 같은 주석 참고).
+    """
+    side = cmds.formLayout(parent=parent)
+    labelControl = cmds.text(label=label, parent=side)
+
+    _deleteStalePanel(panelName)
+    panel = cmds.modelPanel(panelName, parent=side)
+    _hideViewportChrome(panel)
+    panelControl = cmds.modelPanel(panel, query=True, control=True) or panel
+
+    cmds.formLayout(
+        side, edit=True,
+        attachForm=[
+            (labelControl, "top", 2), (labelControl, "left", 2), (labelControl, "right", 2),
+            (panelControl, "left", 0), (panelControl, "right", 0), (panelControl, "bottom", 0),
+        ],
+        attachControl=[(panelControl, "top", 2, labelControl)])
+    return panelControl
 
 
 def buildUI():
@@ -99,13 +128,9 @@ def buildUI():
 
     form = cmds.formLayout()
 
-    _deleteStalePanel()
-    panel = cmds.modelPanel(VIEWPORT_NAME, parent=form)
-    _hideViewportChrome(panel)
-    # 폼레이아웃에 붙일 때 쓰는 것은 패널 이름이 아니라 그 패널을 담고 있는
-    # 컨트롤이다(`modelPanel -q -control`). 패널 이름 자체는 레이아웃이
-    # 아니라 패널 레지스트리의 이름이라 attachForm이 받지 못한다.
-    panelControl = cmds.modelPanel(panel, query=True, control=True) or panel
+    pane = cmds.paneLayout(configuration="vertical2", parent=form)
+    mayaPanelControl = _buildLabeledViewport(pane, "Maya", VIEWPORT_NAME_MAYA)
+    rosPanelControl = _buildLabeledViewport(pane, "ROS", VIEWPORT_NAME_ROS)
 
     # --- 여기부터가 이 스파이크의 핵심 두 줄 -----------------------------
     # MQtUtil의 파이썬 바인딩은 QWidget*를 **정수 포인터**로 주고받는다.
@@ -152,16 +177,15 @@ def buildUI():
             form, edit=True,
             attachForm=[
                 (buttonName, "top", 4), (buttonName, "left", 4), (buttonName, "right", 4),
-                (panelControl, "left", 0), (panelControl, "right", 0),
-                (panelControl, "bottom", 0),
+                (pane, "left", 0), (pane, "right", 0), (pane, "bottom", 0),
             ],
-            attachControl=[(panelControl, "top", 4, buttonName)])
+            attachControl=[(pane, "top", 4, buttonName)])
     except RuntimeError as error:
         raise RuntimeError(
             "maroMainWindow: the native formLayout refused to lay out the "
-            "embedded widget ({!r}) next to the modelPanel control ({!r}): {} "
+            "embedded widget ({!r}) next to the dual-viewport pane ({!r}): {} "
             "-- see docs/maro-main-ui-manual-checklist.md".format(
-                buttonName, panelControl, error))
+                buttonName, pane, error))
     return form
 
 

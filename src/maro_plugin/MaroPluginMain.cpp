@@ -439,9 +439,9 @@ MStatus uninitializePlugin(MObject obj) {
         // 레이아웃의 자식이면서 동시에 Maya의 전역 패널 레지스트리에 등록된
         // 객체라, 컨트롤을 닫아도 등록이 남을 수 있다. 남으면 다음 로드에서
         // 같은 이름으로 다시 만들 때 충돌한다(python 쪽 _deleteStalePanel()이
-        // 같은 것을 반대편에서 막는다). 두 이름은 python/maroMainWindow.py의
-        // CONTROL_NAME/VIEWPORT_NAME과 같은 문자열이어야 하며,
-        // tests/maya/test_main_window.py가 그 계약을 값으로 고정한다.
+        // 같은 것을 반대편에서 막는다). 세 이름은 python/maroMainWindow.py의
+        // CONTROL_NAME/VIEWPORT_NAME_MAYA/VIEWPORT_NAME_ROS와 같은 문자열이어야
+        // 하며, tests/maya/test_main_window.py가 그 계약을 값으로 고정한다.
         // maroBuildMenu는 initializePlugin에서 maroMainWindow "다음"에
         // 등록되므로, 이 파일의 등록 역순 해제 규율에 따라 그 해제는
         // maroMainWindow 블록보다 "먼저" 온다(가장 나중에 등록된 것부터
@@ -454,8 +454,10 @@ MStatus uninitializePlugin(MObject obj) {
         MGlobal::executeCommand(
             "if (`workspaceControl -exists maroMainWindowControl`) "
             "workspaceControl -e -close maroMainWindowControl;"
-            "if (`modelPanel -exists maroMainWindowViewport`) "
-            "deleteUI -panel maroMainWindowViewport;");
+            "if (`modelPanel -exists maroMainWindowViewportMaya`) "
+            "deleteUI -panel maroMainWindowViewportMaya;"
+            "if (`modelPanel -exists maroMainWindowViewportRos`) "
+            "deleteUI -panel maroMainWindowViewportRos;");
         plugin.deregisterCommand("maroMainWindow");
 
         MGlobal::executeCommand(
