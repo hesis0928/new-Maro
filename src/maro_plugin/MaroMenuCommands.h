@@ -9,9 +9,11 @@ namespace maro {
 // 모양이며, 파이썬 모듈을 찾아 부르는 일은 셋 다 MaroPythonBridge.h의
 // runPluginPythonModule에 맡긴다.
 //
-// initializePlugin이 로드 끝에서 이 커맨드를 한 번 실행한다(MGlobal::
-// executeCommand("maroBuildMenu")) -- 그 호출의 실패는 플러그인 로드를
-// 막지 않는다: 메뉴는 UI 편의이지 핵심 기능이 아니다.
+// initializePlugin이 로드 끝에서 이 커맨드를 한 번 큐에 넣는다(MGlobal::
+// executeCommandOnIdle("maroBuildMenu") -- [최종 리뷰 I5] Maya UI가 아직
+// 없을 수 있는 시점(오토로드, 워크스페이스 복원)을 지나 유휴 시점에
+// 돌게 하기 위해서다, MaroPluginMain.cpp 참고) -- 그 호출의 실패는
+// 플러그인 로드를 막지 않는다: 메뉴는 UI 편의이지 핵심 기능이 아니다.
 //
 // 배치 모드(mayapy)에는 실제 메인 윈도우가 없어 "MayaWindow" 컨트롤 자체가
 // 존재하지 않는다. 실측(2026-08-24, Maya 2026): 그 상태에서도

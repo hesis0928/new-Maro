@@ -64,8 +64,12 @@ assert "maroBuildMenu" in registered, (
 )
 print("command registered OK")
 
-# initializePlugin이 로드 끝에서 이미 maroBuildMenu를 한 번 불렀다(비치명적
-# 호출) -- 여기서 다시 부르는 것은 재진입/멱등성 확인이 목적이다.
+# [최종 리뷰 I5 반영] initializePlugin은 이제 maroBuildMenu를 즉시 부르지
+# 않고 MGlobal::executeCommandOnIdle로 유휴 큐에 넣기만 한다
+# (MaroPluginMain.cpp 참고) -- 그리고 배치 mayapy는 그 유휴 큐를 돌리지
+# 않으므로, loadPlugin() 시점에는 이 큐잉이 실제로 실행됐을 수도 안 됐을
+# 수도 있다(계약이 아니라 구현 세부사항). 그래서 아래에서 직접 한 번 더
+# 부르는 것으로 결정론적으로 만든다.
 #
 # 배치 모드에는 UI가 없으므로 실제 메뉴는 만들어지지 않는다(예외도 나지
 # 않는다). 이 호출이 실제로 확인하는 것은 C++ 쪽 전부다: findPlugin ->
@@ -73,9 +77,9 @@ print("command registered OK")
 # 깨져도 여기서 RuntimeError로 드러난다.
 #
 # test_main_window.py와 달리 "아직 import 안 됐다"는 전제할 수 없다 --
-# initializePlugin이 로드 끝에서 이미 maroBuildMenu를 한 번 불렀으므로
-# (위 설명), loadPlugin() 시점에 maroMenu가 이미 sys.modules에 들어가
-# 있을 수 있다. 그래서 아래에서는 "이제는 import돼 있다"만 확인한다.
+# 위에서 설명한 큐잉이 loadPlugin() 시점에 이미 실행됐을 수도 있어서
+# maroMenu가 먼저 sys.modules에 들어가 있을 가능성을 배제할 수 없다.
+# 그래서 아래에서는 "이제는 import돼 있다"만 확인한다.
 cmds.maroBuildMenu()
 assert "maroMenu" in sys.modules, (
     "running the command must have imported the staged maroMenu module"
