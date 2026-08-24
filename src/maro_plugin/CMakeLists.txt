@@ -172,7 +172,7 @@ endforeach()
 # [최종 리뷰 3i] 예전에는 이것이 ${PROJECT_NAME}의 POST_BUILD였고, 위 I9
 # 주석과 같은 함정("maro_sentinel 소스만 바뀌면 플러그인이 relink되지 않아
 # 복사가 스킵되고 스테일한 exe가 배포된 채 테스트만 통과한다")을 알려진
-# 위험으로 안고 있었다. 위 maroDiagPanel.py와 같은 OUTPUT 기반 규칙으로
+# 위험으로 안고 있었다. 위 python UI 모듈 루프와 같은 OUTPUT 기반 규칙으로
 # 바꿔 그 의존을 없앤다.
 #
 # 실측으로 확인한 사실 하나를 남겨 둔다(고친 이유가 바뀌므로): **지금 이
@@ -194,7 +194,7 @@ endforeach()
 # 이 복사도 반드시 다시 돈다 -- 플러그인이 relink되는지와 무관하게.
 #
 # OUTPUT 경로에 $<TARGET_FILE_DIR:...> 대신 CMAKE_CURRENT_BINARY_DIR/$<CONFIG>를
-# 쓰는 이유는 위 maroDiagPanel.py 블록의 주석과 같다(build_plugin()이 함수
+# 쓰는 이유는 위 python UI 모듈 루프의 주석과 같다(build_plugin()이 함수
 # 안에서 타깃을 만들어 OUTPUT 자리의 타깃 조회가 해소되지 않는다). 그리고 이
 # 빌드 트리는 멀티 컨피그 제너레이터라 컨피그별 하위 디렉터리가 붙으므로
 # $<CONFIG>를 반드시 함께 넣어야 한다 -- 그것이 곧 $<TARGET_FILE_DIR:${PROJECT_NAME}>과
