@@ -18,6 +18,7 @@ set(SOURCE_FILES
     MaroPanelCommands.cpp
     MaroPythonBridge.cpp
     MaroMainWindowCommand.cpp
+    MaroMenuCommands.cpp
     MaroMainThreadQueue.cpp
     MaroRemedyCommands.cpp
     MaroSentinelClient.cpp
@@ -155,6 +156,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 set(MARO_PLUGIN_PY_MODULES
     maroDiagPanel
     maroMainWindow
+    maroMenu
 )
 foreach(pyModule IN LISTS MARO_PLUGIN_PY_MODULES)
     set(pyModuleSrc "${CMAKE_SOURCE_DIR}/python/${pyModule}.py")

@@ -12,6 +12,7 @@
 #include "MaroLidarNode.h"
 #include "MaroMainThreadQueue.h"
 #include "MaroMainWindowCommand.h"
+#include "MaroMenuCommands.h"
 #include "MaroPanelCommands.h"
 #include "MaroRemedyCommands.h"
 #include "MaroSentinelClient.h"
@@ -346,10 +347,32 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroBuildMenu",
+                                    maro::MaroBuildMenuCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroBuildMenu");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
         return status;
+    }
+
+    // 최상위 "Maro" 메뉴를 만든다 -- UI 편의일 뿐 핵심 기능이 아니므로 이
+    // 호출의 실패는 플러그인 로드를 막지 않는다(MaroSentinelClient::
+    // connectOrSpawn()과 같은 규율, 위 주석 참고). 실측(2026-08-24, Maya
+    // 2026): 배치 모드에는 "MayaWindow" 컨트롤 자체가 없어서 cmds.menu가
+    // 예외 없이 그냥 아무것도 안 만들고 False를 돌려주므로, 이 호출은
+    // 배치 모드에서도 사실상 항상 성공을 보고한다 -- 그래도 실패 시
+    // BoadMaro::warn으로만 기록하고 return하지 않는 이 형태를 유지하는
+    // 것은, 대화형 Maya에서 언젠가 실제로 실패할 경우(예: 메뉴 이름 충돌)
+    // 로드 자체가 죽지 않게 하기 위해서다.
+    const MStatus menuStatus = MGlobal::executeCommand("maroBuildMenu");
+    if (!menuStatus) {
+        maro::BoadMaro::warn(
+            "Maro: failed to build the Maro menu (non-fatal -- UI convenience only).");
     }
 
     maro::BoadMaro::info("Maro: plugin loaded.");
@@ -399,6 +422,15 @@ MStatus uninitializePlugin(MObject obj) {
         // 같은 것을 반대편에서 막는다). 두 이름은 python/maroMainWindow.py의
         // CONTROL_NAME/VIEWPORT_NAME과 같은 문자열이어야 하며,
         // tests/maya/test_main_window.py가 그 계약을 값으로 고정한다.
+        // maroBuildMenu는 initializePlugin에서 maroMainWindow "다음"에
+        // 등록되므로, 이 파일의 등록 역순 해제 규율에 따라 그 해제는
+        // maroMainWindow 블록보다 "먼저" 온다(가장 나중에 등록된 것부터
+        // 먼저 해제) -- 위 maroLidar/maroAxis, maroApplyRemedy/
+        // maroDiagRequestRemedy 선례와 같은 논리.
+        MGlobal::executeCommand(
+            "if (`menu -exists maroMainMenu`) deleteUI -menu maroMainMenu;");
+        plugin.deregisterCommand("maroBuildMenu");
+
         MGlobal::executeCommand(
             "if (`workspaceControl -exists maroMainWindowControl`) "
             "workspaceControl -e -close maroMainWindowControl;"
