@@ -158,6 +158,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroDiagPanel
     maroMainWindow
     maroMenu
+    maroRosProxy
 )
 foreach(pyModule IN LISTS MARO_PLUGIN_PY_MODULES)
     set(pyModuleSrc "${CMAKE_SOURCE_DIR}/python/${pyModule}.py")

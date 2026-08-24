@@ -14,6 +14,7 @@
 #include "MaroMainWindowCommand.h"
 #include "MaroMenuCommands.h"
 #include "MaroPanelCommands.h"
+#include "MaroPythonBridge.h"
 #include "MaroRemedyCommands.h"
 #include "MaroRosProxyCommands.h"
 #include "MaroSentinelClient.h"
@@ -448,6 +449,31 @@ MStatus uninitializePlugin(MObject obj) {
 
         maro::shutdownBridge();
         maro::MaroDeleteWatcher::uninstall();
+
+        // ROS 프록시의 idle scriptJob을 뗀다. 창의 closeCommand가 이미
+        // maroRosProxy.stop()을 부르지만, 그것만으로는 세 경로 중 하나만
+        // 덮인다:
+        //   (1) 사용자가 창을 닫음(언로드 없음) -> closeCommand가 처리.
+        //   (2) 창이 열린 채 언로드 -> 아래 workspaceControl -e -close가
+        //       closeCommand를 실제로 부르는지 Autodesk 문서로 확정하지
+        //       못했다. 부른다면 이 호출은 무해한 중복이고, 안 부른다면
+        //       이 호출이 유일한 정리다.
+        //   (3) 창을 연 적이 없거나 이미 닫힌 상태에서 언로드 ->
+        //       closeCommand 자체가 존재하지 않는다. stop()은 start()가
+        //       한 번도 안 불렸어도 안전한 무동작이다(멱등).
+        // 즉 이것은 "있으면 좋은" 이중 안전장치가 아니라 (2)/(3)을 실제로
+        // 책임지는 경로다.
+        //
+        // **위치가 중요하다.** 브리프는 이 호출을 maroBuildMenu 해제 뒤에
+        // 두라고 했지만, 그 자리는 이미 maroMayaToRos를 deregister한
+        // 다음이다 -- idle 콜백의 본체가 부르는 바로 그 커맨드다. 그 사이에
+        // 유휴 틱이 한 번이라도 돌면(아래 deleteUI가 위젯을 지우며 Qt
+        // 이벤트를 돌릴 수 있다) 콜백이 사라진 커맨드를 찾는다. 콜백을
+        // 먼저 죽이고 나서 커맨드를 걷어내는 순서가 그 창을 아예 없앤다.
+        //
+        // 실패해도 언로드를 막지 않는다 -- runPluginPythonModule은 예외를
+        // 삼키고 MStatus로만 알린다(그리고 이 블록 전체가 try/catch 안이다).
+        maro::runPluginPythonModule("maroRosProxy", "maroRosProxy.stop()");
 
         // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
         // devkit의 workspaceControlCmd 샘플이 같은 이유로 같은 일을 한다.

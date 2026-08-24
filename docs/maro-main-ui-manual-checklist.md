@@ -164,6 +164,173 @@ modelPanel이 paneLayout에 직접 붙어버림)이면 중간 `formLayout`이 �
       추가한 `_deleteStalePanel(panelName)`의 두 뷰포트 버전을 실제로
       거치는 유일한 경로다).
 
+## 1-2. ROS 좌표 프록시 (Phase 3) — **[필수 · go/no-go, Phase 3의 진짜 기준]**
+
+이 절이 Phase 3의 **유일한 실질적 검증**이다. 배치 mayapy에는 `modelPanel`도
+`scriptJob`의 idle 이벤트도 없어서(`tests/maya/test_ros_proxy_sync.py`가
+그 경계를 명시해 뒀다), "우측에만 보이는가 / 실시간으로 따라가는가 /
+언로드해도 잡이 안 남는가"는 사람이 대화형 Maya에서만 확인할 수 있다.
+
+**이 절에 들어가기 전에 알아 둘 것 — 미검증 가정 하나.** 이 단계는
+`cmds.isolateSelect(panel, addDagObject=obj)`를 **매번 다시** 부르는 설계다
+(이미 격리 목록에 있는 오브젝트를 다시 넣어도 무해하다는 전제, 설계 스펙 §7).
+플래그 이름과 "패널별로 독립적으로 걸린다"는 것은 Maya 2026에서 확인했지만
+(`cmds.help("isolateSelect")`, Maya 자신의
+`scripts/others/createModelPanelMenu.mel`), **멱등성 자체는 대화형 Maya에서
+확인하지 못했다.** 아래 항목들이 그것을 실제로 판정한다.
+
+```python
+# 준비: 창을 연다.
+cmds.maroMainWindow()
+```
+
+- [ ] **격리가 켜졌는가 (제일 먼저 볼 것)** — 창을 연 직후 아래가 둘 다
+      `1`(또는 `True`)이어야 한다:
+
+      ```python
+      cmds.isolateSelect("maroMainWindowViewportMaya", q=True, state=True)
+      cmds.isolateSelect("maroMainWindowViewportRos", q=True, state=True)
+      ```
+
+      **좌측 뷰포트가 완전히 비어 보이면** 곧바로 FAIL로 적지 말고 1~2초
+      기다렸다 다시 본다 — 좌측 목록은 `start()`가 아니라 **첫 idle 틱**이
+      채우므로 한 틱만큼 늦다. 그래도 비어 있으면 아래 "막혔을 때"를 본다.
+- [ ] **좌측엔 원본만, 우측엔 프록시만** — 큐브를 하나 만들고 선택한다:
+
+      ```python
+      cmds.polyCube(name="proxyCheckCube")
+      ```
+
+      - 좌측("Maya") 뷰포트: 큐브가 보인다. **로케이터는 안 보인다.**
+      - 우측("ROS") 뷰포트: 십자 모양 로케이터가 보인다. **큐브는 안 보인다.**
+      (우측이 비어 보이면 우측 뷰포트에서 카메라를 프록시에 맞춘다 —
+      로케이터 좌표는 **미터**라 cm 씬에서는 원점 근처 아주 작은 값이다.
+      아래 "단위" 항목 참고.)
+- [ ] **실시간 추종** — 큐브를 이동/회전하면 우측 로케이터가 곧바로 따라간다
+      (idle 콜백이므로 마우스를 놓지 않아도 따라간다).
+- [ ] **축 변환 방향이 맞는가** — 큐브를 Maya 기준 **+Z로만** 100 단위(1m)
+      옮긴 뒤:
+
+      ```python
+      cmds.xform("proxyCheckCube", ws=True, t=[0, 0, 100])
+      cmds.xform("|maroRosProxy_grp|maroRosProxy_loc", q=True, ws=True, t=True)
+      ```
+
+      `[0.0, -1.0, 0.0]`에 가까워야 한다 — `Convert.h`의 `(x, y, z) -> (x, -z, y)`
+      규칙과 cm→m 스케일이 함께 적용된 값이다.
+- [ ] **단위(판정 아님, 사실만 기록)** — 위에서 보듯 로케이터의 트랜스폼
+      값은 **ROS 미터 값 그대로**다. 즉 cm 단위 씬에서는 프록시가 원본보다
+      100배 작은 거리에 놓인다. 두 뷰포트의 카메라가 독립이라 시각적으로는
+      문제가 아니고, 채널 박스에서 ROS 좌표를 그대로 읽을 수 있다는 이점이
+      있다 — **의도된 동작이므로 실패로 적지 않는다.** 다만 실제로 그렇게
+      보이는지 관찰한 바를 결과란에 적는다.
+- [ ] **창을 연 뒤에 만든 오브젝트가 좌측에 바로 보인다** — *(사용자가
+      명시적으로 요구한 항목. 이번 플랜이 스냅샷 대신 라이브 갱신을 택한
+      이유 자체다.)* 창을 **닫지 않은 채**:
+
+      ```python
+      cmds.polySphere(name="proxyCheckSphereLate")
+      ```
+
+      1초 안에 좌측 뷰포트에 구가 나타난다. **우측에는 안 나타난다.**
+      (이 항목이 통과한다 = `-addDagObject`가 실제로 멱등하고 라이브
+      갱신이 동작한다.)
+- [ ] **성능(판정 아님, 사실만 기록)** — 위 상태에서 뷰포트를 궤도/팬 해
+      본다. 눈에 띄게 끊기거나 CPU가 한 코어를 계속 먹으면 적어 둔다
+      (idle 콜백이 매 틱 도는 구조라 이 절이 그것을 처음 실측하는 자리다).
+- [ ] **씬 수정 표시(판정 아님, 사실만 기록)** — 동기화가 로케이터를 계속
+      쓰므로 씬이 항상 "수정됨"이 된다. 파일을 닫을 때 저장 여부를 묻는지
+      관찰해 적어 둔다.
+- [ ] **고정(pin)** — 큐브를 고정한 뒤 다른 오브젝트를 선택해도 프록시가
+      계속 큐브를 따라간다:
+
+      ```python
+      cmds.maroSetRosProxyTarget("proxyCheckCube")
+      cmds.select("proxyCheckSphereLate")
+      cmds.xform("proxyCheckSphereLate", ws=True, t=[50, 50, 50])  # 프록시는 안 움직여야 한다
+      cmds.xform("proxyCheckCube", ws=True, t=[10, 0, 0])          # 프록시는 이걸 따라가야 한다
+      ```
+- [ ] **고정 해제** — 풀면 다시 선택 추종으로 돌아간다:
+
+      ```python
+      cmds.maroSetRosProxyTarget(clear=True)
+      cmds.select("proxyCheckSphereLate")   # 이제 프록시가 구를 따라간다
+      ```
+- [ ] **프록시가 자기 자신을 따라가지 않는다** — 우측 로케이터를 직접
+      선택해 본다(아웃라이너에서 `maroRosProxy_grp > maroRosProxy_loc`).
+      프록시가 제자리에 멈춰 있고 값이 스스로 발산하지 않는다. 그리고
+      **창을 여는 순간 원래 선택이 유지됐는지**도 함께 본다:
+
+      ```python
+      cmds.select("proxyCheckSphereLate", r=True)
+      # 창을 닫았다 다시 연 뒤
+      cmds.ls(sl=True)   # 여전히 proxyCheckSphereLate 여야 한다
+      ```
+- [ ] **창을 닫으면(언로드 없이) 동기화가 멈춘다** — 창의 X를 눌러 닫은 뒤:
+
+      ```python
+      cmds.xform("proxyCheckSphereLate", ws=True, t=[0, 100, 0])   # 에러가 안 나야 한다
+      [j for j in (cmds.scriptJob(listJobs=True) or []) if "maroRosProxy" in j]   # []
+      ```
+
+      스크립트 에디터에 반복되는 에러가 없어야 하고, 위 목록이 비어 있어야
+      한다.
+- [ ] **플러그인 언로드 — 진짜 go/no-go** — 창을 **다시 열고** 프록시가
+      동작 중인 상태에서:
+
+      ```python
+      cmds.maroMainWindow()
+      cmds.select("proxyCheckSphereLate")   # 프록시가 따라가는 것을 눈으로 확인한 뒤
+      cmds.unloadPlugin("maro")
+      ```
+
+      - Maya가 크래시하지 않는다.
+      - 스크립트 에디터에 에러가 없다(§3이 기록해 둔 `maroBuildMenu` 큐잉
+        예외는 알려진 예외라 실패로 안 침).
+      - 잡이 안 남는다: `[j for j in (cmds.scriptJob(listJobs=True) or []) if "maroRosProxy" in j]` → `[]`
+      - 언로드 뒤 오브젝트를 움직여도 **아무 에러도 반복되지 않는다**
+        (idle 콜백이 살아 있었다면 사라진 `maroMayaToRos`를 찾다가 매 틱
+        에러를 낸다 — 이 항목이 그것을 잡는다).
+- [ ] **창을 연 적 없이 언로드** — Maya를 새로 띄우고 플러그인만 로드했다가
+      창을 한 번도 열지 않은 채 `cmds.unloadPlugin("maro")` → 에러 없음
+      (언로드 경로가 `maroRosProxy.stop()`을 무조건 부르는데, `start()`가
+      한 번도 안 불린 상태에서도 무동작이어야 한다).
+
+### 막혔을 때 — 격리가 기대대로 안 걸리면
+
+`isolateSelect`가 이 단계에서 유일하게 "계획 시점에 미검증"으로 남았던
+메커니즘이다. 아래 순서로 좁힌다. **무엇이 나왔든 결과란에 그대로 적는다 —
+계획과 다르면 실제 동작을 따르고 이유를 기록하는 것이 이 프로젝트의 규율이다
+(Phase 0-1의 `modelPanel` chrome 플래그, Phase 2의 `paneLayout` 때와 같다).**
+
+1. 격리 목록에 무엇이 들어갔는지 직접 본다:
+
+   ```python
+   cmds.isolateSelect("maroMainWindowViewportMaya", q=True, viewObjects=True)
+   cmds.isolateSelect("maroMainWindowViewportRos", q=True, viewObjects=True)
+   ```
+
+   (`-viewObjects`는 격리 목록을 담은 오브젝트 세트를 준다.)
+2. **두 패널의 목록이 같게 나오면** 격리가 패널별이 아니라 전역으로 걸린
+   것이다 — 이 설계의 전제가 깨진 것이므로 그대로 BLOCKED로 적고 보고한다.
+3. **좌측이 계속 비어 있으면**, 격리 켜기가 Maya 자신의 경로와 달라서일 수
+   있다. Maya는 `enableIsolateSelect`(= `modelEditor -e -viewSelected` +
+   에디터 목록 등록)를 쓰는데, 이 모듈은 일부러 `isolateSelect -state`만
+   쓴다(그 프로시저가 `DagObjectCreated` 자동 추가를 띄워 **우측 패널에도**
+   사용자 오브젝트를 밀어 넣기 때문 — `maroRosProxy.py` 도크스트링 참고).
+   진단용으로 아래를 한 번 시도해 보고, 이걸로 좌측이 채워지면 그 사실을
+   적는다(수정은 코드 쪽에서 해야 한다):
+
+   ```python
+   cmds.editor("maroMainWindowViewportMaya", e=True, mainListConnection="activeList")
+   ```
+4. 새 오브젝트만 안 나타나면(처음 목록은 맞는데) 멱등성이 아니라 idle 잡
+   자체가 안 도는 것일 수 있다:
+
+   ```python
+   [j for j in (cmds.scriptJob(listJobs=True) or []) if "maroRosProxy" in j]   # 비어 있으면 잡이 없다
+   ```
+
 ## 2. PySide6 버튼이 같은 창 안에 살아 있는가 — **[필수 · go/no-go]**
 
 - [ ] 뷰포트 위쪽 좁은 띠에 "테스트"라고 쓰인 버튼이 보인다.
@@ -297,10 +464,14 @@ modelPanel이 paneLayout에 직접 붙어버림)이면 중간 `formLayout`이 �
 ## 결과 기록
 
 확인한 사람이 날짜와 결과를 여기에 적는다. **[필수]** 표시된 모든 행이
-통과해야 그 행이 속한 Phase가 완료된 것으로 본다 — 이 표는 Phase 0-1과
-Phase 2 판정을 함께 담고 있다(§1-1이 Phase 2 소속, 나머지는 Phase 0-1
-소속). §4의 "두 번째 뷰포트 여지 확인"은 Phase 2가 실제로 구현되며 N/A로
-대체됐다. Maya 빌드 번호도 함께 기록한다.
+통과해야 그 행이 속한 Phase가 완료된 것으로 본다 — 이 표는 Phase 0-1,
+Phase 2, Phase 3 판정을 함께 담고 있다(§1-1이 Phase 2, §1-2가 Phase 3,
+나머지는 Phase 0-1 소속). §4의 "두 번째 뷰포트 여지 확인"은 Phase 2가 실제로
+구현되며 N/A로 대체됐다. Maya 빌드 번호도 함께 기록한다.
+
+"관찰" 행은 합/불합격 판정이 아니라 **사실만 적는 자리**다 — 계획 시점에
+예측할 수 없었던 것을 기록해 두기 위한 것이고, 그 자체로 Phase 완료를
+막지 않는다.
 
 | 절 | Phase | 필수 여부 | 결과 | 날짜 / 확인자 / Maya 빌드 | 비고 |
 |---|---|---|---|---|---|
@@ -309,6 +480,17 @@ Phase 2 판정을 함께 담고 있다(§1-1이 Phase 2 소속, 나머지는 Pha
 | 1-1. 언로드 크래시 없음 — 플로팅 (두 뷰포트) | 2 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 크래시 없음, `workspaceControl`/두 뷰포트 exists 전부 False 확인 |
 | 1-1. 재로드 후 재오픈 | 2 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 이름 충돌 없이 두 뷰포트 정상 재생성 |
 | 1-1. 언로드 크래시 없음 — 도킹 (두 뷰포트) | 2 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 도킹 상태에서 재실행, 문제 없음 |
+| 1-2. 격리가 켜지고 패널별로 걸린다 | 3 | 필수 | | | `isolateSelect -q -state`가 두 패널 모두 1, `-q -viewObjects`가 두 패널에서 다른 목록 |
+| 1-2. 좌측=원본만 / 우측=프록시만 | 3 | 필수 | | | 이 단계 전체의 전제 |
+| 1-2. 실시간 추종 + 축 변환 방향 | 3 | 필수 | | | `(x,y,z) -> (x,-z,y)` + cm→m |
+| 1-2. **창을 연 뒤 만든 오브젝트가 좌측에 바로 보인다** | 3 | 필수 | | | 사용자 명시 요구사항. 통과하면 `-addDagObject` 멱등성도 함께 확인된 것 |
+| 1-2. 고정(pin) / 해제가 동작한다 | 3 | 필수 | | | `maroSetRosProxyTarget` ↔ 선택 추종 |
+| 1-2. 프록시가 자기 자신을 안 따라간다 (+ 창 열 때 선택 유지) | 3 | 필수 | | | 되먹임 방지 |
+| 1-2. 창을 닫으면 동기화가 멈춘다 (잡 안 남음) | 3 | 필수 | | | `closeCommand` 경로 |
+| 1-2. **창을 띄운 채 언로드 — 크래시/에러/잔여 잡 없음** | 3 | 필수 | | | Phase 3의 진짜 go/no-go |
+| 1-2. 창을 연 적 없이 언로드 | 3 | 필수 | | | `stop()`이 `start()` 없이도 안전한가 |
+| 1-2. 성능 (관찰) | 3 | 관찰 | | | idle 콜백이 매 틱 도는 구조 — 끊김/CPU 사용을 적는다 |
+| 1-2. 단위 / 씬 수정 표시 (관찰) | 3 | 관찰 | | | 로케이터 값이 ROS 미터인 것은 의도된 동작 |
 | 2. PySide6 버튼 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 표시/스타일/클릭 확인. 리사이즈·1분 유지 항목은 별도로 재확인 안 함 |
 | 2. `show()` 복원 분기 — 플로팅 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 창 열린 채 재호출, 에러 없이 기존 창 유지 |
 | 3. 언로드 크래시 없음 — 플로팅 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 크래시/에러 없음, `workspaceControl` exists=False, 뷰포트 패널 목록 `[]` 둘 다 확인(주: 이 실행 시점엔 뷰포트가 하나였다 — Phase 2 이후 재실행 시 위 §3의 갱신된 두-이름 확인으로 다시 돈다) |

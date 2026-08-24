@@ -136,9 +136,12 @@ def buildUI():
     form = cmds.formLayout()
 
     pane = cmds.paneLayout(configuration="vertical2", parent=form)
-    # 두 호출의 반환값(각 패널의 control 이름)은 지금은 안 쓴다 -- Phase 3가
-    # ROS 쪽 뷰포트를 좌표 변환 대상으로 지목할 때가 돼야 필요해진다. 그때
-    # 다시 받아 쓴다(YAGNI -- 지금 안 쓰는 변수를 미리 만들어두지 않는다).
+    # 두 호출의 반환값(각 패널의 control 이름)은 여기서 안 쓴다. Phase 3의
+    # 격리/동기화는 control 이름이 아니라 **패널 이름**을 쓰기 때문이다 --
+    # isolateSelect가 받는 것은 에디터(패널) 이름이지 그것을 담고 있는
+    # 레이아웃 컨트롤이 아니다(_buildLabeledViewport 도크스트링이 설명하는
+    # 그 구분의 반대쪽). 그래서 아래 start()에는 VIEWPORT_NAME_* 상수를
+    # 그대로 넘긴다.
     _buildLabeledViewport(pane, "Maya", VIEWPORT_NAME_MAYA)
     _buildLabeledViewport(pane, "ROS", VIEWPORT_NAME_ROS)
 
@@ -196,7 +199,47 @@ def buildUI():
             "embedded widget ({!r}) next to the dual-viewport pane ({!r}): {} "
             "-- see docs/maro-main-ui-manual-checklist.md".format(
                 buttonName, pane, error))
+
+    # Phase 3: 좌/우 뷰포트 격리 + ROS 프록시 동기화(설계 스펙 §6/§7).
+    #
+    # 브리프는 이 호출을 두 _buildLabeledViewport() 바로 다음에 두라고 했다.
+    # 여기(조립이 전부 끝난 뒤)로 옮겼다: 그 자리와 여기 사이에는 일부러
+    # RuntimeError를 던지는 지점이 셋 있다(findLayout 실패,
+    # addWidgetToMayaLayout이 이름을 안 줌, formLayout attach 실패). 거기서
+    # 던지면 창은 반쪽으로 남는데 idle scriptJob은 이미 돌고 있는 상태가
+    # 된다 -- "주인이 없어진 콜백이 계속 산다"는, 이 프로젝트가 Phase 0-1과
+    # 2에서 반복해서 잡아 온 바로 그 결함 유형이다. 마지막에 걸면 조립이
+    # 끝까지 성공했을 때만 잡이 생긴다. 격리/동기화는 두 패널이 존재하기만
+    # 하면 되므로 이 위치 변경으로 잃는 것은 없다.
+    #
+    # 함수 안에서 import하는 것은 순환 참조를 피하기 위해서가 아니라
+    # (maroRosProxy는 이쪽을 import하지 않는다) 이 모듈의 import 시점과
+    # maroRosProxy가 필요한 시점을 떼어 놓기 위해서다: 이 모듈은 C++
+    # 브리지가 sys.path를 손본 뒤에 import되고, 그 sys.path에
+    # maroRosProxy.py도 함께 스테이징돼 있다(MARO_PLUGIN_PY_MODULES).
+    import maroRosProxy
+    maroRosProxy.start(VIEWPORT_NAME_MAYA, VIEWPORT_NAME_ROS)
+
     return form
+
+
+def _onWorkspaceControlClosed():
+    """창이 닫힐 때 ROS 프록시 동기화를 멈춘다.
+
+    (모듈 수준 함수로 둔다: 위 _onTestButtonClicked와 같은 이유로, 창이
+    사라진 뒤에도 그 스코프를 붙드는 클로저를 만들지 않는다.)
+
+    여기서 예외를 내면 Maya의 창 닫기 경로 한가운데서 터진다. stop()은
+    스스로 예외를 밖으로 내지 않도록 만들어져 있지만(maroRosProxy.stop
+    도크스트링), import 자체가 실패할 수도 있으므로 한 겹 더 감싼다 --
+    그 경우에도 창은 정상적으로 닫혀야 한다.
+    """
+    try:
+        import maroRosProxy
+        maroRosProxy.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백 경계
+        import traceback
+        traceback.print_exc()
 
 
 def show():
@@ -212,4 +255,10 @@ def show():
         initialWidth=900,
         initialHeight=600,
         requiredPlugin="maro",
+        # 창이 닫히면 idle scriptJob을 뗀다. 이것만으로는 부족하다 --
+        # MaroPluginMain.cpp의 uninitializePlugin도 같은 stop()을 따로
+        # 부른다. 이유는 그 쪽 주석에 적어 뒀다(요약: 창을 연 적이 없는
+        # 세션에서는 이 콜백이 아예 없고, `workspaceControl -e -close`가
+        # closeCommand를 실제로 부르는지는 문서로 확정하지 못했다).
+        closeCommand=_onWorkspaceControlClosed,
         uiScript="import maroMainWindow; maroMainWindow.buildUI()")
