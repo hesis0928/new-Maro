@@ -109,6 +109,23 @@ Qt 버튼이 실제로 눌리는지, 창을 띄운 채 언로드해도 Maya가 �
 
       두 번째로 뜬 창에서도 1번과 2번 항목이 그대로 성립한다.
 
+## 3-1. Maro 메뉴 (Task 3) — 배치 모드에서 검증 불가능했던 항목
+
+`tests/maya/test_main_menu.py`는 mayapy 배치 모드에서 `cmds.menu(...)`가
+아무것도 만들지 않고 조용히 `False`만 돌려준다는 것을 확인하고 그 위에서
+재진입만 검증했다 — `python/maroMenu.py`의 `build()`가 실제로 멱등한지
+(이미 메뉴가 있으면 `cmds.menu(MENU_NAME, exists=True)`가 `True`가 되어
+두 번째 호출이 아무 일도 안 하는지)는 대화형 Maya에서만 확인 가능하다.
+
+- [ ] Maya 상단 메뉴바에 "Maro" 메뉴가 정확히 하나만 보인다(중복 없음).
+- [ ] "Maro 창 열기" 클릭 → `maroMainWindow`가 열린다. "준비 중" 항목 2개는
+      비활성(회색, 클릭 안 됨) 상태다.
+- [ ] `cmds.loadPlugin(r"...\maro.mll")`을 이미 로드된 상태에서 다시
+      실행하거나, `unloadPlugin` 후 다시 `loadPlugin`한다 — 메뉴가 여전히
+      **하나만** 존재한다(중복 생성 안 됨). 이것이 `build()`의 멱등성
+      요구사항이 실제로 성립하는지 확인하는 유일한 방법이다.
+- [ ] `unloadPlugin` 후 "Maro" 메뉴가 메뉴바에서 사라진다.
+
 ## 4. `workspaceControl` 통합이 `maroDiagPanel`과 동등한가
 
 - [ ] **도킹** — 창을 Maya 창 가장자리로 끌어 도킹되는지, 다시 떼어내
