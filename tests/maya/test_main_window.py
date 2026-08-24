@@ -64,9 +64,13 @@ assert "maroMainWindow" in sys.modules, (
 )
 print("command imports the staged module OK")
 
-# 이미 있으면 복원하는 경로(show()의 첫 분기)도 예외 없이 지나가는지 본다.
+# 배치 모드에서는 cmds.workspaceControl()이 아무것도 만들지 않고 False만
+# 돌려주므로(workspaceControl(exists=True)도 계속 False), 이 두 번째 호출은
+# show()의 "이미 있으면 복원" 분기를 실제로 타지 않는다 -- 재진입해도
+# 예외가 안 난다는 것만 증명한다. 복원 분기 자체는 대화형 Maya에서만
+# 검증 가능하다(수동 체크리스트 참고).
 cmds.maroMainWindow()
-print("second invocation OK")
+print("second invocation OK (re-entrancy only, not the restore branch)")
 
 import maroMainWindow  # noqa: E402
 
