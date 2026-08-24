@@ -15,6 +15,7 @@
 #include "MaroMenuCommands.h"
 #include "MaroPanelCommands.h"
 #include "MaroRemedyCommands.h"
+#include "MaroRosProxyCommands.h"
 #include "MaroSentinelClient.h"
 
 namespace {
@@ -354,6 +355,22 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroMayaToRos",
+                                    maro::MaroMayaToRosCommand::creator,
+                                    maro::MaroMayaToRosCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroMayaToRos");
+        return status;
+    }
+
+    status = plugin.registerCommand("maroSetRosProxyTarget",
+                                    maro::MaroSetRosProxyTargetCommand::creator,
+                                    maro::MaroSetRosProxyTargetCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroSetRosProxyTarget");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -447,6 +464,9 @@ MStatus uninitializePlugin(MObject obj) {
         // maroMainWindow 블록보다 "먼저" 온다(가장 나중에 등록된 것부터
         // 먼저 해제) -- 위 maroLidar/maroAxis, maroApplyRemedy/
         // maroDiagRequestRemedy 선례와 같은 논리.
+        plugin.deregisterCommand("maroSetRosProxyTarget");
+        plugin.deregisterCommand("maroMayaToRos");
+
         MGlobal::executeCommand(
             "if (`menu -exists maroMainMenu`) deleteUI -menu maroMainMenu;");
         plugin.deregisterCommand("maroBuildMenu");
