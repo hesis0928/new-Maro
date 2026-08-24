@@ -98,7 +98,20 @@ assert maroMenu.MENU_NAME == "maroMainMenu", (
     f"MENU_NAME must match the MEL cleanup in MaroPluginMain.cpp, "
     f"got {maroMenu.MENU_NAME!r}"
 )
-print("C++/Python menu name contract OK")
+
+# [최종 리뷰 I7] 위 assert는 Python 쪽 값만 본다 -- MaroPluginMain.cpp의 MEL
+# 정리 문자열이 나중에 바뀌어도 이 테스트는 계속 통과한다. C++ 소스를 직접
+# 읽어서 계약을 양쪽 다 고정한다(test_main_window.py의 같은 점검, 그리고
+# 원래 setStyleSheet 점검이 쓰는 것과 같은 소스-읽기 기법).
+_thisDir = os.path.dirname(os.path.abspath(__file__))
+_pluginMainCpp = os.path.join(_thisDir, "..", "..", "src", "maro_plugin", "MaroPluginMain.cpp")
+with open(_pluginMainCpp, encoding="utf-8") as _handle:
+    _pluginMainSource = _handle.read()
+assert maroMenu.MENU_NAME in _pluginMainSource, (
+    f"MaroPluginMain.cpp no longer mentions {maroMenu.MENU_NAME!r} -- "
+    "unload cleanup would silently no-op"
+)
+print("C++/Python menu name contract OK (pinned on both sides)")
 
 # 배치 모드에서는 메뉴가 실제로 만들어지지 않는다 -- 이 파일 도크스트링의
 # 핵심 주장을 값으로 고정한다.

@@ -361,18 +361,38 @@ MStatus initializePlugin(MObject obj) {
     }
 
     // 최상위 "Maro" 메뉴를 만든다 -- UI 편의일 뿐 핵심 기능이 아니므로 이
-    // 호출의 실패는 플러그인 로드를 막지 않는다(MaroSentinelClient::
-    // connectOrSpawn()과 같은 규율, 위 주석 참고). 실측(2026-08-24, Maya
-    // 2026): 배치 모드에는 "MayaWindow" 컨트롤 자체가 없어서 cmds.menu가
-    // 예외 없이 그냥 아무것도 안 만들고 False를 돌려주므로, 이 호출은
-    // 배치 모드에서도 사실상 항상 성공을 보고한다 -- 그래도 실패 시
-    // BoadMaro::warn으로만 기록하고 return하지 않는 이 형태를 유지하는
-    // 것은, 대화형 Maya에서 언젠가 실제로 실패할 경우(예: 메뉴 이름 충돌)
-    // 로드 자체가 죽지 않게 하기 위해서다.
-    const MStatus menuStatus = MGlobal::executeCommand("maroBuildMenu");
+    // 단계의 실패는 플러그인 로드를 막지 않는다(MaroSentinelClient::
+    // connectOrSpawn()과 같은 규율, 위 주석 참고).
+    //
+    // [최종 리뷰 I5] 이 호출은 executeCommand가 아니라
+    // executeCommandOnIdle이어야 한다. initializePlugin은 이 플러그인의
+    // 코드 중 "Maya의 메인 윈도우가 아직 없을 수도 있는" 유일한 지점이다:
+    // 플러그인 매니저의 "Auto load"가 켜져 있거나, 저장된 워크스페이스의
+    // -requiredPlugin "maro"가 시작 중에 이 플러그인을 끌어오면(수동
+    // 체크리스트 4절의 재시작-복원 항목이 정확히 그 상황을 만든다) 여기가
+    // Maya UI 구성보다 먼저 돈다. 그 상태에서 python/maroMenu.py의
+    // cmds.menu(parent="MayaWindow", ...)는 예외도 내지 않고 조용히
+    // 아무것도 만들지 않으므로(실측(2026-08-24, Maya 2026): "MayaWindow"
+    // 컨트롤이 없는 배치 모드에서 cmds.menu가 예외 없이 False만 돌려주는
+    // 것과 같은 동작), 사용자는 그 세션 내내 Maro 메뉴 없이 지내면서 이유를
+    // 알 방법이 없다. 유휴 큐에 넣으면 UI가 다 만들어진 뒤에 돈다
+    // (MGlobal.h 선언: executeCommandOnIdle(const MString&,
+    // bool displayEnabled = false)).
+    //
+    // 대가 두 가지를 알고 쓴다.
+    //  - 돌아오는 MStatus는 이제 "큐에 넣는 데 성공했는가"만 말한다. 메뉴
+    //    빌드 자체의 실패(예: 메뉴 이름 충돌)는 나중에 유휴 시점에
+    //    일어나므로 여기서는 알 수 없고 스크립트 에디터에만 남는다. 어느
+    //    쪽이든 로드를 막지 않는다는 성격은 그대로이므로 warn만 하는 형태를
+    //    유지하되, 문구를 실제로 확인한 것(큐잉)에 맞춘다.
+    //  - 유휴 큐를 돌리지 않는 환경(배치 mayapy)에서는 이 커맨드가 아예
+    //    실행되지 않는다. 배치 모드에서는 원래도 메뉴가 만들어지지 않았고
+    //    (위 문단), tests/maya/test_main_menu.py는 커맨드를 스스로 직접
+    //    부르므로 검증 범위는 달라지지 않는다.
+    const MStatus menuStatus = MGlobal::executeCommandOnIdle("maroBuildMenu");
     if (!menuStatus) {
         maro::BoadMaro::warn(
-            "Maro: failed to build the Maro menu (non-fatal -- UI convenience only).");
+            "Maro: failed to queue the Maro menu build (non-fatal -- UI convenience only).");
     }
 
     maro::BoadMaro::info("Maro: plugin loaded.");

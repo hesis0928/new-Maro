@@ -86,7 +86,26 @@ assert maroMainWindow.VIEWPORT_NAME == "maroMainWindowViewport", (
     f"VIEWPORT_NAME must match the MEL cleanup in MaroPluginMain.cpp, "
     f"got {maroMainWindow.VIEWPORT_NAME!r}"
 )
-print("C++/Python UI name contract OK")
+
+# [최종 리뷰 I7] 위 두 assert는 Python 쪽 값이 우리가 기대하는 리터럴과
+# 같은지만 본다 -- MaroPluginMain.cpp의 MEL 정리 문자열이 나중에 바뀌어도
+# 이 테스트는 계속 통과한다(Python 쪽만 보니까). 그러면 어긋남은 사람이
+# 대화형 Maya에서 언로드 크래시로 만나기 전에는 드러나지 않는다. C++ 소스
+# 자체를 읽어서 두 리터럴이 실제로 거기 있는지 대조해 계약을 양쪽 다
+# 고정한다(setStyleSheet 점검이 이미 쓰는 것과 같은 소스-읽기 기법).
+_thisDir = os.path.dirname(os.path.abspath(__file__))
+_pluginMainCpp = os.path.join(_thisDir, "..", "..", "src", "maro_plugin", "MaroPluginMain.cpp")
+with open(_pluginMainCpp, encoding="utf-8") as _handle:
+    _pluginMainSource = _handle.read()
+assert maroMainWindow.CONTROL_NAME in _pluginMainSource, (
+    f"MaroPluginMain.cpp no longer mentions {maroMainWindow.CONTROL_NAME!r} -- "
+    "unload cleanup would silently no-op"
+)
+assert maroMainWindow.VIEWPORT_NAME in _pluginMainSource, (
+    f"MaroPluginMain.cpp no longer mentions {maroMainWindow.VIEWPORT_NAME!r} -- "
+    "unload cleanup would silently no-op"
+)
+print("C++/Python UI name contract OK (pinned on both sides)")
 
 # 배치 모드에서 buildUI()를 부르면 QWidget 생성으로 프로세스가 abort한다 --
 # 가드가 그것을 잡을 수 있는 예외로 바꾼다. 이 테스트가 통과한다는 것 자체가

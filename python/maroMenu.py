@@ -36,7 +36,14 @@ def build():
     if cmds.menu(MENU_NAME, exists=True):
         return
     cmds.menu(MENU_NAME, parent="MayaWindow", label="Maro", tearOff=False)
-    cmds.menuItem(label="Maro 창 열기", command="cmds.maroMainWindow()", parent=MENU_NAME)
+    # [최종 리뷰 I6] Maya는 이 문자열을 __main__ 네임스페이스에서 실행한다.
+    # cmds가 거기 이미 바인딩돼 있다는 보장이 없다(대화형 세션에서는 보통
+    # 되지만, Maya 자신의 코드도 이걸 가정하지 않는다 --
+    # maya/app/stereo/cameraSetTool.py처럼 import를 커맨드 문자열 안에
+    # 직접 넣는다). 같은 패턴을 따른다.
+    cmds.menuItem(label="Maro 창 열기",
+                  command="import maya.cmds as cmds\ncmds.maroMainWindow()",
+                  parent=MENU_NAME)
     cmds.menuItem(divider=True, parent=MENU_NAME)
     cmds.menuItem(label="ROS 연결 설정 (준비 중)", enable=False, parent=MENU_NAME)
     cmds.menuItem(label="환경설정 (준비 중)", enable=False, parent=MENU_NAME)
