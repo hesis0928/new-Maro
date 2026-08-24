@@ -125,47 +125,46 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 
 # 패널 UI 모듈은 플러그인 .mll 옆에 둔다. maroDiagPanel 커맨드가 그
 # 디렉터리를 sys.path에 넣으므로 사용자가 MAYA_SCRIPT_PATH를 손댈 필요가 없다.
+# Task 2/3에서 maroMainWindow/maroMenu가 추가될 때는 아래 리스트에 파일명만
+# 더하면 된다 -- add_custom_command/add_custom_target 블록은 모듈마다 이
+# foreach가 알아서 독립적으로 만들어 준다.
 #
 # I9: POST_BUILD는 ${PROJECT_NAME}의 relink 엣지에 묶여 있다 -- .py만 고쳐서
 # 빌드하면 C++ 쪽에 변경이 없어 relink가 안 일어나고, 그러면 이 COMMAND도
 # 조용히 스킵되어 스테일 모듈이 그대로 배포된 채 테스트가 통과해 버린다.
-# 대신 OUTPUT 기반 add_custom_command로 python/maroDiagPanel.py 자체를
-# 빌드 입력으로 만든다: DEPENDS가 소스 파일을 직접 가리키므로 빌드 도구(Ninja든
-# MSBuild든)가 그 mtime을 보고 재실행 여부를 판단하고, .py만 바뀌어도 다시
-# 복사된다 -- 이 메커니즘 자체는 제너레이터와 무관하다.
-# OUTPUT 자리에는 $<TARGET_FILE_DIR:...>가 더 깔끔한 표기지만, 여기서는
-# 생성 시점에 "No target maro"로 실패한다 -- 컨피그 시점에는 타깃이 분명히
-# 존재하는데도 그렇다. build_plugin()(devkit의 pluginEntry.cmake)이 function()
-# 안에서 add_library()로 타깃을 만들기 때문에, 이 구성에서는 CMake의 생성 시점
-# 타깃 조회가 OUTPUT 자리의 젠엑스에 대해 해소되지 않는다. 그래서 OUTPUT에는
-# 타깃 조회가 필요 없는 것만 쓴다.
+# 대신 OUTPUT 기반 add_custom_command로 python/<module>.py 자체를 빌드 입력으로
+# 만든다: DEPENDS가 소스 파일을 직접 가리키므로 빌드 도구(Ninja든 MSBuild든)가
+# 그 mtime을 보고 재실행 여부를 판단하고, .py만 바뀌어도 다시 복사된다 -- 이
+# 메커니즘 자체는 제너레이터와 무관하다.
 #
-# [최종 리뷰 I-1] 예전 주석은 여기서 CMAKE_CURRENT_BINARY_DIR만 쓰면 되는
-# 이유를 "이 프로젝트는 단일 컨피그(Ninja, Ninja Multi-Config 아님)라 타깃의
-# 런타임 출력 디렉터리에 컨피그별 하위 폴더가 붙지 않는다 -- 디스크에서 확인"
-# 이라고 단언했는데, 제너레이터가 Visual Studio(멀티 컨피그)로 바뀐 시점에 그
-# 전제는 거짓이 됐다. 실제로는 maro.mll이
-# out/build/src/maro_plugin/<config>/에 놓이는데 이 .py만 그 한 칸 위에 남아,
-# maroDiagPanel 커맨드가 .mll 디렉터리를 sys.path에 넣어도(MaroPanelCommands.cpp)
-# import maroDiagPanel이 실패했다 -- tests/maya/test_panel_commands.py가 오래도록
-# "원인 불명의 기존 실패"로 취급돼 온 것이 바로 이것이고, 테스트만이 아니라 실제
-# 사용자의 패널도 같은 이유로 열리지 않았다. 그래서 아래 OUTPUT에 $<CONFIG>를
-# 함께 넣는다. $<CONFIG>는 타깃 조회가 필요 없는 젠엑스라 위의 실패 모드에
-# 걸리지 않는다 -- 같은 이유를 아래 MARO_SENTINEL_EXE_OUT 블록의 주석이 멀티
-# 컨피그 쪽 관점에서 더 자세히 적어 두었다. COMMAND 안에서는 TARGET_FILE_DIR
+# OUTPUT 경로가 $<TARGET_FILE_DIR:${PROJECT_NAME}>이 아니라
+# CMAKE_CURRENT_BINARY_DIR/$<CONFIG>인 이유, 그리고 (이 빌드 트리가 Visual
+# Studio 멀티 컨피그 제너레이터라) $<CONFIG>를 반드시 함께 넣어야 하는 이유는
+# 아래 MARO_SENTINEL_EXE_OUT 블록의 주석에 자세히 적어 두었다 -- 요약하면:
+# build_plugin()(devkit의 pluginEntry.cmake)이 function() 안에서 add_library()로
+# ${PROJECT_NAME} 타깃을 만들기 때문에, OUTPUT 자리에서는 CMake의 생성 시점
+# 타깃 조회가 해소되지 않아 $<TARGET_FILE_DIR:...>를 쓰면 "No target maro"로
+# 실패한다. 그래서 OUTPUT에는 타깃 조회가 필요 없는 $<CONFIG>만 쓰고,
+# CMAKE_CURRENT_BINARY_DIR/$<CONFIG>가 곧 $<TARGET_FILE_DIR:${PROJECT_NAME}>과
+# 같은 경로임을 디스크에서 확인해 뒀다. COMMAND 안에서는 TARGET_FILE_DIR
 # 젠엑스가 정상 동작하므로(빌드 규칙별로 해소되며 OUTPUT 파싱 시점이 아니다)
 # 디렉터리 생성에는 그것을 그대로 쓴다.
-set(MARO_DIAG_PANEL_PY_SRC "${CMAKE_SOURCE_DIR}/python/maroDiagPanel.py")
-set(MARO_DIAG_PANEL_PY_OUT "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/maroDiagPanel.py")
-add_custom_command(
-    OUTPUT "${MARO_DIAG_PANEL_PY_OUT}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${MARO_DIAG_PANEL_PY_SRC}" "${MARO_DIAG_PANEL_PY_OUT}"
-    DEPENDS "${MARO_DIAG_PANEL_PY_SRC}"
-    COMMENT "Copying maroDiagPanel.py next to the plug-in")
-add_custom_target(maro_diag_panel_py ALL DEPENDS "${MARO_DIAG_PANEL_PY_OUT}")
-add_dependencies(${PROJECT_NAME} maro_diag_panel_py)
+set(MARO_PLUGIN_PY_MODULES
+    maroDiagPanel
+)
+foreach(pyModule IN LISTS MARO_PLUGIN_PY_MODULES)
+    set(pyModuleSrc "${CMAKE_SOURCE_DIR}/python/${pyModule}.py")
+    set(pyModuleOut "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${pyModule}.py")
+    add_custom_command(
+        OUTPUT "${pyModuleOut}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${pyModuleSrc}" "${pyModuleOut}"
+        DEPENDS "${pyModuleSrc}"
+        COMMENT "Copying ${pyModule}.py next to the plug-in")
+    add_custom_target(maro_py_${pyModule} ALL DEPENDS "${pyModuleOut}")
+    add_dependencies(${PROJECT_NAME} maro_py_${pyModule})
+endforeach()
 
 # 감시자 실행 파일을 플러그인 옆에 둔다. MaroSentinelClient.cpp가 자기
 # 모듈(.mll) 경로 기준으로 그 디렉터리에서 maro_sentinel.exe를 찾는다.
