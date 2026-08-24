@@ -100,7 +100,10 @@ def _buildLabeledViewport(parent, label, panelName):
     Maya/ROS 두 뷰포트가 라벨 문구만 다르고 나머지 조립(스테일 패널 정리,
     chrome 숨김, formLayout attach)은 완전히 같기 때문이다. 반환값은
     formLayout attach에 쓸 수 있는 패널의 **컨트롤** 이름이다(패널 이름
-    자체가 아니다 -- Phase 0-1의 같은 주석 참고).
+    자체가 아니다 -- `modelPanel`은 패널 레지스트리의 이름이지 레이아웃이
+    아니라서 `formLayout`의 attachForm/attachControl이 그 이름을 못 받는다.
+    그 패널을 담고 있는 컨트롤(`modelPanel -q -control`)이 진짜 붙일 수
+    있는 대상이다).
     """
     side = cmds.formLayout(parent=parent)
     labelControl = cmds.text(label=label, parent=side)
@@ -132,10 +135,10 @@ def buildUI():
 
     form = cmds.formLayout()
 
-    # 반환값(패널의 control 이름)은 지금은 안 쓴다 -- Phase 3가 ROS 쪽
-    # 뷰포트를 좌표 변환 대상으로 지목할 때가 돼야 필요해진다. 그때 다시
-    # 받아 쓴다(YAGNI -- 지금 안 쓰는 변수를 미리 만들어두지 않는다).
     pane = cmds.paneLayout(configuration="vertical2", parent=form)
+    # 두 호출의 반환값(각 패널의 control 이름)은 지금은 안 쓴다 -- Phase 3가
+    # ROS 쪽 뷰포트를 좌표 변환 대상으로 지목할 때가 돼야 필요해진다. 그때
+    # 다시 받아 쓴다(YAGNI -- 지금 안 쓰는 변수를 미리 만들어두지 않는다).
     _buildLabeledViewport(pane, "Maya", VIEWPORT_NAME_MAYA)
     _buildLabeledViewport(pane, "ROS", VIEWPORT_NAME_ROS)
 

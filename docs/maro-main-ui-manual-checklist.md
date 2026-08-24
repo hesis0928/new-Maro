@@ -92,24 +92,77 @@
 
 ## 1-1. 듀얼 뷰포트 (Phase 2) — **[필수 · go/no-go]**
 
+이 절은 `formLayout > paneLayout > formLayout > (라벨+modelPanel)`이라는
+새 중첩 구조를 처음으로 실제 Maya에서 확인하는 자리다 — 설계/플랜 문서
+어디서도 이 중첩이 실제로 그렇게 붙는지 검증된 적이 없다. **레이아웃이
+이상하게 나오면(패널이 겹쳐 보이거나, 하나가 안 보이거나, 라벨이 없거나)
+바로 BLOCKED로 적지 말고** 아래를 실행해 실제로 어떻게 붙었는지 먼저
+기록한다:
+
+```python
+cmds.paneLayout("maroMainWindowViewportMaya", q=True, control=True)  # 확인용, 존재해야 함
+```
+
+두 패널이 각자의 `formLayout` 안에 제대로 들어갔다면 `paneLayout`의
+직계 자식은 그 두 `formLayout` 2개여야 한다. 아래로 직접 확인 가능:
+
+```python
+# pane 변수 이름은 모르니, workspaceControl 안의 paneLayout을 찾는다
+cmds.lsUI(type="paneLayout")
+# 위에서 나온 이름 중 Maro 창에 속한 것을 골라:
+cmds.paneLayout("<위에서 찾은 이름>", q=True, childArray=True)
+```
+
+결과가 2개 항목(formLayout 2개)이면 의도대로 붙은 것이다. 4개 항목(라벨+
+modelPanel이 paneLayout에 직접 붙어버림)이면 중간 `formLayout`이 무시된
+것이므로 설계를 다시 봐야 한다 — 이 경우 어떤 결과가 나왔는지 보고에
+남긴다.
+
 - [ ] 창을 열면 뷰포트가 **두 개** 좌우로 나란히 보인다("테스트" 버튼은
       맨 위 띠에 그대로 있다).
 - [ ] 좌측 뷰포트 위에 "Maya", 우측 뷰포트 위에 "ROS" 라벨이 각각 보인다.
-- [ ] 좌측 뷰포트에서 씬을 조작(궤도/팬/줌)해도 **우측 뷰포트의 카메라는
-      바뀌지 않는다**(두 뷰포트는 서로 독립된 카메라를 가진다 — 아직은
-      의도적으로 동기화하지 않는다).
+- [ ] **카메라 관찰(합/불합격 판정 아님, 사실만 기록)** — 좌측에서 궤도/팬/줌을
+      해본 뒤 우측 뷰포트가 같이 움직이는지 관찰하고, 아래로 실제 카메라를
+      확인한다:
+
+      ```python
+      cmds.modelPanel("maroMainWindowViewportMaya", q=True, camera=True)
+      cmds.modelPanel("maroMainWindowViewportRos", q=True, camera=True)
+      ```
+
+      **두 이름이 같게 나오는 것(즉 두 뷰포트가 같은 카메라를 공유해서
+      같이 움직이는 것)은 Phase 2 범위에서 실패가 아니다** — 코드가
+      `-camera`를 명시적으로 안 주므로 오히려 그럴 가능성이 높다. 카메라를
+      뷰포트별로 분리하는 것은 Phase 3의 몫이다. 여기서는 "같다/다르다"와
+      실제로 관찰한 동작만 결과란에 적어 둔다.
 - [ ] 우측 뷰포트도 좌측과 똑같이 궤도/팬/줌이 되고, 좌측과 같은 씬(같은
       큐브 등)을 그린다(아직 좌표 변환 없음 — Phase 3에서 달라진다).
 - [ ] 두 뷰포트 모두 chrome(메뉴바/아이콘 바)이 숨겨져 있다.
-- [ ] 창을 띄운 채 `cmds.unloadPlugin("maro")` 실행 → **Maya가 크래시하지
-      않는다**, 스크립트 에디터에 에러가 없다, 언로드 후 아래가 전부
-      `False`/빈 목록이다:
+- [ ] **언로드(§3와 같은 절차, 이름만 두 개로)** — 창을 띄운 채
+      `cmds.unloadPlugin("maro")` 실행 → **Maya가 크래시하지 않는다**,
+      스크립트 에디터에 에러가 없다(단, §3이 기록해 둔 "로드-언로드를 유휴
+      시간 없이 바로 이어붙이면 큐에 남아있던 `maroBuildMenu` 호출이
+      뒤늦게 프로시저를 못 찾는다는 에러 하나"는 알려진 예외라 실패로 안
+      침), 언로드 후 아래가 전부 `False`다:
 
       ```python
       cmds.workspaceControl("maroMainWindowControl", exists=True)   # False
       cmds.modelPanel("maroMainWindowViewportMaya", exists=True)    # False
       cmds.modelPanel("maroMainWindowViewportRos", exists=True)     # False
       ```
+
+      **§3과 마찬가지로 플로팅 상태에서 한 번, §4에서 도킹한 뒤 다시 한 번,
+      총 두 번 실행한다.**
+- [ ] **재로드 후 재오픈** — 언로드 후 다시 로드하고 창을 다시 연다:
+
+      ```python
+      cmds.loadPlugin(r"C:\Users\ckd30\Projects\Maya_Ros_Sim\out\build\src\maro_plugin\Release\maro.mll")
+      cmds.maroMainWindow()
+      ```
+
+      이름 충돌 없이 두 뷰포트가 다시 정상적으로 뜬다(이번 단계가 새로
+      추가한 `_deleteStalePanel(panelName)`의 두 뷰포트 버전을 실제로
+      거치는 유일한 경로다).
 
 ## 2. PySide6 버튼이 같은 창 안에 살아 있는가 — **[필수 · go/no-go]**
 
@@ -163,12 +216,16 @@
       "프로시저를 찾을 수 없다"류의 에러가 찍힐 수 있다(최종 리뷰 I5/N5) —
       크래시 없이 이 에러 하나만 나타났다면 실패로 보지 않는다.
 - [ ] 창이 닫힌다(`uninitializePlugin`이 `maroMainWindowControl`을 닫고, 남아
-      있으면 `maroMainWindowViewport` 패널까지 지운다).
-- [ ] 언로드 직후 아래가 전부 `False`/빈 목록이다:
+      있으면 두 뷰포트 패널(`maroMainWindowViewportMaya`/
+      `maroMainWindowViewportRos`, Phase 2부터 둘로 늘어남)까지 지운다).
+- [ ] 언로드 직후 아래가 전부 `False`다(Phase 2부터 뷰포트가 두 개라 이름도
+      두 개 확인한다 — `maroMainWindowViewport`(단수)는 더 이상 존재하지
+      않는 이름이라 확인해도 항상 `[]`만 나오고 아무것도 증명하지 못한다):
 
       ```python
       cmds.workspaceControl("maroMainWindowControl", exists=True)   # False
-      [p for p in cmds.getPanel(type="modelPanel") if p == "maroMainWindowViewport"]  # []
+      cmds.modelPanel("maroMainWindowViewportMaya", exists=True)    # False
+      cmds.modelPanel("maroMainWindowViewportRos", exists=True)     # False
       ```
 
 - [ ] 다시 로드하고 다시 열어도 정상이다(패널 이름 충돌이 없다):
@@ -209,10 +266,12 @@
 ## 4. `workspaceControl` 통합이 `maroDiagPanel`과 동등한가
 
 - [ ] **[필수]** **도킹** — 창을 Maya 창 가장자리로 끌어 도킹되는지, 다시
-      떼어내 플로팅으로 돌아오는지 확인한다. 도킹된 상태에서도 뷰포트 조작과
-      버튼 클릭이 그대로 동작한다(도킹은 `-uiScript`로 UI를 다시 짓게
-      만드므로, `buildUI()`가 두 번째로 불려도 패널 이름 충돌 없이 성립하는지가
-      실제로 확인되는 지점이다 — `_deleteStalePanel()`이 그것을 맡는다).
+      떼어내 플로팅으로 돌아오는지 확인한다. 도킹된 상태에서도 두 뷰포트
+      조작과 버튼 클릭이 그대로 동작한다(도킹은 `-uiScript`로 UI를 다시 짓게
+      만드므로, `buildUI()`가 두 번째로 불려도 **두 뷰포트 모두** 패널 이름
+      충돌 없이 성립하는지가 실제로 확인되는 지점이다 —
+      `_deleteStalePanel(panelName)`이 각 뷰포트 이름으로 한 번씩 그것을
+      맡는다).
       **도킹한 채로 §3의 언로드 테스트를 한 번 더 실행한다** — §3의 결과표
       "도킹" 행이 바로 이 실행 결과다.
       복원 분기도 도킹 상태에서 한 번 더 확인한다: 도킹된 채로
@@ -225,45 +284,36 @@
       `executeCommandOnIdle`로 미뤄 두므로(최종 리뷰 I5), 플러그인이
       Maya UI 구성 전에 오토로드되는 이 상황에서 메뉴가 실제로 나타나는지
       확인하는 유일한 지점이다. 안 보이면 이 항목은 실패로 기록한다.
-- [ ] **[정보성 · 실패해도 비차단]** **두 번째 뷰포트 여지 확인**(설계 스펙
-      §4.3의 Phase 2 준비) — 창이 열린 상태에서 아래를 실행해 같은
-      폼레이아웃 안에 두 번째 `modelPanel`을 만들어도 첫 번째가 깨지지
-      않는지 본다. **주의**: 아래 코드는 새 패널의 위치를 지정하지 않으므로
-      기본적으로 왼쪽 위에 생겨 첫 번째 뷰포트와 겹친다 — 겹치는 것 자체는
-      실패가 아니다, 확인할 것은 오직 "첫 번째 뷰포트가 여전히 그려지고
-      조작되는가"뿐이다. 실패하면 Phase 2(뷰포트 2개)를 다시 설계해야
-      한다는 뜻이지만, 이 태스크 자체를 BLOCKED로 만들지는 않는다 — 반드시
-      보고에는 남긴다.
-
-      ```python
-      import maya.cmds as cmds
-      panelControl = cmds.modelPanel("maroMainWindowViewport", q=True, control=True)
-      form = cmds.control(panelControl, q=True, parent=True)
-      probe = cmds.modelPanel("maroProbeViewport", parent=form)
-      # 첫 뷰포트가 여전히 그리고 조작되는지 눈으로 확인한 뒤:
-      cmds.deleteUI("maroProbeViewport", panel=True)
-      ```
+- [ ] **N/A — Phase 2가 실제로 구현되어 §1-1로 대체됨.** 이 항목은 원래
+      Phase 2를 만들기 *전에* "두 번째 뷰포트가 첫 번째를 깨뜨리지 않을까"를
+      미리 확인해 두려던 자리표시자였다. 지금은 실제 듀얼 뷰포트가 §1-1에
+      있으므로 이 항목은 더 이상 뜻이 없다 — 여기 있던 스니펫(임시로 세
+      번째 패널 `maroProbeViewport`를 만들어보는 것)은 실행하지 않는다
+      (`maroMainWindowViewport`(단수)가 가리키는 패널이 이제 없어서 그대로
+      실행하면 에러만 난다).
 
 ---
 
 ## 결과 기록
 
 확인한 사람이 날짜와 결과를 여기에 적는다. **[필수]** 표시된 모든 행이
-통과해야 Phase 0-1이 완료된 것으로 본다(§4의 "두 번째 뷰포트 여지 확인"은
-정보성이라 이 판정에 포함되지 않는다). Maya 빌드 번호도 함께 기록한다.
+통과해야 그 행이 속한 Phase가 완료된 것으로 본다 — 이 표는 Phase 0-1과
+Phase 2 판정을 함께 담고 있다(§1-1이 Phase 2 소속, 나머지는 Phase 0-1
+소속). §4의 "두 번째 뷰포트 여지 확인"은 Phase 2가 실제로 구현되며 N/A로
+대체됐다. Maya 빌드 번호도 함께 기록한다.
 
-| 절 | 필수 여부 | 결과 | 날짜 / 확인자 / Maya 빌드 | 비고 |
-|---|---|---|---|---|
-| 1. modelPanel 뷰포트 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 큐브 렌더링, 궤도/팬/줌, chrome 숨김 전부 확인 |
-| 1-1. 듀얼 뷰포트 (독립 조작 + 언로드) | 필수 | 미실행 | | |
-| 2. PySide6 버튼 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 표시/스타일/클릭 확인. 리사이즈·1분 유지 항목은 별도로 재확인 안 함 |
-| 2. `show()` 복원 분기 — 플로팅 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 창 열린 채 재호출, 에러 없이 기존 창 유지 |
-| 3. 언로드 크래시 없음 — 플로팅 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 크래시/에러 없음, `workspaceControl` exists=False, 뷰포트 패널 목록 `[]` 둘 다 확인 |
-| 3. 언로드 크래시 없음 — 도킹 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 도킹 상태에서 재실행, 문제 없음 |
-| 3-1. Maro 메뉴 (멱등성 포함) | 필수 (Task 3) | **부분 PASS** | 2026-08-25 / 사용자 / Maya 2026 | 메뉴 표시/클릭 확인됨. `cmds.maroBuildMenu()` 연속 두 번 호출하는 멱등성 자체 테스트는 미실행 |
-| 4. 도킹 (+ `show()` 복원 분기 — 도킹) | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 위 "언로드 — 도킹"과 같은 세션에서 확인 |
-| 4. 재시작 복원 (+메뉴 표시) | 필수 | **FAIL** | 2026-08-25 / 사용자 / Maya 2026 | "Windows > Workspaces > Save Current"로 레이아웃 저장 후 재시작해도 Maro 창이 자동 복원되지 않음(레이아웃 자체는 "Maro" 컴포넌트를 기억하지만 플러그인 자동 로드도, 창 재구성도 안 일어남). 수동으로 `loadPlugin` 해도 창은 안 뜸. 동일한 `workspaceControl -requiredPlugin` 메커니즘을 쓰는 기존 `maroDiagPanel`도 같은 한계를 가질 가능성이 높아, 이 브랜치가 새로 만든 회귀는 아닌 것으로 판단 — 별도 후속 조사 필요(Phase 0-1 완료 판정에는 포함하지 않음, 아래 참고) |
-| 4. 두 번째 뷰포트 여지 확인 | 정보성 | 미실행 | | 겹침 여부도 기록 |
+| 절 | Phase | 필수 여부 | 결과 | 날짜 / 확인자 / Maya 빌드 | 비고 |
+|---|---|---|---|---|---|
+| 1. modelPanel 뷰포트 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 큐브 렌더링, 궤도/팬/줌, chrome 숨김 전부 확인 |
+| 1-1. 듀얼 뷰포트 (레이아웃+독립 조작+언로드+재오픈) | 2 | 필수 | 미실행 | | |
+| 2. PySide6 버튼 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 표시/스타일/클릭 확인. 리사이즈·1분 유지 항목은 별도로 재확인 안 함 |
+| 2. `show()` 복원 분기 — 플로팅 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 창 열린 채 재호출, 에러 없이 기존 창 유지 |
+| 3. 언로드 크래시 없음 — 플로팅 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 크래시/에러 없음, `workspaceControl` exists=False, 뷰포트 패널 목록 `[]` 둘 다 확인(주: 이 실행 시점엔 뷰포트가 하나였다 — Phase 2 이후 재실행 시 위 §3의 갱신된 두-이름 확인으로 다시 돈다) |
+| 3. 언로드 크래시 없음 — 도킹 | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 도킹 상태에서 재실행, 문제 없음(위와 같은 주: 뷰포트 하나였던 시점) |
+| 3-1. Maro 메뉴 (멱등성 포함) | 0-1 | 필수 (Task 3) | **부분 PASS** | 2026-08-25 / 사용자 / Maya 2026 | 메뉴 표시/클릭 확인됨. `cmds.maroBuildMenu()` 연속 두 번 호출하는 멱등성 자체 테스트는 미실행 |
+| 4. 도킹 (+ `show()` 복원 분기 — 도킹) | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 위 "언로드 — 도킹"과 같은 세션에서 확인 |
+| 4. 재시작 복원 (+메뉴 표시) | 0-1 | 필수 | **FAIL** | 2026-08-25 / 사용자 / Maya 2026 | "Windows > Workspaces > Save Current"로 레이아웃 저장 후 재시작해도 Maro 창이 자동 복원되지 않음(레이아웃 자체는 "Maro" 컴포넌트를 기억하지만 플러그인 자동 로드도, 창 재구성도 안 일어남). 수동으로 `loadPlugin` 해도 창은 안 뜸. 동일한 `workspaceControl -requiredPlugin` 메커니즘을 쓰는 기존 `maroDiagPanel`도 같은 한계를 가질 가능성이 높아, 이 브랜치가 새로 만든 회귀는 아닌 것으로 판단 — 별도 후속 조사 필요(Phase 0-1 완료 판정에는 포함하지 않음, 아래 참고) |
+| 4. 두 번째 뷰포트 여지 확인 | 0-1 | N/A | N/A | | Phase 2가 실제로 구현되어 §1-1로 대체됨 — 더 이상 실행하지 않음 |
 
 ### 종합 판정 (2026-08-25)
 
