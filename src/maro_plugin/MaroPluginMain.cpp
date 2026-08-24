@@ -11,6 +11,7 @@
 #include "MaroDiagCommands.h"
 #include "MaroLidarNode.h"
 #include "MaroMainThreadQueue.h"
+#include "MaroMainWindowCommand.h"
 #include "MaroPanelCommands.h"
 #include "MaroRemedyCommands.h"
 #include "MaroSentinelClient.h"
@@ -338,6 +339,13 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroMainWindow",
+                                    maro::MaroMainWindowCommand::creator);
+    if (!status) {
+        status.perror("Maro: failed to register maroMainWindow");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -383,6 +391,21 @@ MStatus uninitializePlugin(MObject obj) {
 
         // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
         // devkit의 workspaceControlCmd 샘플이 같은 이유로 같은 일을 한다.
+        //
+        // 메인 창은 여기에 한 가지를 더 한다: 그 안의 modelPanel은 부모
+        // 레이아웃의 자식이면서 동시에 Maya의 전역 패널 레지스트리에 등록된
+        // 객체라, 컨트롤을 닫아도 등록이 남을 수 있다. 남으면 다음 로드에서
+        // 같은 이름으로 다시 만들 때 충돌한다(python 쪽 _deleteStalePanel()이
+        // 같은 것을 반대편에서 막는다). 두 이름은 python/maroMainWindow.py의
+        // CONTROL_NAME/VIEWPORT_NAME과 같은 문자열이어야 하며,
+        // tests/maya/test_main_window.py가 그 계약을 값으로 고정한다.
+        MGlobal::executeCommand(
+            "if (`workspaceControl -exists maroMainWindowControl`) "
+            "workspaceControl -e -close maroMainWindowControl;"
+            "if (`modelPanel -exists maroMainWindowViewport`) "
+            "deleteUI -panel maroMainWindowViewport;");
+        plugin.deregisterCommand("maroMainWindow");
+
         MGlobal::executeCommand(
             "if (`workspaceControl -exists maroDiagPanelControl`) "
             "workspaceControl -e -close maroDiagPanelControl;");

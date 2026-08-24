@@ -3,23 +3,19 @@
 #include <string>
 #include <vector>
 
-// MFnPlugin.h's own docs (and MApiVersion.h) require this: including it in
-// more than one translation unit of the same plug-in emits DllMain,
-// MhInstPlugin, MApiVersion and ADSK_PLUGIN_SIGNATURE again, which the
-// linker then reports as LNK2005 against MaroPluginMain.cpp.obj (the file
-// that legitimately owns those symbols). Defining both macros before the
-// include keeps this file to just MFnPlugin::findPlugin/loadPath.
-#define MNoPluginEntry
-#define MNoVersionString
+// (예전에 여기 있던 MNoPluginEntry/MNoVersionString 두 매크로와 그 이유를
+// 적은 주석은 MaroPythonBridge.cpp로 옮겼다 -- MFnPlugin.h를 포함하던 유일한
+// 이유였던 findPlugin/loadPath 코드가 그 파일로 갔기 때문이다. 이 파일은 더
+// 이상 MFnPlugin.h를 포함하지 않는다.)
 
 #include <maya/MArgDatabase.h>
 #include <maya/MArgList.h>
-#include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
 #include <maya/MSelectionList.h>
 #include <maya/MStringArray.h>
 
 #include "MaroDiag.h"
+#include "MaroPythonBridge.h"
 #include "maro_diag/BookStore.h"
 #include "maro_diag/PanelPresenter.h"
 #include "maro_diag/PanelView.h"
@@ -291,46 +287,12 @@ MStatus MaroDiagPanelDetailCommand::doIt(const MArgList& args) {
 void* MaroDiagPanelCommand::creator() { return new MaroDiagPanelCommand(); }
 
 MStatus MaroDiagPanelCommand::doIt(const MArgList& /*args*/) {
-    try {
-        // 플러그인 .mll이 있는 디렉터리에 maroDiagPanel.py를 함께 배포한다.
-        // 여기서 sys.path에 넣어야 사용자가 MAYA_SCRIPT_PATH를 손대지 않고도
-        // 패널이 뜬다.
-        //
-        // findPlugin은 MObject를 돌려준다 -- 경로 문자열이 아니다. 경로는
-        // 그 MObject로 만든 MFnPlugin의 loadPath()에서 나온다.
-        // 공개 생성자는 MObject&(비상수)를 받으므로 const로 두면 안 된다.
-        MObject pluginObj = MFnPlugin::findPlugin("maro");
-        if (pluginObj.isNull()) {
-            MGlobal::displayError("Maro: could not locate the loaded maro plug-in.");
-            return MS::kFailure;
-        }
-        MStatus status;
-        // vendor/version/apiVersion은 기본값이 있지만 상태를 받으려면
-        // 앞의 셋을 함께 넘겨야 한다.
-        MFnPlugin pluginFn(pluginObj, "Unknown", "Unknown", "Any", &status);
-        if (!status) return status;
-        const MString pluginDir = pluginFn.loadPath(&status);
-        if (!status) return status;
-
-        MString python;
-        python += "import os, sys\n";
-        python += "d = r'";
-        python += pluginDir;
-        python += "'\n";
-        // loadPath()가 디렉터리를 주는지 파일까지 주는지에 기대지 않는다.
-        python += "if os.path.isfile(d): d = os.path.dirname(d)\n";
-        python += "if d not in sys.path: sys.path.insert(0, d)\n";
-        python += "import maroDiagPanel\n";
-        python += "maroDiagPanel.show()\n";
-
-        return MGlobal::executePythonCommand(python);
-    } catch (const std::exception& e) {
-        MGlobal::displayError(MString("Maro: maroDiagPanel failed: ") + e.what());
-        return MS::kFailure;
-    } catch (...) {
-        MGlobal::displayError("Maro: maroDiagPanel failed with unknown error.");
-        return MS::kFailure;
-    }
+    // 플러그인 .mll이 있는 디렉터리에 maroDiagPanel.py를 함께 배포한다.
+    // 거기를 sys.path에 넣어야 사용자가 MAYA_SCRIPT_PATH를 손대지 않고도
+    // 패널이 뜬다 -- 그 일(그리고 예전에 이 함수 본문 전부였던 try/catch,
+    // findPlugin, loadPath, python 문자열 조립)은 이제
+    // MaroPythonBridge.h의 공용 헬퍼가 한다. 동작은 그대로다.
+    return runPluginPythonModule("maroDiagPanel", "maroDiagPanel.show()");
 }
 
 }  // namespace maro

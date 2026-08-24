@@ -243,7 +243,7 @@ if(MARO_BUILD_PLUGIN)
                       robustness diag_boad diag_onfix diag_book
                       diag_book_cross_session diag_remedy
                       diag_degraded diag_degraded_remedy diag_thread
-                      panel_commands journal remedy_capture
+                      panel_commands main_window journal remedy_capture
                       remedy_availability remedy_ambiguous_names
                       main_thread_queue remedy_apply sentinel lidar_node)
         add_test(NAME maya_${maya_test}

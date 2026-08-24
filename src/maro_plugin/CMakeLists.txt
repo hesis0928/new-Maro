@@ -16,6 +16,8 @@ set(SOURCE_FILES
     MaroDiag.cpp
     MaroDiagCommands.cpp
     MaroPanelCommands.cpp
+    MaroPythonBridge.cpp
+    MaroMainWindowCommand.cpp
     MaroMainThreadQueue.cpp
     MaroRemedyCommands.cpp
     MaroSentinelClient.cpp
@@ -123,11 +125,12 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Maro: staging ROS 2 + Embree runtime DLLs next to the plugin"
 )
 
-# 패널 UI 모듈은 플러그인 .mll 옆에 둔다. maroDiagPanel 커맨드가 그
-# 디렉터리를 sys.path에 넣으므로 사용자가 MAYA_SCRIPT_PATH를 손댈 필요가 없다.
-# Task 2/3에서 maroMainWindow/maroMenu가 추가될 때는 아래 리스트에 파일명만
-# 더하면 된다 -- add_custom_command/add_custom_target 블록은 모듈마다 이
-# foreach가 알아서 독립적으로 만들어 준다.
+# 패널/창 UI 모듈은 플러그인 .mll 옆에 둔다. UI 커맨드들이 공유하는
+# maro::runPluginPythonModule(MaroPythonBridge.cpp)이 그 디렉터리를 sys.path에
+# 넣으므로 사용자가 MAYA_SCRIPT_PATH를 손댈 필요가 없다. Task 3에서 maroMenu가
+# 추가될 때는 아래 리스트에 파일명만 더하면 된다 --
+# add_custom_command/add_custom_target 블록은 모듈마다 이 foreach가 알아서
+# 독립적으로 만들어 준다.
 #
 # I9: POST_BUILD는 ${PROJECT_NAME}의 relink 엣지에 묶여 있다 -- .py만 고쳐서
 # 빌드하면 C++ 쪽에 변경이 없어 relink가 안 일어나고, 그러면 이 COMMAND도
@@ -151,6 +154,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 # 디렉터리 생성에는 그것을 그대로 쓴다.
 set(MARO_PLUGIN_PY_MODULES
     maroDiagPanel
+    maroMainWindow
 )
 foreach(pyModule IN LISTS MARO_PLUGIN_PY_MODULES)
     set(pyModuleSrc "${CMAKE_SOURCE_DIR}/python/${pyModule}.py")
