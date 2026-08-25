@@ -1,6 +1,7 @@
 #include "MaroCapabilityNodes.h"
 
 #include <maya/MAngle.h>
+#include <maya/MArrayDataHandle.h>
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
 #include <maya/MDistance.h>
@@ -10,6 +11,10 @@
 #include <maya/MFnUnitAttribute.h>
 #include <maya/MGlobal.h>
 #include <maya/MPlug.h>
+
+#include <algorithm>
+#include <utility>
+#include <vector>
 
 #include "MaroDiag.h"
 
@@ -43,6 +48,36 @@ DgContext computeContext(const MPxNode& node, const char* nodeType) {
         ctx.nameUnavailable = true;
     }
     return ctx;
+}
+
+// sortedPoints는 curveInput 오름차순으로 이미 정렬돼 있다고 가정한다
+// (compute()가 호출 전에 정렬한다). 2개 미만이면 ratio/offset의 선형
+// 관계로 대체한다(§4의 v1 범위 -- 곡선은 선택적 오버라이드). 정의역
+// 밖이면 외삽하지 않고 가장 가까운 끝점 값으로 고정한다 -- 관절값이
+// 정의역 밖에서 발산하면 안전 문제로 이어질 수 있다.
+double interpolateCoupling(double sourceValue,
+                           const std::vector<std::pair<double, double>>& sortedPoints,
+                           double ratio, double offset) {
+    if (sortedPoints.size() < 2) {
+        return sourceValue * ratio + offset;
+    }
+    if (sourceValue <= sortedPoints.front().first) {
+        return sortedPoints.front().second;
+    }
+    if (sourceValue >= sortedPoints.back().first) {
+        return sortedPoints.back().second;
+    }
+    for (std::size_t i = 1; i < sortedPoints.size(); ++i) {
+        const auto& lo = sortedPoints[i - 1];
+        const auto& hi = sortedPoints[i];
+        if (sourceValue <= hi.first) {
+            const double span = hi.first - lo.first;
+            if (span <= 0.0) return lo.second;  // 중복 curveInput 방어
+            const double t = (sourceValue - lo.first) / span;
+            return lo.second + t * (hi.second - lo.second);
+        }
+    }
+    return sortedPoints.back().second;  // 이론상 도달하지 않는 방어적 fallback
 }
 
 }  // namespace
@@ -475,6 +510,102 @@ MStatus MaroTranslationLimitNode::compute(const MPlug& plug, MDataBlock& data) {
         maro::BoadMaro::error("MaroTranslationLimitNode.compute.UnknownException",
                               "Maro: maroTranslationLimit compute failed.",
                               computeContext(*this, "maroTranslationLimit"));
+        return MS::kFailure;
+    }
+}
+
+MTypeId MaroCouplingNode::id(0x00135109);
+MObject MaroCouplingNode::aSourceValue;
+MObject MaroCouplingNode::aRatio;
+MObject MaroCouplingNode::aOffset;
+MObject MaroCouplingNode::aOutputIsLinear;
+MObject MaroCouplingNode::aCurvePoints;
+MObject MaroCouplingNode::aCurveInput;
+MObject MaroCouplingNode::aCurveOutput;
+CapabilityOutAttrs MaroCouplingNode::out;
+
+void* MaroCouplingNode::creator() { return new MaroCouplingNode(); }
+
+MStatus MaroCouplingNode::initialize() {
+    MFnNumericAttribute numFn;
+    MFnCompoundAttribute cmpFn;
+
+    // 다른 축의 outValue/outValueLinear에서 connectAttr로만 채워진다 --
+    // maroBindAxis가 값 연결을 자동화하지 않는 기존 관례(회전축의
+    // outValue -> rotateX 수동 연결)와 같은 이유로 storable/keyable을 끈다.
+    aSourceValue = numFn.create("sourceValue", "srv", MFnNumericData::kDouble, 0.0);
+    numFn.setStorable(false);
+    numFn.setKeyable(false);
+    addAttribute(aSourceValue);
+
+    aRatio = numFn.create("ratio", "rat", MFnNumericData::kDouble, 1.0);
+    numFn.setStorable(true);
+    numFn.setKeyable(true);
+    addAttribute(aRatio);
+
+    aOffset = numFn.create("offset", "ofs", MFnNumericData::kDouble, 0.0);
+    numFn.setStorable(true);
+    numFn.setKeyable(true);
+    addAttribute(aOffset);
+
+    aOutputIsLinear = numFn.create("outputIsLinear", "oli", MFnNumericData::kBoolean, false);
+    numFn.setStorable(true);
+    numFn.setKeyable(true);
+    addAttribute(aOutputIsLinear);
+
+    aCurveInput = numFn.create("curveInput", "cvi", MFnNumericData::kDouble, 0.0);
+    aCurveOutput = numFn.create("curveOutput", "cvo", MFnNumericData::kDouble, 0.0);
+    aCurvePoints = cmpFn.create("curvePoints", "cvp");
+    cmpFn.addChild(aCurveInput);
+    cmpFn.addChild(aCurveOutput);
+    cmpFn.setStorable(true);
+    cmpFn.setArray(true);
+    cmpFn.setIndexMatters(false);  // curveInput 값으로 정렬해서 보간하므로 논리 인덱스 순서는 무의미
+    addAttribute(aCurvePoints);
+
+    createCapabilityOut(out);
+    addAttribute(out.compound);
+
+    for (const MObject& src : {aSourceValue, aRatio, aOffset, aOutputIsLinear, aCurvePoints}) {
+        attributeAffects(src, out.compound);
+    }
+    return MS::kSuccess;
+}
+
+MStatus MaroCouplingNode::compute(const MPlug& plug, MDataBlock& data) {
+    try {
+        if (plug != out.compound && plug.parent() != out.compound) {
+            return MS::kUnknownParameter;
+        }
+
+        const double sourceValue = data.inputValue(aSourceValue).asDouble();
+        const double ratio = data.inputValue(aRatio).asDouble();
+        const double offset = data.inputValue(aOffset).asDouble();
+        const bool outputIsLinear = data.inputValue(aOutputIsLinear).asBool();
+
+        std::vector<std::pair<double, double>> points;
+        MArrayDataHandle curveHandle = data.inputArrayValue(aCurvePoints);
+        for (unsigned int i = 0; i < curveHandle.elementCount(); ++i) {
+            curveHandle.jumpToArrayElement(i);
+            MDataHandle element = curveHandle.inputValue();
+            points.emplace_back(element.child(aCurveInput).asDouble(),
+                                element.child(aCurveOutput).asDouble());
+        }
+        std::sort(points.begin(), points.end(),
+                  [](const std::pair<double, double>& a,
+                     const std::pair<double, double>& b) { return a.first < b.first; });
+
+        const double value = interpolateCoupling(sourceValue, points, ratio, offset);
+
+        MDataHandle handle = data.outputValue(out.compound);
+        handle.child(out.type).setShort(outputIsLinear ? 7 : 6);
+        handle.child(out.value).setDouble(value);
+        data.setClean(plug);
+        return MS::kSuccess;
+    } catch (...) {
+        maro::BoadMaro::error("MaroCouplingNode.compute.UnknownException",
+                              "Maro: maroCoupling compute failed.",
+                              computeContext(*this, "maroCoupling"));
         return MS::kFailure;
     }
 }

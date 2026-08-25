@@ -148,6 +148,45 @@ assert abs(minY - (-5.0)) < 1e-9 and abs(maxY - 5.0) < 1e-9, \
     f"translationLimit min/max must carry centimeters (got {minY}, {maxY})"
 print("translationLimit node OK")
 
+# maroCoupling: ratio/offset 경로 (곡선 없음).
+coupling = cmds.createNode("maroCoupling", name="coupling1")
+sourceRot = cmds.createNode("maroRotation", name="couplingSource")
+cmds.setAttr(sourceRot + ".angle", 1.0)
+cmds.connectAttr(sourceRot + ".capabilityOut.capValue", coupling + ".sourceValue")
+cmds.setAttr(coupling + ".ratio", 2.0)
+cmds.setAttr(coupling + ".offset", 0.5)
+capValue = cmds.getAttr(coupling + ".capabilityOut.capValue")
+assert abs(capValue - (1.0 * 2.0 + 0.5)) < 1e-9, f"coupling ratio/offset math wrong (got {capValue})"
+assert cmds.getAttr(coupling + ".capabilityOut.capType") == 6, "coupling default capType (angular)"
+print("coupling ratio/offset OK")
+
+# outputIsLinear가 capType을 7로 바꾼다.
+cmds.setAttr(coupling + ".outputIsLinear", True)
+assert cmds.getAttr(coupling + ".capabilityOut.capType") == 7, "coupling linear capType"
+print("coupling outputIsLinear OK")
+
+# 곡선이 2점 이상이면 ratio/offset을 대체한다. 점: (0,0), (1,10), (2,10)
+# -- 0~1 구간은 기울기 10, 1~2 구간은 평평(리밋처럼 동작).
+cmds.setAttr(coupling + ".curvePoints[0].curveInput", 0.0)
+cmds.setAttr(coupling + ".curvePoints[0].curveOutput", 0.0)
+cmds.setAttr(coupling + ".curvePoints[1].curveInput", 1.0)
+cmds.setAttr(coupling + ".curvePoints[1].curveOutput", 10.0)
+cmds.setAttr(coupling + ".curvePoints[2].curveInput", 2.0)
+cmds.setAttr(coupling + ".curvePoints[2].curveOutput", 10.0)
+
+cmds.setAttr(sourceRot + ".angle", 0.5)   # 0~1 구간 중간
+mid = cmds.getAttr(coupling + ".capabilityOut.capValue")
+assert abs(mid - 5.0) < 1e-9, f"curve interpolation at midpoint wrong (got {mid})"
+
+cmds.setAttr(sourceRot + ".angle", 1.5)   # 1~2 구간(평평)
+plateau = cmds.getAttr(coupling + ".capabilityOut.capValue")
+assert abs(plateau - 10.0) < 1e-9, f"curve interpolation on plateau wrong (got {plateau})"
+
+cmds.setAttr(sourceRot + ".angle", 5.0)   # 정의역 밖 -- 외삽하지 않고 끝점 고정
+clamped = cmds.getAttr(coupling + ".capabilityOut.capValue")
+assert abs(clamped - 10.0) < 1e-9, f"out-of-domain must clamp to last point, not extrapolate (got {clamped})"
+print("coupling curve interpolation OK")
+
 # 단위 계약: MFnUnitAttribute는 데이터블록(항상 라디안)과 cmds/Attribute
 # Editor 표면(현재 UI 각도 단위, 기본 도) 사이를 변환한다. 그 변환이 실제로
 # 걸려 있는지 끝까지 증명한다 -- rotation을 180 "도"로 설정하고 axis의

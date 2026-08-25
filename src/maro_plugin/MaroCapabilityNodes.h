@@ -115,4 +115,22 @@ public:
     static CapabilityOutAttrs out;
 };
 
+class MaroCouplingNode : public MPxNode {
+public:
+    static void* creator();
+    static MStatus initialize();
+    MStatus compute(const MPlug& plug, MDataBlock& data) override;
+    static MTypeId id;
+
+    static MObject aSourceValue;     // double, 다른 축의 outValue/outValueLinear에 connectAttr로 연결
+    static MObject aRatio;           // double, 기본 1.0
+    static MObject aOffset;          // double, 기본 0.0
+    static MObject aOutputIsLinear;  // bool, 기본 false -- capType 6(각도)/7(선형) 결정
+    static MObject aCurvePoints;     // compound array: curveInput/curveOutput. 2개 이상이면
+                                      // ratio/offset 대신 이 곡선으로 piecewise-linear 보간.
+    static MObject aCurveInput;
+    static MObject aCurveOutput;
+    static CapabilityOutAttrs out;
+};
+
 }  // namespace maro

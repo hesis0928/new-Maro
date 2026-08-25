@@ -151,6 +151,8 @@ MStatus initializePlugin(MObject obj) {
         {"maroTranslationLimit", maro::MaroTranslationLimitNode::id,
          maro::MaroTranslationLimitNode::creator,
          maro::MaroTranslationLimitNode::initialize},
+        {"maroCoupling", maro::MaroCouplingNode::id,
+         maro::MaroCouplingNode::creator, maro::MaroCouplingNode::initialize},
     };
 
     for (const auto& cap : kCapabilities) {
@@ -559,6 +561,7 @@ MStatus uninitializePlugin(MObject obj) {
         plugin.deregisterCommand("maroBindAxis");
 
         plugin.deregisterNode(maro::MaroCommandDeviceNode::id);
+        plugin.deregisterNode(maro::MaroCouplingNode::id);
         plugin.deregisterNode(maro::MaroTranslationLimitNode::id);
         plugin.deregisterNode(maro::MaroTranslationNode::id);
         plugin.deregisterNode(maro::MaroSensorRangeNode::id);
