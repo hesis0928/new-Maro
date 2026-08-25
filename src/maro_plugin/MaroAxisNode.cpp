@@ -260,16 +260,10 @@ MStatus MaroAxisNode::compute(const MPlug& plug, MDataBlock& data) {
                         isLinearDrive = (capType == 4 || capType == 7);
                         primaryDriverSeen = true;
                     }
-                } else if (capType == 1) {    // limit (각도 계열 클램프, 기존 로직)
-                    const short3& enable = element.child(aCapEnable).asShort3();
-                    if (enable[component] != 0) {
-                        const double3& lo = element.child(aCapMin).asDouble3();
-                        const double3& hi = element.child(aCapMax).asDouble3();
-                        value = std::clamp(value,
-                                           std::min(lo[component], hi[component]),
-                                           std::max(lo[component], hi[component]));
-                    }
-                } else if (capType == 5) {    // translationLimit (직선 계열 클램프, limit과 동일 로직)
+                } else if (capType == 1 || capType == 5) {
+                    // limit(1, 각도 계열) / translationLimit(5, 직선 계열):
+                    // value가 어느 쪽 1차 구동 타입에서 왔든 클램프 수식은
+                    // 동일하므로 한 분기로 처리한다.
                     const short3& enable = element.child(aCapEnable).asShort3();
                     if (enable[component] != 0) {
                         const double3& lo = element.child(aCapMin).asDouble3();
