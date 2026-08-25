@@ -1239,6 +1239,7 @@ git commit -m "feat: chain dagMenuProc to add a Maro node editor item to the nat
 
 **Interfaces:**
 - Consumes: `openSingleObjectNodeEditor` (Task 4), `cmds.maroBindAxis` (pre-existing).
+- **Identifier-format constraint (Task 4 review finding, resolved in this task's code below):** `openSingleObjectNodeEditor`'s singleton registry keys on the exact string passed to it. Task 6's GSON double-click always passes `axisFullPath` from `maroListAxisNodes()` (a full DAG path, per `MaroAxisEditorCommands.cpp::listAxes()`). This task's two call sites (`_findBoundAxis`'s existing-axis lookup and the newly-created-axis path) must both normalize to a full DAG path the same way, or the same axis could get two different dictionary keys and two SONE popups. Both code blocks below already include the `cmds.ls(..., long=True)[0]` normalization — do not remove it.
 
 No automated test (Maya dialogs + `maroBindAxis`'s existing coverage already exercises the create/bind commands; this task's own logic is UI orchestration, verified manually).
 
@@ -1252,10 +1253,20 @@ Replace the placeholder from Task 7:
 
 ```python
 def _findBoundAxis(object_):
-    """object_에 이미 바인딩된 maroAxis가 있으면 그 이름, 없으면 None."""
+    """object_에 이미 바인딩된 maroAxis가 있으면 그 풀 DAG 경로, 없으면 None.
+
+    풀 경로로 정규화하는 이유: openSingleObjectNodeEditor()의 싱글턴
+    레지스트리(_OPEN_EDITORS, maroSingleObjectNodeEditor.py)는 넘겨받은
+    문자열을 그대로 딕셔너리 키로 쓴다. cmds.listConnections()는 이름
+    충돌이 없으면 짧은 이름을 줄 수 있는데, MaroAxisEditorCommands.cpp의
+    listAxes()(ONE이 GSON 더블클릭 시 쓰는 경로, Task 6)는 항상
+    MDagPath::fullPathName()을 낸다. 두 호출부가 같은 축에 대해 다른
+    문자열을 넘기면 싱글턴 검사가 같은 축을 다른 축으로 오판해 SONE
+    창이 중복 생성된다 -- 그래서 여기서 항상 풀 경로로 맞춘다.
+    """
     for connection in cmds.listConnections(object_, type="maroAxis", plugs=False) or []:
         if cmds.attributeQuery("targetObject", node=connection, exists=True):
-            return connection
+            return cmds.ls(connection, long=True)[0]
     return None
 
 
@@ -1285,6 +1296,11 @@ def _onMenuItemClicked(object_):
     cmds.undoInfo(openChunk=True)
     try:
         axis = cmds.createNode("maroAxis")
+        # 풀 경로로 정규화 -- 위 _findBoundAxis()의 docstring과 같은 이유.
+        # createNode()는 이름이 유일하면 짧은 이름을 주므로, 나중에 같은
+        # 짧은 이름의 노드가 다른 계층에 생겨도 이 축의 SONE 키는 처음
+        # 만들어질 때의 형태에 머물러 있지 않게 항상 여기서 확정한다.
+        axis = cmds.ls(axis, long=True)[0]
         cmds.maroBindAxis(axis, object_)
         cmds.setAttr(axis + ".displayName", displayName, type="string")
         cmds.setAttr(axis + ".displayColor", r, g, b, type="double3")
