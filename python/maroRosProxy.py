@@ -261,6 +261,14 @@ def _onIdle():
     `others/dynUpdateDeleteAttrWin.mel`류의 스크립트들이 전부
     `evalDeferred("scriptJob -force -kill " + $job)`로 한 틱 미뤄서
     자기 잡을 죽인다. 이 프로젝트도 같은 관례를 따른다.
+
+    [최종 리뷰, 재검증] `cmds.evalDeferred(stop)` 그 자체를 부르는
+    한 줄도 `_deferStop()`으로 한 번 더 감싸 자체 try/except를 둔다 --
+    `_onIdle` 전체의 "이 함수는 절대 예외를 밖으로 안 낸다" 규칙이
+    바깥쪽 `try/except Exception`에만 의존하면, 그 예외 처리기 **안**에서
+    부르는 `cmds.evalDeferred(...)` 자체가 던지는 경우(두 번째 자가
+    방어, 284번째 줄 근처)는 아무도 안 잡는다 -- 예외 처리기 안에서 난
+    예외는 예외 처리기가 못 잡는다.
     """
     global _CONSECUTIVE_FAILURES
 
@@ -269,7 +277,7 @@ def _onIdle():
         # 예외가 새어 나가면 안 된다는 것이 위 규칙이고, 예외 없이 도는
         # 것으로 믿는 호출까지 밖에 두면 그 규칙에 구멍이 생긴다.
         if not _panelsAlive():
-            cmds.evalDeferred(stop)
+            _deferStop()
             return
         _refreshMayaIsolation()
         _syncProxy()
@@ -281,10 +289,21 @@ def _onIdle():
         if _CONSECUTIVE_FAILURES >= _MAX_CONSECUTIVE_FAILURES:
             print("maroRosProxy: {} consecutive failures -- stopping the sync job."
                   .format(_CONSECUTIVE_FAILURES))
-            cmds.evalDeferred(stop)
+            _deferStop()
         return
 
     _CONSECUTIVE_FAILURES = 0
+
+
+def _deferStop():
+    """`cmds.evalDeferred(stop)`을 부르되, 그 호출 자체가 던지는 경우까지
+    막는다 -- `_onIdle`의 예외 처리기 안에서 이걸 부르므로, 여기서 또
+    던지면 그 예외 처리기로는 못 잡고 `_onIdle` 밖으로 새어 나간다.
+    """
+    try:
+        cmds.evalDeferred(stop)
+    except Exception:  # noqa: BLE001 -- Maya 콜백 경계
+        traceback.print_exc()
 
 
 # --- 생명주기 -----------------------------------------------------------
@@ -352,6 +371,16 @@ def stop():
     고장"이 겉보기엔 똑같아 보이는 바로 그 상황이라 이 함수가 막아야
     할 첫 번째 것이다. kill이 실패하면 id를 그대로 둬서 다음 시도가
     같은 잡을 다시 겨눌 수 있게 한다.
+
+    [최종 리뷰 재검증, I1 초과분] kill 실패 시 `_JOB_ID`만 지키고
+    `_MAYA_PANEL`/`_ROS_PANEL`도 무조건 None으로 지우면, 살아남은
+    잡의 다음 틱에서 `_panelsAlive()`가 (패널이 None이니) False가
+    되어 `_deferStop()` -> `stop()`이 다시 불리고, 같은 이유로 kill이
+    또 실패하면 **매 틱마다** 이 예외 처리기가 traceback을 찍는
+    무한 루프가 된다 -- 조용한 고아를 시끄러운 고아로 바꾸는 것뿐이라
+    더 나쁘다. 그래서 kill이 진짜 성공했을 때만 다섯 개 상태를
+    전부 지운다: 실패하면 모듈 상태를 통째로 그대로 둬서 잡이 계속
+    정상 동작하게 하고, 다음 성공한 `stop()` 호출까지 미룬다.
     """
     global _JOB_ID, _MAYA_PANEL, _ROS_PANEL, _LAST_ASSEMBLIES, _CONSECUTIVE_FAILURES
     killSucceededOrJobGone = True
@@ -364,7 +393,7 @@ def stop():
 
     if killSucceededOrJobGone:
         _JOB_ID = None
-    _MAYA_PANEL = None
-    _ROS_PANEL = None
-    _LAST_ASSEMBLIES = None
-    _CONSECUTIVE_FAILURES = 0
+        _MAYA_PANEL = None
+        _ROS_PANEL = None
+        _LAST_ASSEMBLIES = None
+        _CONSECUTIVE_FAILURES = 0

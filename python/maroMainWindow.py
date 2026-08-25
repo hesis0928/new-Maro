@@ -223,25 +223,6 @@ def buildUI():
     return form
 
 
-def _onWorkspaceControlClosed():
-    """창이 닫힐 때 ROS 프록시 동기화를 멈춘다.
-
-    (모듈 수준 함수로 둔다: 위 _onTestButtonClicked와 같은 이유로, 창이
-    사라진 뒤에도 그 스코프를 붙드는 클로저를 만들지 않는다.)
-
-    여기서 예외를 내면 Maya의 창 닫기 경로 한가운데서 터진다. stop()은
-    스스로 예외를 밖으로 내지 않도록 만들어져 있지만(maroRosProxy.stop
-    도크스트링), import 자체가 실패할 수도 있으므로 한 겹 더 감싼다 --
-    그 경우에도 창은 정상적으로 닫혀야 한다.
-    """
-    try:
-        import maroRosProxy
-        maroRosProxy.stop()
-    except Exception:  # noqa: BLE001 -- Maya 콜백 경계
-        import traceback
-        traceback.print_exc()
-
-
 def show():
     """maroMainWindow 커맨드가 부른다."""
     if cmds.workspaceControl(CONTROL_NAME, exists=True):
@@ -255,10 +236,16 @@ def show():
         initialWidth=900,
         initialHeight=600,
         requiredPlugin="maro",
-        # 창이 닫히면 idle scriptJob을 뗀다. 이것만으로는 부족하다 --
-        # MaroPluginMain.cpp의 uninitializePlugin도 같은 stop()을 따로
-        # 부른다. 이유는 그 쪽 주석에 적어 뒀다(요약: 창을 연 적이 없는
-        # 세션에서는 이 콜백이 아예 없고, `workspaceControl -e -close`가
-        # closeCommand를 실제로 부르는지는 문서로 확정하지 못했다).
-        closeCommand=_onWorkspaceControlClosed,
+        # [최종 리뷰] closeCommand를 파이썬 콜러블이 아니라 uiScript와
+        # 같은 형태의 문자열로 준다. 콜러블로 줬을 때는 Maya가 실제로
+        # 그것을 부르는지 확인할 방법이 없었다(uiScript는 이 프로젝트가
+        # 이미 대화형 Maya에서 검증한 문자열 형태이고, Maya 자신의 MEL도
+        # 항상 문자열을 쓴다) -- 검증 안 된 두 번째 호출 방식을 새로 쓰는
+        # 대신, 이미 증명된 방식 하나로 통일한다.
+        #
+        # 이것만으로는 부족하다 -- MaroPluginMain.cpp의 uninitializePlugin도
+        # 같은 stop()을 따로 부른다: 창을 연 적이 없는 세션에서는 이
+        # 콜백이 아예 없고, `workspaceControl -e -close`가 closeCommand를
+        # 실제로 부르는지는 여전히 문서로 확정하지 못했다.
+        closeCommand="import maroRosProxy; maroRosProxy.stop()",
         uiScript="import maroMainWindow; maroMainWindow.buildUI()")
