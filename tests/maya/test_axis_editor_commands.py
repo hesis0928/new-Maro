@@ -14,7 +14,7 @@ cmds.file(new=True, force=True)
 cmds.currentUnit(angle="rad")
 cmds.currentUnit(linear="cm")
 
-AXIS_FIELDS = 8
+AXIS_FIELDS = 10
 CAPABILITY_FIELDS = 5
 
 # --- maroListAxisNodes, 플래그 없음 ---
@@ -39,6 +39,26 @@ assert found[4] == "0", f"controlMode field wrong (default Manual): {found[4]}"
 assert found[5] == "1", f"enabled field wrong (default True): {found[5]}"
 assert found[7] == "0", f"capabilityCount must be 0 before any capability connected: {found[7]}"
 print("maroListAxisNodes (no flag) OK")
+
+# --- displayName/displayColor fields (Task 2) ---
+cmds.setAttr(axis1 + ".displayName", "Axis One", type="string")
+cmds.setAttr(axis1 + ".displayColor", 0.1, 0.5, 0.8, type="double3")
+rows = cmds.maroListAxisNodes()
+assert len(rows) % AXIS_FIELDS == 0, f"row array length {len(rows)} not a multiple of {AXIS_FIELDS}"
+found = None
+for i in range(len(rows) // AXIS_FIELDS):
+    f = rows[i * AXIS_FIELDS:(i + 1) * AXIS_FIELDS]
+    if f[0].endswith("listAxis1"):
+        found = f
+        break
+assert found is not None, "listAxis1 missing after AXIS_FIELDS change"
+assert found[8] == "Axis One", f"displayName field wrong: {found[8]}"
+parts = found[9].split(",")
+assert len(parts) == 3, f"displayColor field must be 'r,g,b': {found[9]}"
+assert abs(float(parts[0]) - 0.1) < 1e-4, f"displayColor r wrong: {found[9]}"
+assert abs(float(parts[1]) - 0.5) < 1e-4, f"displayColor g wrong: {found[9]}"
+assert abs(float(parts[2]) - 0.8) < 1e-4, f"displayColor b wrong: {found[9]}"
+print("displayName/displayColor fields OK")
 
 # --- capabilityCount가 실제 연결 수를 반영한다 ---
 rot1 = cmds.createNode("maroRotation", name="listRot1")

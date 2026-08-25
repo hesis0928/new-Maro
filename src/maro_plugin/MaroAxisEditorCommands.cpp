@@ -90,6 +90,15 @@ MStatus listAxes(MStringArray& result) {
         result.append(MString() + axisFn.findPlug(MaroAxisNode::aConventionAxis, false).asShort());
         result.append(MString() + static_cast<int>(occupiedCapabilityCount(
             axisFn.findPlug(MaroAxisNode::aCapabilityIn, false))));
+
+        result.append(axisFn.findPlug(MaroAxisNode::aDisplayName, false).asString());
+
+        MPlug colorPlug = axisFn.findPlug(MaroAxisNode::aDisplayColor, false);
+        std::ostringstream colorStream;
+        colorStream << colorPlug.child(0).asFloat() << ","
+                    << colorPlug.child(1).asFloat() << ","
+                    << colorPlug.child(2).asFloat();
+        result.append(MString(colorStream.str().c_str()));
     }
     return MS::kSuccess;
 }
