@@ -46,6 +46,17 @@ MString parentAxisPath(const MFnDependencyNode& axisFn) {
     return MFnDependencyNode(sources[0].node()).name();
 }
 
+// [태스크 리뷰에서 발견] "occupied"의 뜻이 이 함수와 listCapabilities()에서
+// 일부러 다르다 -- 여기(축 목록의 요약 필드)는 실제로 연결된 슬롯만 센다.
+// listCapabilities()(-capabilities 모드)는 연결 여부와 무관하게 존재하는
+// 물리 슬롯을 전부 행으로 낸다(각 행의 "connected" 필드로 구분). 이건
+// 사고가 아니라 의도된 설계다: 향후 maroDisconnectCapability(Task 6)는
+// 연결만 끊고 배열 원소 자체는 지우지 않기로 결정됐다(재사용/되돌리기
+// 단순화를 위해) -- 그 슬롯이 이 요약 카운트에는 안 잡히되
+// -capabilities 상세 목록에는 "connected=0"으로 계속 보이는 게 맞는
+// 동작이다. 두 값이 다르게 나오는 것 자체가 버그가 아니라는 뜻이며,
+// UI(Task 7/8)는 이 요약 카운트를 "지금 실제로 구동에 기여하는 슬롯 수"로
+// 표시하면 된다.
 unsigned int occupiedCapabilityCount(MPlug capabilityInPlug) {
     unsigned int count = 0;
     const unsigned int total = capabilityInPlug.evaluateNumElements();
@@ -81,6 +92,9 @@ MStatus listAxes(MStringArray& result) {
     return MS::kSuccess;
 }
 
+// occupiedCapabilityCount()와 "occupied"의 뜻이 다르다 -- 이 함수는 연결
+// 여부와 무관하게 존재하는 물리 슬롯을 전부 낸다(각 행의 마지막 필드가
+// 연결 여부). occupiedCapabilityCount() 주석 참고 -- 의도된 설계다.
 MStatus listCapabilities(const MString& axisName, MStringArray& result) {
     MSelectionList selection;
     if (!selection.add(axisName)) {
