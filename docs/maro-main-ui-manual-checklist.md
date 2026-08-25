@@ -344,6 +344,51 @@ cmds.maroMainWindow()
    [j for j in (cmds.scriptJob(listJobs=True) or []) if "maroRosProxy" in j]   # 비어 있으면 잡이 없다
    ```
 
+## 1-3. 노드 바인딩 + capability 에디터 (Phase 4) — **[필수 · go/no-go]**
+
+이 절은 대화형 Maya에서만 확인할 수 있다(패널 표시, 버튼 클릭, 양방향
+선택 동기화는 배치 mayapy에 UI가 없어 자동 검증 불가).
+
+```python
+cmds.maroMainWindow()
+```
+
+- [ ] **에디터 패널이 보인다** — 뷰포트 오른쪽(또는 아래, 실제 레이아웃에
+      따라)에 축 목록 + capability 스택 + 버튼 7개가 보인다.
+- [ ] **축 생성 + 목록 갱신**:
+
+      ```python
+      axis = cmds.createNode("maroAxis", name="checklistAxis")
+      cube = cmds.polyCube(name="checklistCube")[0]
+      cmds.maroBindAxis(axis, cube)
+      ```
+
+      패널을 다시 열거나 새로고침하면(구현에 따라 자동/수동) `checklistAxis`가
+      왼쪽 목록에 나타난다.
+- [ ] **씬 선택 -> 패널 반영**: `cmds.select(cube)`로 큐브를 선택하면
+      패널의 축 목록에서 `checklistAxis`가 강조되고 capability 스택이
+      갱신된다(아직 비어 있음).
+- [ ] **패널 -> 씬 선택 반영**: 패널에서 `checklistAxis` 행을 클릭하면
+      씬에서 `checklistCube`가 선택된다(`cmds.ls(sl=True)`로 확인).
+- [ ] **capability 추가**: "+Rotation" 버튼을 누르면 `maroRotation` 노드가
+      생성·연결되고 스택 목록에 나타난다. `cmds.getAttr(cube + ".rotateY")`를
+      새 `maroRotation` 노드의 `.angle`에 직접 `connectAttr`한 뒤 값을 바꾸면
+      큐브가 실제로 회전한다(값 연결은 여전히 수동임을 재확인 — 설계 스펙 §7).
+- [ ] **상호배타 규칙**: 같은 축에 "+Translation"을 또 누르면 에러가 나고
+      (스크립트 에디터에 실패 메시지), 스택에 두 번째 노드가 추가되지 않는다.
+- [ ] **capability 삭제**: 스택에서 항목을 선택하고 "Remove Selected
+      Capability"를 누르면 연결이 끊기고 목록에서 사라진다. `Ctrl+Z`로
+      복구된다.
+- [ ] **Unbind**: "Unbind" 버튼을 누르면 큐브와의 바인딩이 끊긴다.
+      `Ctrl+Z`로 복구된다.
+- [ ] **레이아웃 재구성 회귀 확인**: Phase 2 §1-1(듀얼 뷰포트 렌더링/조작)과
+      §3(Maro 메뉴)을 재실행해 새 중첩 `paneLayout` 구조에서도 그대로
+      동작하는지 확인한다.
+- [ ] **언로드 go/no-go**: 패널이 열리고 축/capability가 존재하는 상태에서
+      `cmds.unloadPlugin("maro")` — 크래시 없음, 에러 반복 없음,
+      `[j for j in (cmds.scriptJob(listJobs=True) or []) if "maroAxisPanel" in j]`가
+      `[]`.
+
 ## 2. PySide6 버튼이 같은 창 안에 살아 있는가 — **[필수 · go/no-go]**
 
 - [ ] 뷰포트 위쪽 좁은 띠에 "테스트"라고 쓰인 버튼이 보인다.
@@ -513,6 +558,11 @@ Phase 2, Phase 3 판정을 함께 담고 있다(§1-1이 Phase 2, §1-2가 Phase
 | 4. 도킹 (+ `show()` 복원 분기 — 도킹) | 0-1 | 필수 | **PASS** | 2026-08-25 / 사용자 / Maya 2026 | 위 "언로드 — 도킹"과 같은 세션에서 확인 |
 | 4. 재시작 복원 (+메뉴 표시) | 0-1 | 필수 | **FAIL** | 2026-08-25 / 사용자 / Maya 2026 | "Windows > Workspaces > Save Current"로 레이아웃 저장 후 재시작해도 Maro 창이 자동 복원되지 않음(레이아웃 자체는 "Maro" 컴포넌트를 기억하지만 플러그인 자동 로드도, 창 재구성도 안 일어남). 수동으로 `loadPlugin` 해도 창은 안 뜸. 동일한 `workspaceControl -requiredPlugin` 메커니즘을 쓰는 기존 `maroDiagPanel`도 같은 한계를 가질 가능성이 높아, 이 브랜치가 새로 만든 회귀는 아닌 것으로 판단 — 별도 후속 조사 필요(Phase 0-1 완료 판정에는 포함하지 않음, 아래 참고) |
 | 4. 두 번째 뷰포트 여지 확인 | 0-1 | N/A | N/A | | Phase 2가 실제로 구현되어 §1-1로 대체됨 — 더 이상 실행하지 않음 |
+| 1-3. 에디터 패널 표시 + 목록/선택 동기화 | 4 | 필수 | | | 양방향(씬↔패널) |
+| 1-3. capability 추가/삭제 + 상호배타 규칙 | 4 | 필수 | | | §3 규칙 |
+| 1-3. Unbind + undo | 4 | 필수 | | | |
+| 1-3. 레이아웃 재구성 후 Phase 2 §1-1/§3 재확인 | 4 | 필수 | | | 회귀 확인 |
+| 1-3. 언로드 go/no-go (패널 + 축 존재 상태) | 4 | 필수 | | | |
 
 ### 종합 판정 (2026-08-25)
 

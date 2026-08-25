@@ -27,6 +27,9 @@ CAPABILITY_TYPES = [
     ("coupling", "+Coupling"),
 ]
 
+_JOB_ID = None
+_PANEL = None
+
 
 def sliceAxisRows(flat):
     """maroListAxisNodes()의 평탄한 배열을 축 행 딕셔너리 목록으로 되돌린다."""
@@ -198,4 +201,73 @@ class AxisPanel(QtWidgets.QWidget):
 
 def buildWidget():
     """maroMainWindow.buildUI()가 editorHost에 임베드할 위젯을 만든다."""
-    return AxisPanel()
+    global _PANEL
+    _PANEL = AxisPanel()
+    return _PANEL
+
+
+def _onSceneSelectionChanged():
+    """씬 선택 -> 패널 반영(설계 스펙 §9 양방향 동기화의 절반).
+    패널 쪽 클릭 -> 씬 선택은 AxisPanel._onAxisRowClicked가 담당한다
+    (반대 방향 콜백을 또 만들면 서로가 서로를 트리거하는 무한 루프가
+    생기므로, 이 함수는 오직 "씬 -> 패널" 한 방향만 맡는다).
+
+    **이 함수에서 예외가 새어 나가면 안 된다** -- SelectionChanged는
+    사용자가 뭔가를 클릭할 때마다 오므로, 한 번 깨지면 스크립트 에디터가
+    같은 트레이스백으로 도배된다(maroRosProxy._onIdle과 같은 Maya 콜백
+    경계 규율).
+    """
+    try:
+        if _PANEL is None:
+            return
+        selection = cmds.ls(selection=True, long=True) or []
+        if not selection:
+            return
+        # 선택된 오브젝트가 어느 축에 바인딩됐는지 찾는다. 축 자신이 선택됐을
+        # 수도 있으므로 그 경우도 함께 본다.
+        for row in sliceAxisRows(cmds.maroListAxisNodes()):
+            if row["axisFullPath"] in selection or row["boundTargetPath"] in selection:
+                _PANEL.selectAxis(row["axisFullPath"])
+                return
+    except Exception:  # noqa: BLE001 -- Maya 콜백 경계, 위 도크스트링 참고
+        import traceback
+        traceback.print_exc()
+
+
+def start():
+    """maroMainWindow.buildUI()가 axis panel 임베드 직후 부른다. 멱등하다."""
+    global _JOB_ID
+    if _JOB_ID is not None and cmds.scriptJob(exists=_JOB_ID):
+        return
+    jobId = cmds.scriptJob(event=["SelectionChanged", _onSceneSelectionChanged],
+                            protected=True)
+    if isinstance(jobId, int):
+        _JOB_ID = jobId
+    else:
+        _JOB_ID = None
+        if not cmds.about(batch=True):
+            print("maroAxisPanel: scriptJob() did not return a job id ({!r}) -- "
+                  "selection sync will not run.".format(jobId))
+
+
+def stop():
+    """workspaceControl이 닫히거나 플러그인이 언로드될 때 부른다(teardown()).
+
+    maroRosProxy.stop()과 같은 모양: kill이 실제로 성공했을 때만 _JOB_ID를
+    지운다 -- 실패 시 무조건 지우면 protected scriptJob이 영구 미아가 될
+    수 있다(Phase 3에서 실측으로 잡은 버그와 같은 함정, maroRosProxy.py의
+    stop() 도크스트링 참고).
+    """
+    global _JOB_ID, _PANEL
+    killSucceededOrJobGone = True
+    try:
+        if _JOB_ID is not None and cmds.scriptJob(exists=_JOB_ID):
+            cmds.scriptJob(kill=_JOB_ID, force=True)
+    except Exception:  # noqa: BLE001 -- 정리 경로
+        import traceback
+        traceback.print_exc()
+        killSucceededOrJobGone = False
+
+    if killSucceededOrJobGone:
+        _JOB_ID = None
+        _PANEL = None

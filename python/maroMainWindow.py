@@ -259,6 +259,13 @@ def buildUI():
     import maroRosProxy
     maroRosProxy.start(VIEWPORT_NAME_MAYA, VIEWPORT_NAME_ROS)
 
+    # Phase 4: 씬 선택 <-> 패널 양방향 동기화(설계 스펙 §9). maroRosProxy.start()
+    # 바로 뒤, buildUI() 조립이 전부 끝난 이 자리에 두는 이유는 위 주석과
+    # 같다 -- 조립 중간에 예외가 나면 이 scriptJob도 주인 없는 콜백으로
+    # 남으면 안 되므로, 조립이 끝까지 성공했을 때만 잡이 생기게 한다.
+    import maroAxisPanel
+    maroAxisPanel.start()
+
     return form
 
 
@@ -274,6 +281,13 @@ def teardown():
     try:
         import maroRosProxy
         maroRosProxy.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
+        import traceback
+        traceback.print_exc()
+
+    try:
+        import maroAxisPanel
+        maroAxisPanel.stop()
     except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
         import traceback
         traceback.print_exc()
