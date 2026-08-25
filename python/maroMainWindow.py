@@ -111,6 +111,12 @@ def _buildLabeledViewport(parent, label, panelName):
     _deleteStalePanel(panelName)
     panel = cmds.modelPanel(panelName, parent=side)
     _hideViewportChrome(panel)
+    # [대화형 Maya 수동 검증에서 발견] cmds.modelPanel()로 새로 만든 패널은
+    # 사용자의 전역 셰이딩 설정을 상속하지 않고 wireframe으로 떨어진다
+    # (네이티브 modelPanel4는 smoothShaded인데 이 둘만 wireframe으로 나온
+    # 것을 실측으로 확인). 그리드는 원래도 켜져 있었다 -- 화면에 안 보인
+    # 건 줌 배율 때문이었다. 셰이딩만 명시적으로 맞춘다.
+    cmds.modelEditor(panel, edit=True, displayAppearance="smoothShaded")
     panelControl = cmds.modelPanel(panel, query=True, control=True) or panel
 
     cmds.formLayout(

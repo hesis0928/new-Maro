@@ -159,13 +159,20 @@ def _refreshMayaIsolation():
     """
     global _LAST_ASSEMBLIES
 
+    # [대화형 Maya 수동 검증에서 발견] `isolateSelect -addDagObject`는
+    # Maya에서 undoable 커맨드다. 예전에는 이 줄을 매 틱 조건 없이 불러서
+    # -- "이미 격리된 오브젝트를 다시 넣어도 무해하다"는 가정이 실행 비용
+    # 관점에서만 맞았지 undo 큐 관점에서는 틀렸다 -- 매 idle 틱마다 undo
+    # 청크가 하나씩 쌓여 사용자의 Ctrl+Z가 항상 그 청크(라벨:
+    # "maroRosProxy._onIdle")만 취소하고 실제 씬 편집(오브젝트 이동 등)에는
+    # 영원히 도달하지 못하는 버그가 생겼다(Phase 3 수동 체크리스트의
+    # "Undo 큐 도배" 항목이 실측으로 잡아냄). 그룹이 이번 틱에 실제로
+    # (재)생성됐을 때만 다시 넣는다 -- 그 경우에만 격리 목록의 항목이
+    # 노드와 함께 사라진 상태이므로.
+    groupExistedBeforeThisTick = cmds.objExists(_PROXY_GROUP_PATH)
     _ensureProxyGroup()
-
-    # 우측 패널은 그룹 하나만 보면 되지만, 사용자가 그룹을 지웠다 다시
-    # 만들어진 경우(위 _ensureProxyGroup) 격리 목록의 항목은 노드와 함께
-    # 사라진 상태다. 한 번 더 넣는 비용이 커맨드 하나뿐이라 매 틱 넣어
-    # 스스로 복구되게 한다.
-    cmds.isolateSelect(_ROS_PANEL, addDagObject=PROXY_GROUP)
+    if not groupExistedBeforeThisTick:
+        cmds.isolateSelect(_ROS_PANEL, addDagObject=PROXY_GROUP)
 
     assemblies = tuple(cmds.ls(assemblies=True) or [])
     if assemblies == _LAST_ASSEMBLIES:
