@@ -149,10 +149,16 @@ assert abs(minY - (-5.0)) < 1e-9 and abs(maxY - 5.0) < 1e-9, \
 print("translationLimit node OK")
 
 # maroCoupling: ratio/offset 경로 (곡선 없음).
+# 소스는 설계가 문서화한 경로 -- 다른 "축"의 outValue(=position, kAngle) --
+# 로 연결한다. maroRotation의 capabilityOut.capValue(평범한 double)를 직접
+# 꽂으면 안 된다: 아래 C-1 절에서 실측했듯 Maya가 그 방향에도
+# unitConversion(도->라디안, pi/180)을 끼워 넣는다.
+couplingSrcAxis = cmds.createNode("maroAxis", name="couplingSourceAxis")
 coupling = cmds.createNode("maroCoupling", name="coupling1")
 sourceRot = cmds.createNode("maroRotation", name="couplingSource")
+cmds.connectAttr(sourceRot + ".capabilityOut", couplingSrcAxis + ".capabilityIn[0]")
 cmds.setAttr(sourceRot + ".angle", 1.0)
-cmds.connectAttr(sourceRot + ".capabilityOut.capValue", coupling + ".sourceValue")
+cmds.connectAttr(couplingSrcAxis + ".position", coupling + ".sourceValue")
 cmds.setAttr(coupling + ".ratio", 2.0)
 cmds.setAttr(coupling + ".offset", 0.5)
 capValue = cmds.getAttr(coupling + ".capabilityOut.capValue")
@@ -219,12 +225,56 @@ axisCoupled = cmds.createNode("maroAxis", name="axisCoupled")
 couplingDrive = cmds.createNode("maroCoupling", name="couplingDrive1")
 cmds.setAttr(couplingDrive + ".outputIsLinear", True)
 cmds.setAttr(couplingDrive + ".ratio", 3.0)
-cmds.connectAttr(axisTrans + ".positionLinear", couplingDrive + ".sourceValue")
+cmds.setAttr(couplingDrive + ".sourceIsLinear", True)
+cmds.connectAttr(axisTrans + ".positionLinear", couplingDrive + ".sourceValueLinear")
 cmds.connectAttr(couplingDrive + ".capabilityOut", axisCoupled + ".capabilityIn[0]")
 assert cmds.getAttr(axisCoupled + ".driveIsLinear") is True, "coupling-linear axis must report driveIsLinear=True"
 coupledLinear = cmds.getAttr(axisCoupled + ".positionLinear")
 assert abs(coupledLinear - 5.0 * 3.0) < 1e-9, f"coupling-linear routing wrong (got {coupledLinear})"
 print("coupling-linear axis routing OK")
+
+# 리뷰 Finding C-1 회귀: 설계가 문서화한 연결(다른 축의 outValue ->
+# coupling.sourceValue)을 "기본 UI 단위(도)"에서 그대로 해 본다. sourceValue가
+# 평범한 double이던 시절엔 Maya가 unitConversion을 끼워 넣어 ~57.3배로
+# 부풀었다. 단위를 라디안으로 고정해 버그를 감추면 안 되므로 여기서는
+# 일부러 도(degrees)로 둔다.
+prevAngleUnit = cmds.currentUnit(query=True, angle=True)
+cmds.currentUnit(angle="deg")
+axisRotSrc = cmds.createNode("maroAxis", name="axisRotSrcC1")
+rotSrcC1 = cmds.createNode("maroRotation", name="rotSrcC1")
+cmds.connectAttr(rotSrcC1 + ".capabilityOut", axisRotSrc + ".capabilityIn[0]")
+cmds.setAttr(rotSrcC1 + ".angle", 90.0)          # 도 -- 내부적으로 pi/2 라디안
+couplingFromAxis = cmds.createNode("maroCoupling", name="couplingFromAxisC1")
+cmds.setAttr(couplingFromAxis + ".ratio", 2.0)
+cmds.setAttr(couplingFromAxis + ".offset", 0.0)
+# sourceIsLinear는 기본값 False -- 각도 슬롯을 쓴다.
+cmds.connectAttr(axisRotSrc + ".position", couplingFromAxis + ".sourceValue")
+c1Value = cmds.getAttr(couplingFromAxis + ".capabilityOut.capValue")
+assert abs(c1Value - (math.pi / 2.0) * 2.0) < 1e-9, \
+    ("axis outValue -> coupling.sourceValue must stay in radians under a degrees UI unit "
+     f"(got {c1Value}, expected {math.pi})")
+assert cmds.getAttr(couplingFromAxis + ".capabilityOut.capType") == 6, \
+    "angular-source coupling must still report capType 6"
+
+# 실측 결과 문서화(characterization): "평범한 double 소스 -> 단위형
+# 목적지"는 안전할 것이라는 예상과 달리, Maya는 이 방향에도
+# unitConversion을 끼워 넣는다. 평범한 double을 "UI 단위(도)"로 해석해
+# pi/180을 곱해 라디안으로 바꿔 버린다. 즉 maroRotation의
+# capabilityOut.capValue(생 라디안)를 coupling.sourceValue에 직접 꽂으면
+# 값이 ~57.3배 작아진다. 그래서 위쪽 ratio/offset·곡선 테스트도 축의
+# outValue를 경유하도록 바꿨다. 이 단언은 그 제약이 실제로 존재함을
+# 고정해 둔다 -- 언젠가 Maya가 동작을 바꾸면 여기서 먼저 깨진다.
+rotPlainSrc = cmds.createNode("maroRotation", name="rotPlainSrcC1")
+cmds.setAttr(rotPlainSrc + ".angle", 90.0)       # 도 -- 내부적으로 pi/2 라디안
+couplingPlain = cmds.createNode("maroCoupling", name="couplingPlainC1")
+cmds.setAttr(couplingPlain + ".ratio", 1.0)
+cmds.connectAttr(rotPlainSrc + ".capabilityOut.capValue", couplingPlain + ".sourceValue")
+plainValue = cmds.getAttr(couplingPlain + ".capabilityOut.capValue")
+assert abs(plainValue - (math.pi / 2.0) * (math.pi / 180.0)) < 1e-9, \
+    ("a plain-double source into a kAngle destination is NOT conversion-free: Maya reads "
+     f"the double as degrees and multiplies by pi/180 (got {plainValue})")
+cmds.currentUnit(angle=prevAngleUnit)
+print("coupling angular-source unit safety (C-1) OK")
 
 # §3 상호배타 규칙의 DG 레벨 방어: rotation과 translation을 같은 축에
 # 억지로(스크립트로, 커맨드 검증을 우회해) 연결해도 죽지 않고 "먼저 나온

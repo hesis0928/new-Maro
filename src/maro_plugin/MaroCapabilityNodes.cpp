@@ -516,6 +516,8 @@ MStatus MaroTranslationLimitNode::compute(const MPlug& plug, MDataBlock& data) {
 
 MTypeId MaroCouplingNode::id(0x00135109);
 MObject MaroCouplingNode::aSourceValue;
+MObject MaroCouplingNode::aSourceValueLinear;
+MObject MaroCouplingNode::aSourceIsLinear;
 MObject MaroCouplingNode::aRatio;
 MObject MaroCouplingNode::aOffset;
 MObject MaroCouplingNode::aOutputIsLinear;
@@ -529,14 +531,33 @@ void* MaroCouplingNode::creator() { return new MaroCouplingNode(); }
 MStatus MaroCouplingNode::initialize() {
     MFnNumericAttribute numFn;
     MFnCompoundAttribute cmpFn;
+    MFnUnitAttribute unitFn;
 
     // 다른 축의 outValue/outValueLinear에서 connectAttr로만 채워진다 --
     // maroBindAxis가 값 연결을 자동화하지 않는 기존 관례(회전축의
     // outValue -> rotateX 수동 연결)와 같은 이유로 storable/keyable을 끈다.
-    aSourceValue = numFn.create("sourceValue", "srv", MFnNumericData::kDouble, 0.0);
-    numFn.setStorable(false);
-    numFn.setKeyable(false);
+    //
+    // 리뷰 Finding C-1: 소스 쪽도 각도/선형으로 나눈다. 평범한 double이면
+    // 단위형 소스 플러그(outValue=kAngle, outValueLinear=kDistance)를
+    // 연결할 때 Maya가 UI 단위 기반 unitConversion을 끼워 넣어 값이
+    // 왜곡된다(도 단위 씬에서 ~57.3배).
+    aSourceValue = unitFn.create("sourceValue", "srv", MFnUnitAttribute::kAngle, 0.0);
+    unitFn.setStorable(false);
+    unitFn.setKeyable(false);
     addAttribute(aSourceValue);
+
+    aSourceValueLinear =
+        unitFn.create("sourceValueLinear", "srl", MFnUnitAttribute::kDistance, 0.0);
+    unitFn.setStorable(false);
+    unitFn.setKeyable(false);
+    addAttribute(aSourceValueLinear);
+
+    // 어느 소스 슬롯이 실제로 연결됐는지는 사용자가 지정한다
+    // (aOutputIsLinear와 같은 성격의 플래그).
+    aSourceIsLinear = numFn.create("sourceIsLinear", "sli", MFnNumericData::kBoolean, false);
+    numFn.setStorable(true);
+    numFn.setKeyable(true);
+    addAttribute(aSourceIsLinear);
 
     aRatio = numFn.create("ratio", "rat", MFnNumericData::kDouble, 1.0);
     numFn.setStorable(true);
@@ -566,7 +587,8 @@ MStatus MaroCouplingNode::initialize() {
     createCapabilityOut(out);
     addAttribute(out.compound);
 
-    for (const MObject& src : {aSourceValue, aRatio, aOffset, aOutputIsLinear, aCurvePoints}) {
+    for (const MObject& src : {aSourceValue, aSourceValueLinear, aSourceIsLinear, aRatio,
+                               aOffset, aOutputIsLinear, aCurvePoints}) {
         attributeAffects(src, out.compound);
     }
     return MS::kSuccess;
@@ -578,7 +600,12 @@ MStatus MaroCouplingNode::compute(const MPlug& plug, MDataBlock& data) {
             return MS::kUnknownParameter;
         }
 
-        const double sourceValue = data.inputValue(aSourceValue).asDouble();
+        // 단위형 슬롯에서 명시적으로 내부 단위(라디안/센티미터)로 읽는다 --
+        // UI 단위와 무관하다.
+        const bool sourceIsLinear = data.inputValue(aSourceIsLinear).asBool();
+        const double sourceValue =
+            sourceIsLinear ? data.inputValue(aSourceValueLinear).asDistance().asCentimeters()
+                           : data.inputValue(aSourceValue).asAngle().asRadians();
         const double ratio = data.inputValue(aRatio).asDouble();
         const double offset = data.inputValue(aOffset).asDouble();
         const bool outputIsLinear = data.inputValue(aOutputIsLinear).asBool();

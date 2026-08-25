@@ -122,7 +122,27 @@ public:
     MStatus compute(const MPlug& plug, MDataBlock& data) override;
     static MTypeId id;
 
-    static MObject aSourceValue;     // double, 다른 축의 outValue/outValueLinear에 connectAttr로 연결
+    // 리뷰 Finding C-1: sourceValue가 평범한 double이면, 설계가 요구하는
+    // 연결(다른 축의 outValue = kAngle, outValueLinear = kDistance)에서
+    // Maya가 자동으로 unitConversion 노드를 끼워 넣는다. 그 배율은 현재
+    // UI 단위에서 나오므로(기본 도) 회전축을 물리면 값이 ~57.3배로
+    // 부풀었다. 그래서 입력도 출력(capType 6/7)과 똑같이 각도/선형 두
+    // 슬롯으로 나누고, 어느 쪽이 실제로 연결됐는지는 sourceIsLinear가
+    // 알린다 -- maroRotation/maroTranslation, maroLimit/
+    // maroTranslationLimit과 같은 이 코드베이스의 기존 관례다.
+    //
+    // 주의(실측): "평범한 double 소스 -> 단위형 목적지"도 안전하지 않다.
+    // Maya는 그 double을 UI 단위(도)로 해석해 pi/180을 곱한다. 따라서
+    // 능력 노드의 capabilityOut.capValue(생 라디안을 나르는 평범한
+    // double)를 sourceValue에 직접 연결하면 안 된다 -- 반드시 "축"의
+    // outValue/outValueLinear를 소스로 쓴다. 이것이 설계가 문서화한
+    // 본래 연결이기도 하다. (tests/maya/test_capability_stack.py의 C-1 절)
+    static MObject aSourceValue;       // MFnUnitAttribute::kAngle (내부: 라디안).
+                                        // 다른 축의 outValue에 connectAttr로 연결.
+    static MObject aSourceValueLinear; // MFnUnitAttribute::kDistance (내부: 센티미터).
+                                        // 다른 축의 outValueLinear에 connectAttr로 연결.
+    static MObject aSourceIsLinear;    // bool, 기본 false -- 두 소스 슬롯 중
+                                        // 어느 쪽을 읽을지 사용자가 지정한다.
     static MObject aRatio;           // double, 기본 1.0
     static MObject aOffset;          // double, 기본 0.0
     static MObject aOutputIsLinear;  // bool, 기본 false -- capType 6(각도)/7(선형) 결정
