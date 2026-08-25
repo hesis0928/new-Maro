@@ -155,6 +155,11 @@ if(MARO_BUILD_PLUGIN)
                      "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_axis_panel.py")
     set_tests_properties(maya_axis_panel PROPERTIES TIMEOUT 60)
 
+    add_test(NAME maya_single_object_node_editor
+             COMMAND "${MAYAPY}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_single_object_node_editor.py")
+    set_tests_properties(maya_single_object_node_editor PROPERTIES TIMEOUT 60)
+
     file(GLOB ROS2_PACKAGE_INCLUDES LIST_DIRECTORIES true "${ROS2_INSTALL}/include/*")
     set(PEER_INCLUDES ${ROS2_INSTALL}/include)
     foreach(dir ${ROS2_PACKAGE_INCLUDES})
