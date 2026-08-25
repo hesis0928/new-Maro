@@ -137,7 +137,26 @@ class AxisPanel(QtWidgets.QWidget):
         """다른 곳(씬 선택 등)에서 축이 정해졌을 때 패널을 그 축에 맞춘다.
         Task 9의 SelectionChanged 동기화가 이걸 부른다."""
         self._selectedAxis = axisFullPath
+        self._highlightAxisRow(axisFullPath)
         self._refreshCapabilityList()
+
+    def _highlightAxisRow(self, axisFullPath):
+        """왼쪽 목록의 해당 행을 실제로 "선택된" 상태로 만든다.
+
+        리뷰 Finding I-2: Phase 4 수동 체크리스트는 씬에서 오브젝트를
+        고르면 패널의 해당 행이 하이라이트된다고 적어 뒀는데, selectAxis()가
+        _refreshCapabilityList()만 부르고 목록의 현재 항목은 건드리지
+        않아서 실제로는 하이라이트가 따라가지 않았다. 체크리스트가 맞고
+        코드가 덜 돼 있던 쪽이라, 체크리스트를 낮추지 않고 동작을 채운다.
+
+        목록에 없는 축이면(예: 아직 refreshAxisList()를 안 한 낡은 목록)
+        조용히 아무 것도 하지 않는다 -- 예외를 올리지 않는다.
+        """
+        for i in range(self._axisList.count()):
+            item = self._axisList.item(i)
+            if item is not None and item.data(QtCore.Qt.UserRole) == axisFullPath:
+                self._axisList.setCurrentItem(item)
+                return
 
     def _refreshCapabilityList(self):
         self._capList.clear()
