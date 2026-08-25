@@ -204,10 +204,24 @@ MStatus MaroAxisNode::initialize() {
                                aControlMode, aRosCommand}) {
         attributeAffects(src, aOutValue);
         attributeAffects(src, aOutValueLinear);
-        attributeAffects(src, aDriveIsLinear);
         attributeAffects(src, aOutTransform);
     }
 
+    // [최종 리뷰 재검증에서 발견] aDriveIsLinear는 aEnabled와
+    // aCapabilityIn(1차 구동 타입)에만 의존한다 -- compute()를 보면
+    // isLinearDrive는 스택에서 찾은 1차 구동 capType으로만 정해지고,
+    // aConventionAxis/aControlMode/aRosCommand는 "어떤 값을 낼지"에만
+    // 관여하지 "어느 계열이 구동하는지"에는 영향이 없다. 안 읽는 소스를
+    // 영향권에 넣지 않는다는 원칙은 위 aConventionInvert 주석과 같다.
+    //
+    // 이게 스타일 문제가 아니라 진짜 버그였다: aRosCommand를 여기 넣어
+    // 두면, MaroCommandDeviceNode::applyToMatchingAxis()가 (같은
+    // compute() 호출 경로 안에서) aDriveIsLinear를 읽은 직후 그 축의
+    // aRosCommand에 값을 쓰는 순간 이 노드 자신을 다시 dirty로 만드는
+    // pull-then-dirty 순환이 생긴다 -- 델타체크가 막으려는 바로 그
+    // 불필요한 재평가를, 델타체크 판정 자체보다 앞서 매번 강제로
+    // 일으키는 꼴이다.
+    attributeAffects(aEnabled, aDriveIsLinear);
     attributeAffects(aCapabilityIn, aOutValue);
     attributeAffects(aCapabilityIn, aOutValueLinear);
     attributeAffects(aCapabilityIn, aDriveIsLinear);

@@ -233,6 +233,36 @@ coupledLinear = cmds.getAttr(axisCoupled + ".positionLinear")
 assert abs(coupledLinear - 5.0 * 3.0) < 1e-9, f"coupling-linear routing wrong (got {coupledLinear})"
 print("coupling-linear axis routing OK")
 
+# 리뷰 재검증 Minor 2: 위 coupling-linear 테스트는 currentUnit(linear="cm")
+# 아래에서 돌아서 변환 계수가 우연히 1.0이다 -- 각도 쪽 C-1 회귀(위,
+# currentUnit(angle="deg"))와 같은 이유로, cm이 아닌 다른 선형 단위에서
+# 다시 확인해야 "가려진 통과"가 아니라는 게 증명된다.
+prevLinearUnit = cmds.currentUnit(query=True, linear=True)
+cmds.currentUnit(linear="m")
+axisTransM = cmds.createNode("maroAxis", name="axisTransM")
+transM = cmds.createNode("maroTranslation", name="transM1")
+cmds.connectAttr(transM + ".capabilityOut", axisTransM + ".capabilityIn[0]")
+cmds.setAttr(transM + ".distance", 0.5)          # 미터 -- 내부적으로 50 센티미터
+axisCoupledM = cmds.createNode("maroAxis", name="axisCoupledM")
+couplingFromAxisM = cmds.createNode("maroCoupling", name="couplingFromAxisM1")
+cmds.setAttr(couplingFromAxisM + ".outputIsLinear", True)
+cmds.setAttr(couplingFromAxisM + ".sourceIsLinear", True)
+cmds.setAttr(couplingFromAxisM + ".ratio", 2.0)
+cmds.connectAttr(axisTransM + ".positionLinear", couplingFromAxisM + ".sourceValueLinear")
+cmds.connectAttr(couplingFromAxisM + ".capabilityOut", axisCoupledM + ".capabilityIn[0]")
+# positionLinear는 실제 kDistance 어트리뷰트라 getAttr이 "현재 UI 단위"로
+# 보여준다 -- 내부 저장(센티미터)과 비교하려면 먼저 단위를 되돌려야 한다.
+# 위쪽 각도 회귀 테스트가 capabilityOut.capValue(평범한 double, UI 단위와
+# 무관)를 읽어서 이 함정을 피해 간 것과 달리, 여기는 진짜 unit-typed
+# 출력을 읽으므로 이 순서가 중요하다(실측으로 처음에 놓쳐서 "got 1.0,
+# expected 100.0"으로 실패하는 걸 직접 봤다 -- 0.5m UI 표시값의 2배였다).
+cmds.currentUnit(linear=prevLinearUnit)
+coupledM = cmds.getAttr(axisCoupledM + ".positionLinear")
+assert abs(coupledM - 50.0 * 2.0) < 1e-9, \
+    ("axis outValueLinear -> coupling.sourceValueLinear must stay in centimeters under a "
+     f"non-centimeter UI linear unit (got {coupledM}, expected 100.0)")
+print("coupling-linear axis routing under non-cm UI unit OK")
+
 # 리뷰 Finding C-1 회귀: 설계가 문서화한 연결(다른 축의 outValue ->
 # coupling.sourceValue)을 "기본 UI 단위(도)"에서 그대로 해 본다. sourceValue가
 # 평범한 double이던 시절엔 Maya가 unitConversion을 끼워 넣어 ~57.3배로
