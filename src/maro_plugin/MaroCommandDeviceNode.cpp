@@ -275,18 +275,39 @@ void MaroCommandDeviceNode::applyToMatchingAxis(const std::string& jointName, do
             continue;
         }
 
+        // 리뷰 Finding C-2a: sensor_msgs/JointState.position은 prismatic
+        // 관절에서 "미터"다. 반면 aRosCommand는 축의 내부 단위 -- 회전축은
+        // 라디안, 직선축은 센티미터 -- 를 나르는 평범한 double이다
+        // (capValue/aOutValueLinear와 같은 관례). 그러니 직선 구동 축에만
+        // m -> cm 변환을 건다. 회전축의 라디안은 손대지 않는다(이미 맞다).
+        //
+        // 변환은 아래 델타 비교보다 반드시 먼저 와야 한다. 안 그러면 기존
+        // 값(센티미터)과 들어온 값(미터)을 비교하게 돼 갱신을 잘못
+        // 건너뛰거나 잘못 적용한다. 루프 지역 변수에 담는다 -- 같은
+        // jointName을 가진 축이 여럿이면(회전축 하나 + 직선축 하나 같은
+        // 경우) 파라미터를 덮어써 버리면 다음 반복까지 오염된다.
+        //
+        // 변환 자체는 순수 함수로 빼 두었다(CommandDeltaCheck.h) --
+        // shouldSkipUnchangedCommand()와 같은 이유다. 이 인바운드 경로는
+        // Maya의 유휴 큐를 요구해 배치 모드에서 끝까지 못 돌리므로, 단위
+        // 계약만이라도 헤드리스 gtest로 못 박을 수 있어야 한다.
+        // MDistance(v, kMeters).asCentimeters()와 정확히 같은 값이다
+        // (m -> cm은 SI 정의상 ×100이고, Maya의 내부 선형 단위도 cm다).
+        const double commandValue = normalizeInboundCommand(
+            value, axisFn.findPlug(MaroAxisNode::aDriveIsLinear, false).asBool());
+
         // 값이 실제로 안 바뀌었으면 dirty 전파(및 그에 따른 재평가)를
         // 아예 안 일으킨다 -- setDouble()은 이전 값과 같아도 무조건 dirty를
         // 퍼뜨린다. 판단 자체는 Maya에 의존하지 않는 순수 함수다
         // (CommandDeltaCheck.h) -- 여기서는 플러그를 읽고 그 결과로
         // 쓸지 말지만 가른다.
         const double current = axisFn.findPlug(MaroAxisNode::aRosCommand, false).asDouble();
-        if (shouldSkipUnchangedCommand(current, value)) {
+        if (shouldSkipUnchangedCommand(current, commandValue)) {
             s_skippedUnchanged.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
         // 런타임 데이터 흐름이므로 직접 쓴다. undo 스택에 남기지 않는다.
-        axisFn.findPlug(MaroAxisNode::aRosCommand, false).setDouble(value);
+        axisFn.findPlug(MaroAxisNode::aRosCommand, false).setDouble(commandValue);
         s_applied.fetch_add(1, std::memory_order_relaxed);
     }
 }

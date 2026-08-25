@@ -8,6 +8,7 @@
 #include <maya/MAngle.h>
 #include <maya/MArgList.h>
 #include <maya/MDagPath.h>
+#include <maya/MDistance.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
@@ -928,12 +929,24 @@ MStatus MaroSetControlModeCommand::doIt(const MArgList& args) {
         // 반대로 하면 compute()가 이미 소스를 ROS로 바꾼 뒤라 0에서 시딩하게
         // 된다.
         if (mode == 1 && modePlug.asShort() == 0) {
-            MPlug outValue = axisFn.findPlug(MaroAxisNode::aOutValue, false);
-            // outValue는 MFnUnitAttribute::kAngle이다. asDouble()로 읽으면 Maya가
-            // UI 각도 단위(기본 도)로 변환한 값을 돌려줄 수 있어 로그가 실제
-            // 라디안 값과 어긋난다. MaroPump.cpp가 같은 이유로 이미 asMAngle().
-            // asRadians()를 쓰고 있다 -- 여기는 로그 전용이라 동작은 안 바뀐다.
-            const double seedValue = outValue.asMAngle().asRadians();
+            // 리뷰 Finding C-2b: 직선 구동 축은 compute()가 각도 출력
+            // (aOutValue)을 항상 0으로 눌러 둔다. 그래서 무조건 outValue를
+            // 읽으면 직선축은 언제나 0으로 시딩돼, 튐을 막으려던 코드가
+            // 정확히 그 튐(0으로 스냅)을 만들어 냈다. 어느 출력이 이 축의
+            // 유효한 구동값인지는 aDriveIsLinear가 알려 준다 -- MaroPump가
+            // 쓰는 것과 같은 플래그다.
+            //
+            // 두 경로 모두 내부 단위로 읽는다: 각도는 라디안, 직선은
+            // 센티미터. asDouble()로 읽으면 Maya가 UI 단위(기본 도/cm)로
+            // 변환한 값을 돌려줄 수 있어 aRosCommand의 관례와 어긋난다.
+            const bool driveIsLinear =
+                axisFn.findPlug(MaroAxisNode::aDriveIsLinear, false).asBool();
+            const double seedValue =
+                driveIsLinear
+                    ? axisFn.findPlug(MaroAxisNode::aOutValueLinear, false)
+                          .asMDistance()
+                          .asCentimeters()
+                    : axisFn.findPlug(MaroAxisNode::aOutValue, false).asMAngle().asRadians();
 
             // 런타임 데이터 흐름이므로 직접 쓴다 (applyToMatchingAxis와 동일한
             // 관례). undo 스택(m_modifier)에는 올리지 않는다 -- 이건 사용자

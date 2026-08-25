@@ -86,8 +86,8 @@ def wait_until(condition, timeout):
     return False
 
 
-def publish_command(value):
-    subprocess.run([peer, "pub", "maro", "axisA", str(value)],
+def publish_command(value, joint="axisA"):
+    subprocess.run([peer, "pub", "maro", joint, str(value)],
                     check=True, timeout=120)
 
 
@@ -224,6 +224,83 @@ try:
         f"limit did not clamp a ROS-sourced value; position={limited_out}"
     )
     print("limit clamps ros value OK")
+
+    # ---- 5) 리뷰 Finding C-2: 직선 구동 축의 ROS 인바운드 경로. ----
+    # C-2a: JointState.position은 prismatic 관절에서 "미터"인데, 그동안 그대로
+    # aRosCommand(축 내부 단위 = 센티미터)에 써 넣었다.
+    # C-2b: Manual -> ROS 전환 시딩이 aOutValue(각도)만 읽어서, 직선축은
+    # compute()가 그 값을 0으로 눌러 두는 탓에 항상 0으로 시딩됐다 -- 튐을
+    # 막으려던 코드가 오히려 0으로 스냅시켰다.
+    cmds.currentUnit(linear="cm")
+    cubeLin = cmds.polyCube(name="segLin")[0]
+    axisLin = cmds.createNode("maroAxis", name="axisLin")
+    cmds.maroBindAxis(axisLin, cubeLin)
+    cmds.setAttr(axisLin + ".jointName", "axisLin", type="string")
+    transLin = cmds.createNode("maroTranslation")
+    cmds.connectAttr(transLin + ".capabilityOut", axisLin + ".capabilityIn[0]")
+    cmds.setAttr(transLin + ".distance", 30.0)   # 센티미터
+
+    assert cmds.getAttr(axisLin + ".driveIsLinear") is True, \
+        "translation-driven axis must report driveIsLinear=True"
+    manual_lin = cmds.getAttr(axisLin + ".positionLinear")
+    assert abs(manual_lin - 30.0) < 1e-6, f"linear axis setup wrong (got {manual_lin})"
+
+    # C-2b: 모드 전환이 현재 "선형" 위치로 시딩해야 한다 (0이 아니라).
+    cmds.maroSetControlMode(axisLin, 1)
+    assert cmds.getAttr(axisLin + ".controlMode") == 1
+    seeded = cmds.getAttr(axisLin + ".rosCommand")
+    assert abs(seeded - 30.0) < 1e-6, (
+        "Manual->ROS seeding on a linear axis must use outValueLinear "
+        f"(centimeters), not the always-zero angular outValue; rosCommand={seeded}"
+    )
+    post_switch_lin = cmds.getAttr(axisLin + ".positionLinear")
+    assert abs(post_switch_lin - manual_lin) < 1e-6, (
+        "linear axis jumped to zero on mode switch instead of holding its "
+        f"position; before={manual_lin}, after={post_switch_lin}"
+    )
+    print("linear axis mode-switch seeding (C-2b) OK")
+
+    # C-2a: 미터로 들어온 명령이 센티미터로 변환돼야 한다 (0.5 m -> 50 cm).
+    applied_before_lin = cmds.maroBridgeStats()[2]
+    ticks_before_lin = cmds.maroBridgeStats()[3]
+    publish_command(0.5, joint="axisLin")
+    delivered_lin = wait_until(
+        lambda: cmds.maroBridgeStats()[2] > applied_before_lin, timeout=8)
+    stats_lin = cmds.maroBridgeStats()
+
+    if delivered_lin:
+        assert wait_until(
+            lambda: abs(cmds.getAttr(axisLin + ".positionLinear") - 50.0) < 1e-6,
+            timeout=5), (
+            "an inbound 0.5 (meters) command on a linear axis must land as "
+            "50.0 centimeters; positionLinear="
+            f"{cmds.getAttr(axisLin + '.positionLinear')}, rosCommand="
+            f"{cmds.getAttr(axisLin + '.rosCommand')}"
+        )
+        print("linear axis inbound meters->centimeters (C-2a) OK (verified end-to-end)")
+    else:
+        # 위 2)절과 같은 환경 제약이다. 위장하지 않고, 스레드가 살아 있었다는
+        # 전제조건만 확인한 뒤 명시적으로 SKIP한다.
+        assert stats_lin[3] > ticks_before_lin, (
+            "SKIP precondition failed: command device thread did not tick "
+            f"during the linear-axis attempt; maroBridgeStats={stats_lin}"
+        )
+        # 전송 구간을 건너뛰고 단위 계약만이라도 헤드리스로 못 박아 둔다:
+        # aRosCommand는 축의 내부 단위(센티미터)를 나른다.
+        cmds.setAttr(axisLin + ".rosCommand", 50.0)
+        ros_lin = cmds.getAttr(axisLin + ".positionLinear")
+        assert abs(ros_lin - 50.0) < 1e-6, (
+            "ROS mode did not source positionLinear from rosCommand in "
+            f"centimeters; positionLinear={ros_lin}"
+        )
+        print(
+            "SKIP: real end-to-end delivery of the linear command cannot be "
+            "verified under mayapy (same MPxThreadedDeviceNode idle-queue "
+            f"limitation as section 2; maroBridgeStats={stats_lin}). The "
+            "centimeter contract on rosCommand->positionLinear was verified "
+            "headlessly instead; the meters->centimeters conversion itself "
+            "must be confirmed in interactive Maya."
+        )
 
     cmds.maroStopBridge()
     print("bridge stop OK")

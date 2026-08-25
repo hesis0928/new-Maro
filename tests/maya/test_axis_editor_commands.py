@@ -180,6 +180,40 @@ except RuntimeError:
 assert raised, "maroUnbindAxis on an already-unbound axis must fail"
 print("maroUnbindAxis not-bound rejection OK")
 
+# --- 리뷰 Finding C-2b: maroSetControlMode의 Manual->ROS 시딩이 직선축을 ---
+# --- 0으로 스냅시키던 버그. 순수 DG 경로로(브리지 없이) 확인한다.      ---
+axisSeed = cmds.createNode("maroAxis", name="seedLinearAxis")
+transSeed = cmds.createNode("maroTranslation", name="seedTrans")
+cmds.connectAttr(transSeed + ".capabilityOut", axisSeed + ".capabilityIn[0]")
+cmds.setAttr(transSeed + ".distance", 17.5)   # 센티미터 (파일 상단에서 고정)
+assert cmds.getAttr(axisSeed + ".driveIsLinear") is True, \
+    "translation-driven axis must report driveIsLinear=True"
+beforeSwitch = cmds.getAttr(axisSeed + ".positionLinear")
+assert abs(beforeSwitch - 17.5) < 1e-9, f"linear axis setup wrong (got {beforeSwitch})"
+
+cmds.maroSetControlMode(axisSeed, 1)
+seededCmd = cmds.getAttr(axisSeed + ".rosCommand")
+assert abs(seededCmd - 17.5) < 1e-9, (
+    "Manual->ROS seeding must read outValueLinear (centimeters) for a linear "
+    f"axis, not the always-zero angular outValue; rosCommand={seededCmd}"
+)
+afterSwitch = cmds.getAttr(axisSeed + ".positionLinear")
+assert abs(afterSwitch - beforeSwitch) < 1e-9, (
+    f"linear axis snapped on mode switch; before={beforeSwitch}, after={afterSwitch}"
+)
+
+# 회전축은 회귀 없이 각도 경로 그대로여야 한다.
+axisSeedRot = cmds.createNode("maroAxis", name="seedRotAxis")
+rotSeed = cmds.createNode("maroRotation", name="seedRot")
+cmds.connectAttr(rotSeed + ".capabilityOut", axisSeedRot + ".capabilityIn[0]")
+cmds.setAttr(rotSeed + ".angle", 0.75)        # 라디안 (파일 상단에서 고정)
+cmds.maroSetControlMode(axisSeedRot, 1)
+seededRot = cmds.getAttr(axisSeedRot + ".rosCommand")
+assert abs(seededRot - 0.75) < 1e-9, (
+    f"angular seeding regressed; rosCommand={seededRot}"
+)
+print("maroSetControlMode linear seeding (C-2b) OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
