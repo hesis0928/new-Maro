@@ -17,6 +17,7 @@
 #include "MaroPythonBridge.h"
 #include "MaroRemedyCommands.h"
 #include "MaroRosProxyCommands.h"
+#include "MaroAxisEditorCommands.h"
 #include "MaroSentinelClient.h"
 
 namespace {
@@ -379,6 +380,14 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroListAxisNodes",
+                                    maro::MaroListAxisNodesCommand::creator,
+                                    maro::MaroListAxisNodesCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroListAxisNodes");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -497,6 +506,7 @@ MStatus uninitializePlugin(MObject obj) {
         // maroMainWindow 블록보다 "먼저" 온다(가장 나중에 등록된 것부터
         // 먼저 해제) -- 위 maroLidar/maroAxis, maroApplyRemedy/
         // maroDiagRequestRemedy 선례와 같은 논리.
+        plugin.deregisterCommand("maroListAxisNodes");
         plugin.deregisterCommand("maroSetRosProxyTarget");
         plugin.deregisterCommand("maroMayaToRos");
 

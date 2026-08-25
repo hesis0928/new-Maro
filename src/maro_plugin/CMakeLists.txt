@@ -22,6 +22,7 @@ set(SOURCE_FILES
     MaroMainThreadQueue.cpp
     MaroRemedyCommands.cpp
     MaroRosProxyCommands.cpp
+    MaroAxisEditorCommands.cpp
     MaroSentinelClient.cpp
 )
 
