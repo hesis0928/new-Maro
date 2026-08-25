@@ -37,7 +37,6 @@ Maya가 **우측(ROS) 패널에도** 그것을 밀어 넣어 이 단계 전체�
 "우측엔 프록시만"이 깨진다. `isolateSelect -state`는 그 기계장치를 끌고
 오지 않는 순수한 on/off라서 이쪽을 쓴다.
 """
-import math
 import traceback
 
 import maya.cmds as cmds
@@ -208,13 +207,21 @@ def _syncProxy():
         px=pos[0], py=pos[1], pz=pos[2],
         qx=quat.x, qy=quat.y, qz=quat.z, qw=quat.w)
 
-    locator = _ensureProxyLocator()
-    cmds.xform(locator, worldSpace=True, translation=converted[0:3])
-    eulerRad = om2.MQuaternion(
-        converted[3], converted[4], converted[5], converted[6]).asEulerRotation()
-    cmds.xform(
-        locator, worldSpace=True,
-        rotation=[math.degrees(eulerRad.x), math.degrees(eulerRad.y), math.degrees(eulerRad.z)])
+    # [최종 리뷰 I2] cmds.xform(...)가 아니라 MFnTransform.setTranslation/
+    # setRotation을 쓴다. cmds.xform은 undo 가능한 커맨드라서, idle이
+    # 초당 수십 번 도는 이 경로에서 그대로 쓰면 몇 초 만에 undo 큐가
+    # 이 프록시 갱신으로만 가득 차 사용자의 실제 작업에 대한 Ctrl+Z가
+    # 무의미해진다. MFnTransform의 API 호출은 undo 큐에 안 남는다 --
+    # 회전도 쿼터니언을 바로 받으므로 오일러/짐벌 변환이 필요 없어져
+    # 그만큼 코드도 단순해진다.
+    locatorPath = _ensureProxyLocator()
+    locatorDagPath = om2.MSelectionList().add(locatorPath).getDagPath(0)
+    locatorFn = om2.MFnTransform(locatorDagPath)
+    locatorFn.setTranslation(
+        om2.MVector(converted[0], converted[1], converted[2]), om2.MSpace.kWorld)
+    locatorFn.setRotation(
+        om2.MQuaternion(converted[3], converted[4], converted[5], converted[6]),
+        om2.MSpace.kWorld)
 
 
 def _panelsAlive():
@@ -247,6 +254,13 @@ def _onIdle():
          한두 틱짜리 일시적 실패는 성공하면 카운터가 0으로 돌아가 그대로
          살아남는다. 트레이스백은 연속 실패의 **첫 틱에만** 찍는다 --
          사람이 원인을 볼 수 있으면서 도배는 안 되는 지점이다.
+
+    [최종 리뷰 I1] 두 자가 방어 다 `stop()`을 **직접** 부르지 않고
+    `cmds.evalDeferred(stop)`로 미룬다. scriptJob 콜백 한복판에서 자기
+    자신을 `-force -kill`하는 것은 Maya 자신도 하지 않는 패턴이다 --
+    `others/dynUpdateDeleteAttrWin.mel`류의 스크립트들이 전부
+    `evalDeferred("scriptJob -force -kill " + $job)`로 한 틱 미뤄서
+    자기 잡을 죽인다. 이 프로젝트도 같은 관례를 따른다.
     """
     global _CONSECUTIVE_FAILURES
 
@@ -255,7 +269,7 @@ def _onIdle():
         # 예외가 새어 나가면 안 된다는 것이 위 규칙이고, 예외 없이 도는
         # 것으로 믿는 호출까지 밖에 두면 그 규칙에 구멍이 생긴다.
         if not _panelsAlive():
-            stop()
+            cmds.evalDeferred(stop)
             return
         _refreshMayaIsolation()
         _syncProxy()
@@ -267,7 +281,7 @@ def _onIdle():
         if _CONSECUTIVE_FAILURES >= _MAX_CONSECUTIVE_FAILURES:
             print("maroRosProxy: {} consecutive failures -- stopping the sync job."
                   .format(_CONSECUTIVE_FAILURES))
-            stop()
+            cmds.evalDeferred(stop)
         return
 
     _CONSECUTIVE_FAILURES = 0
@@ -326,18 +340,31 @@ def stop():
     어떤 경우에도 예외를 밖으로 내지 않는다. 이 함수의 호출자는 둘 다
     "정리 중"인 경로(창 닫기, 플러그인 언로드)라, 여기서 던지면 그 뒤의
     정리가 통째로 건너뛰어진다 -- MaroPluginMain.cpp가 uninitializePlugin
-    전체를 try/catch로 감싸 둔 것과 같은 이유다. 어떤 경로로 빠져나가든
-    _JOB_ID는 반드시 None이 된다(finally).
+    전체를 try/catch로 감싸 둔 것과 같은 이유다.
+
+    [최종 리뷰 I1] `_JOB_ID`는 **kill이 실제로 성공했을 때만** 지운다.
+    예전에는 `finally`로 무조건 지웠는데, `scriptJob(kill=...)`이 예외를
+    내면 잡은 살아있는 채로 그 id만 잃어버린다 -- 이 잡은 `protected=True`로
+    만들어서 `-force` 없이는 안 죽으므로, id를 잃으면 이 함수도 다음
+    `stop()` 호출도 다시는 그 잡을 못 찾는다. `_onIdle`이 그 죽지 않은
+    잡 위에서 매 틱 `stop()`을 다시 부르지만 `_JOB_ID`가 이미 None이라
+    아무 일도 안 하는 조용한 무한 루프가 된다 -- "자가 치유"와 "영구
+    고장"이 겉보기엔 똑같아 보이는 바로 그 상황이라 이 함수가 막아야
+    할 첫 번째 것이다. kill이 실패하면 id를 그대로 둬서 다음 시도가
+    같은 잡을 다시 겨눌 수 있게 한다.
     """
     global _JOB_ID, _MAYA_PANEL, _ROS_PANEL, _LAST_ASSEMBLIES, _CONSECUTIVE_FAILURES
+    killSucceededOrJobGone = True
     try:
         if _JOB_ID is not None and cmds.scriptJob(exists=_JOB_ID):
             cmds.scriptJob(kill=_JOB_ID, force=True)
     except Exception:  # noqa: BLE001 -- 정리 경로, 위 도크스트링 참고
         traceback.print_exc()
-    finally:
+        killSucceededOrJobGone = False
+
+    if killSucceededOrJobGone:
         _JOB_ID = None
-        _MAYA_PANEL = None
-        _ROS_PANEL = None
-        _LAST_ASSEMBLIES = None
-        _CONSECUTIVE_FAILURES = 0
+    _MAYA_PANEL = None
+    _ROS_PANEL = None
+    _LAST_ASSEMBLIES = None
+    _CONSECUTIVE_FAILURES = 0
