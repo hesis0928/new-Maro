@@ -58,16 +58,27 @@ _MEL_OBJECT_VAR = "gMaroDagMenuObject"
 # 소스 전/후로 문구가 다르다.
 _WHATIS_PREFIXES = ("Mel procedure found in: ", "Script found in: ")
 
-# `global proc dagMenuProc(...)` 선언 헤더. 시그니처가 Maya 버전에 따라
-# 달라져도 걸리도록 인자 목록은 보지 않는다.
+# `global proc dagMenuProc(string $parent, string $object)` 선언 헤더.
+#
+# 인자 목록까지 **정확히** 본다. 예전에는 "Maya 버전이 바뀌어 시그니처가
+# 달라져도 걸리도록" 인자 목록을 무시했는데, 그건 여기서만큼은 느슨한 매칭이
+# 안전한 쪽이 아니라 위험한 쪽이다: 시그니처가 다른 Maya에서도 헤더는 매치되고,
+# 그러면 우리가 인자 두 개짜리 래퍼를 설치해 버린다. Maya의 실제 호출자
+# (`dagObjectHit -mn` -> buildObjectMenuItemsNow.mel)는 그 버전의 인자 수로
+# 부르므로 오브젝트를 우클릭할 때마다 MEL "wrong number of arguments" 에러가
+# 나고, 그게 세션 내내 계속된다 -- 이 모듈이 막으려는 바로 그 실패다.
+# 예상한 형태가 아니면 매치되지 않고(count == 0), 호출자의 "설치 포기" 경로로
+# 떨어지는 것이 옳다.
 #
 # **바이트 패턴이다.** 원본 .mel을 디코드해서 다루면(errors="replace")
 # UTF-8이 아닌 바이트가 섞인 지역화 설치본에서 문자열 리터럴이 조용히
 # U+FFFD로 바뀐 사본을 source하게 된다 -- 그 사본이 곧 세션 전체의 우클릭
 # 메뉴가 되므로 허용할 수 없는 종류의 손상이다. 바이트로 읽고 바이트로
 # 치환해서 헤더 한 줄 말고는 원본과 바이트 단위로 동일한 복사본을 만든다.
-_PROC_HEADER_RE = re.compile(rb"^([ \t]*global[ \t]+proc[ \t]+)dagMenuProc(?=[ \t]*\()",
-                             re.MULTILINE)
+_PROC_HEADER_RE = re.compile(
+    rb"^([ \t]*global[ \t]+proc[ \t]+)dagMenuProc"
+    rb"(?=[ \t]*\([ \t]*string[ \t]+\$\w+[ \t]*,[ \t]*string[ \t]+\$\w+[ \t]*\))",
+    re.MULTILINE)
 
 _INSTALLED = False
 _ORIGINAL_SOURCE_FILE = None
@@ -252,19 +263,78 @@ def _addMenuItem():
     """
     try:
         parentMenu = _melGlobalString(_MEL_PARENT_VAR)
-        object_ = _melGlobalString(_MEL_OBJECT_VAR)
         if not parentMenu or not cmds.popupMenu(parentMenu, exists=True):
             return
+        if _nativeMenuSuppressed():
+            return
+        object_ = _resolveObject()
         if not object_:
-            # buildObjectMenuItemsNow.mel은 커서 아래에 아무것도 없으면 빈
-            # 문자열을 넘긴다. Maya 자신의 dagMenuProc와 같은 방식으로
-            # 선택/하이라이트 목록에서 대상을 고른다.
-            object_ = _leadObject()
+            return
         cmds.menuItem(parent=parentMenu, label=MENU_ITEM_LABEL,
                       command=lambda *_args: _onMenuItemClicked(object_))
     except Exception as exc:  # pragma: no cover - UI 경로
         cmds.warning("Maro: failed to add the '{}' menu item: {}"
                      .format(MENU_ITEM_LABEL, exc))
+
+
+def _resolveObject():
+    """항목을 붙일 대상 DAG 오브젝트. 붙이면 안 되는 상황이면 빈 문자열.
+
+    Maya의 dagMenuProc에는 **일반 오브젝트 메뉴를 만들지 않고** 곧바로
+    return하는 경로가 있다. 그중 하나가 뷰큐브다(2602-2605행):
+
+        if ($object == "CubeCompass") { createViewCubeMenuItems($parent); return; }
+
+    `"CubeCompass"`는 노드 이름이 아니라 센티널 문자열이고, 기본 뷰포트마다
+    뷰큐브가 있으므로 이 경로는 아주 흔하다. 원본이 무엇을 했는지와 무관하게
+    항목을 붙이면 노드 컨텍스트 메뉴가 전혀 아닌 메뉴에 우리 항목이 끼어든다.
+    이 기능의 범위는 표준 DAG 오브젝트(transform/shape)뿐이므로, 실재하는
+    노드가 아니면 아무것도 하지 않는 것이 맞다.
+    """
+    object_ = _melGlobalString(_MEL_OBJECT_VAR)
+    if not object_:
+        # buildObjectMenuItemsNow.mel은 커서 아래에 아무것도 없으면 빈
+        # 문자열을 넘긴다. Maya 자신의 dagMenuProc와 같은 방식으로
+        # 선택/하이라이트 목록에서 대상을 고른다.
+        object_ = _leadObject()
+    if not object_ or not cmds.objExists(object_):
+        return ""
+    return object_
+
+
+def _nativeMenuSuppressed():
+    """Maya의 dagMenuProc가 오브젝트 메뉴를 만들지 않고 return하는 나머지 두
+    경로(2579-2592행: traversal 마킹 메뉴, 모델링 툴킷 RMB-complete)에
+    해당하는가.
+
+    뷰큐브와 달리 이 둘은 `$object`가 멀쩡한 DAG 경로라서 `_resolveObject()`의
+    실재 검사로는 걸러지지 않는다. 판정에 실패하면 **억제하지 않는다** --
+    잘못 판정해서 우리 항목이 하나 더 붙는 쪽이, 판정 코드가 예외를 내서
+    우클릭 경로를 흔드는 쪽보다 낫다.
+
+    질의는 전부 `exists(...)`로 감싼다. Maya 자신은 2589행에서 `nexCtx`를
+    그냥 부르지만(GUI에서는 모델링 툴킷이 늘 로드돼 있다), 우리 쪽에서는
+    없는 커맨드를 부르면 우클릭할 때마다 스크립트 에디터에 MEL 에러가 찍힌다.
+    `catchQuiet`로는 못 막는다 -- 존재하지 않는 커맨드는 런타임 에러가 아니라
+    **구문 에러**라서 eval 자체가 컴파일에 실패한다(실측). 배치에서
+    `modelingTookitActive()`가 1을 돌려주면서 `exists("nexCtx") == 0`인 조합이
+    실제로 나오므로 커맨드 존재 확인이 반드시 필요하다.
+    """
+    try:
+        if mel.eval('exists("hasTraversalMM")') == 1 and mel.eval("hasTraversalMM()"):
+            # 임시 변수 이름은 _melGlobalString의 $maroTmp와 일부러 다르게
+            # 둔다 -- 같은 이름을 string/int로 번갈아 쓰면 MEL 타입 충돌이
+            # 날 여지가 있다.
+            if mel.eval("global int $gTraversal; $maroTraversalTmp = $gTraversal;"):
+                return True
+        if mel.eval('exists("modelingTookitActive")') == 1 \
+                and mel.eval('exists("nexCtx")') == 1 \
+                and mel.eval("modelingTookitActive()") \
+                and mel.eval("nexCtx -q -rmbComplete"):
+            return True
+    except Exception:
+        return False
+    return False
 
 
 def _leadObject():

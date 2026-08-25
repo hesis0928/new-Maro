@@ -28,6 +28,7 @@ Maya 2026의 dagMenuProc는 2589행에서 `nexCtx`(모델링 툴킷 커맨드, G
 """
 import os
 import sys
+import tempfile
 
 import maya.standalone
 
@@ -201,5 +202,145 @@ cmds.unloadPlugin(pluginName)
 assert maroDagMenu._INSTALLED is False
 assert mel.eval('whatIs "dagMenuProc"').startswith("Mel procedure found in: ")
 print("reload cycle OK")
+
+# --- 뷰큐브 등 "노드 컨텍스트 메뉴가 아닌" 메뉴에 새지 않는가 --------------
+#
+# Maya의 dagMenuProc에는 일반 오브젝트 메뉴를 만들지 않고 곧바로 return하는
+# 경로가 셋 있다(2586행 traversal MM, 2591행 모델링 툴킷 RMB-complete,
+# 2602-2605행 뷰큐브). 그중 뷰큐브는 `$object`가 노드 이름이 아니라 센티널
+# 문자열 "CubeCompass"이고, 기본 뷰포트마다 있으므로 아주 흔하다. 원본이
+# 무엇을 했는지와 무관하게 항목을 붙이면 우리 항목이 뷰큐브 메뉴에 낀다.
+cube = cmds.polyCube(name="maroDagMenuGuardCube")[0]
+
+
+def _setMelObject(value):
+    mel.eval(f'global string $gMaroDagMenuObject; $gMaroDagMenuObject = "{value}";')
+
+
+_setMelObject("CubeCompass")
+assert maroDagMenu._resolveObject() == "", (
+    "the ViewCube sentinel is not a DAG object -- our item must not be added"
+)
+for sentinel in ("CubeCompass", "notANode", "|no|such|path"):
+    _setMelObject(sentinel)
+    assert maroDagMenu._resolveObject() == "", sentinel
+
+# ...그리고 진짜 DAG 오브젝트에서는 여전히 붙어야 한다(가드가 정상 경로까지
+# 막아 버리면 기능 자체가 사라진다).
+cmds.select(clear=True)
+_setMelObject(cube)
+assert maroDagMenu._resolveObject() == cube, "a real transform must still pass the guard"
+shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+_setMelObject(shape)
+assert maroDagMenu._resolveObject() == shape, "a real shape must still pass the guard"
+_setMelObject(cmds.ls(cube, long=True)[0])
+assert maroDagMenu._resolveObject() == cmds.ls(cube, long=True)[0], (
+    "a full DAG path must still pass the guard"
+)
+# 빈 문자열 -> 선택 기반 대체 경로도 가드를 통과해야 한다.
+cmds.select(cube, replace=True)
+_setMelObject("")
+assert maroDagMenu._resolveObject() != "", (
+    "the empty-$object selection fallback must still produce our item"
+)
+cmds.select(clear=True)
+_setMelObject("")
+assert maroDagMenu._resolveObject() == ""
+# 배치에는 traversal MM도 모델링 툴킷도 없으므로 억제되지 않아야 한다
+# (억제 판정 자체가 예외를 내지 않는다는 확인도 겸한다).
+assert maroDagMenu._nativeMenuSuppressed() is False
+cmds.delete(cube)
+print("non-DAG sentinels (ViewCube) rejected, real DAG objects still accepted OK")
+
+# --- 시그니처가 다르면 매치되지 않는가 -------------------------------------
+#
+# 헤더 정규식이 인자 목록을 보지 않으면, 시그니처가 다른 Maya에서도 매치되어
+# 인자 두 개짜리 래퍼를 설치한다. 그러면 Maya의 실제 호출자가 다른 인자 수로
+# 부르므로 오브젝트를 우클릭할 때마다 MEL "wrong number of arguments" 에러가
+# 세션 내내 난다. 예상한 형태가 아니면 매치되지 않고 설치를 포기해야 한다.
+with open(maroDagMenu._ORIGINAL_SOURCE_FILE, "rb") as f:
+    realSrc = f.read()
+assert len(maroDagMenu._PROC_HEADER_RE.findall(realSrc)) == 1, (
+    "the tightened header regex must still match Maya's real dagMenuProc.mel "
+    "exactly once -- this Maya's signature IS (string $parent, string $object)"
+)
+assert maroDagMenu._PROC_HEADER_RE.search(
+    b"global proc dagMenuProc(string  $a,\tstring $b)") is not None
+for bad in (b"global proc dagMenuProc(string $parent, string $object, int $extra)",
+            b"global proc dagMenuProc(string $parent)",
+            b"global proc dagMenuProc()",
+            b"global proc dagMenuProc(string $parent, int $object)",
+            b"global proc int dagMenuProc(string $parent, string $object)"):
+    assert maroDagMenu._PROC_HEADER_RE.search(bad) is None, (
+        f"an unexpected signature must NOT match: {bad!r}"
+    )
+print("header regex matches Maya's real signature only OK")
+
+
+# --- 설치 포기 경로: 실패하면 아무것도 바꾸지 않는가 -----------------------
+#
+# 이 모듈의 핵심 안전 보장이다. 원본을 확실히 보존하지 못하면 install()은
+# False를 돌려주고 dagMenuProc를 **건드리지 않는다**. 잘못된 whatIs 문자열
+# 하나와 세션 전체의 우클릭 메뉴 파괴 사이에 서 있는 것이 이 분기라서,
+# 다른 모든 동작과 같은 수준으로 값으로 고정해 둔다.
+assert maroDagMenu._INSTALLED is False
+before = mel.eval('whatIs "dagMenuProc"')
+realSourceFile = maroDagMenu._originalProcSourceFile
+
+
+def _assertDeclined(label):
+    assert maroDagMenu.install() is False, f"install() must decline when {label}"
+    assert maroDagMenu._INSTALLED is False, f"install() must not flip _INSTALLED when {label}"
+    after = mel.eval('whatIs "dagMenuProc"')
+    assert after == before, (
+        f"install() must leave dagMenuProc untouched when {label}; "
+        f"whatIs went {before!r} -> {after!r}"
+    )
+    assert maroDagMenu._BACKUP_TEMP_FILE is None, (
+        f"install() must not leave a backup temp file behind when {label}"
+    )
+
+
+# (a) 원본 .mel 경로를 확인할 수 없다 (whatIs가 모르는 문구를 돌려준 경우 등).
+maroDagMenu._originalProcSourceFile = lambda: None
+try:
+    _assertDeclined("the original proc's source file cannot be verified")
+finally:
+    maroDagMenu._originalProcSourceFile = realSourceFile
+
+# (b) 경로는 있는데 그 파일이 없다.
+maroDagMenu._originalProcSourceFile = lambda: os.path.join(
+    pluginDir, "noSuchDagMenuProc.mel")
+try:
+    _assertDeclined("the reported source file does not exist")
+finally:
+    maroDagMenu._originalProcSourceFile = realSourceFile
+
+# (c) 파일은 있는데 예상한 선언 헤더가 정확히 한 번 나오지 않는다 -- 시그니처가
+#     다른 경우가 여기 포함된다(위 정규식 검증과 짝을 이룬다).
+for label, body in (
+        ("the declaration header is missing",
+         b"global proc somethingElse(string $a, string $b) {}\n"),
+        ("the declaration has an unexpected signature",
+         b"global proc dagMenuProc(string $parent, string $object, int $x) {}\n"),
+        ("the declaration header appears more than once",
+         b"global proc dagMenuProc(string $a, string $b) {}\n"
+         b"global proc dagMenuProc(string $a, string $b) {}\n")):
+    fd, fakePath = tempfile.mkstemp(suffix=".mel", prefix="maroDagMenuFake_")
+    with os.fdopen(fd, "wb") as f:
+        f.write(body)
+    assert maroDagMenu._writeBackupCopy(fakePath) is None, label
+    maroDagMenu._originalProcSourceFile = lambda p=fakePath: p
+    try:
+        _assertDeclined(label)
+    finally:
+        maroDagMenu._originalProcSourceFile = realSourceFile
+        os.remove(fakePath)
+
+# 포기 경로를 다 지나온 뒤에도 정상 설치는 여전히 된다.
+assert maroDagMenu.install() is True
+assert mel.eval('exists("maroDagMenuProcOriginal")') == 1
+maroDagMenu.uninstall()
+print("install() declines and changes nothing when the original cannot be preserved OK")
 
 print("test_dag_menu OK")
