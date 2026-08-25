@@ -657,12 +657,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 **Note for the implementer:** `mousePressEvent`/`mouseMoveEvent` in PySide6 give `event.position()` on newer Qt6 builds and `event.localPos()` on older ones — the `hasattr` guard above handles both; verify empirically against the Maya-bundled PySide6 version (`python -c "import PySide6.QtCore; print(PySide6.__version__)"` from `mayapy`) before assuming one branch is dead code.
 
-- [ ] **Step 2: Build**
+- [ ] **Step 2: Build and run the full suite**
 
 ```powershell
 cmake --build out/build --config Release
+ctest --test-dir out/build -C Release --output-on-failure
 ```
-(No C++ changed in this task, but re-run the build to confirm nothing else broke, per the project's per-task discipline.)
+(No C++ changed in this task, but re-run both to confirm nothing else broke, per the Global Constraints' per-task discipline.)
 
 - [ ] **Step 3: Manual smoke check** (interactive Maya, not automated — full checklist entry comes in Task 9)
 
@@ -1201,10 +1202,11 @@ In `uninitializePlugin`, add the mirroring call **before** the existing `maro::r
 
 Add `maroDagMenu` to `MARO_PLUGIN_PY_MODULES`.
 
-- [ ] **Step 6: Build**
+- [ ] **Step 6: Build and run the full suite**
 
 ```powershell
 cmake --build out/build --config Release
+ctest --test-dir out/build -C Release --output-on-failure
 ```
 
 - [ ] **Step 7: Manual verification** (interactive Maya — this is the acceptance test for this task)
