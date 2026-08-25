@@ -171,6 +171,20 @@ def main():
     PEER_TIMEOUT_SEC = 20  # 피어 자체 타임아웃
     BACKSTOP_SEC = PEER_TIMEOUT_SEC + 10  # 파이썬 쪽 안전망. 피어 타임아웃보다 넉넉히 크다.
 
+    # Task 4: 직선 구동 축도 같은 브리지/피어로 검증한다. 회전축과 별개
+    # 이름으로 둬서 피어 출력에서 줄 단위로 구분한다.
+    cubeLinear = cmds.polyCube(name="segLinear")[0]
+    axisLinear = cmds.createNode("maroAxis", name="axisPubLinear")
+    cmds.maroBindAxis(axisLinear, cubeLinear)
+    cmds.setAttr(axisLinear + ".jointName", "axisPubLinear", type="string")
+    transPub = cmds.createNode("maroTranslation")
+    cmds.connectAttr(transPub + ".capabilityOut", axisLinear + ".capabilityIn[0]")
+    # currentUnit(linear="cm")이 위에서 이미 고정돼 있다 -- 250cm = 2.5m.
+    cmds.setAttr(transPub + ".distance", 250.0)
+
+    EXPECTED_JOINT_LINEAR = "axisPubLinear"
+    EXPECTED_VALUE_LINEAR = 2.5  # 미터
+
     # M18(이전 태스크들에서 세 번 겪은 사고)과 동일한 이유로 라이브 구간을
     # try/finally로 감싼다: 여기서 assert가 터지면 브리지(백그라운드 rclcpp 스레드)와
     # 구독 중인 피어 서브프로세스가 살아남아, taskkill /F에도 안 죽고 빌드
@@ -214,6 +228,36 @@ def main():
             f"(0.75 rad in -> {EXPECTED_VALUE} rad out, no unit conversion in between):\n{out}\n" \
             f"maroBridgeStats={stats}"
         print(f"publish round trip OK (joint={EXPECTED_JOINT}, value={published})")
+
+        # Task 4: 두 번째 피어로 직선 구동 축이 라디안이 아니라 "미터"로
+        # 발행되는지 확인한다 -- 이름만 맞고 단위가 틀리면(예: 센티미터
+        # 그대로 발행) "피어가 뭔가는 받았다"만 보는 테스트는 통과해 버린다.
+        linearListener = subprocess.Popen(
+            [peer, "echo", "maro", "1", str(PEER_TIMEOUT_SEC)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        peers.append(linearListener)
+
+        linear_out, linear_stats = _wait_for_peer(linearListener, BACKSTOP_SEC)
+        print(linear_out)
+
+        assert linearListener.returncode == 0, \
+            f"peer never received joint_states for linear axis (timed out); " \
+            f"maroBridgeStats={linear_stats}\npeer output:\n{linear_out}"
+        assert f"joint {EXPECTED_JOINT_LINEAR} = " in linear_out, \
+            f"joint name '{EXPECTED_JOINT_LINEAR}' missing from published message:\n{linear_out}"
+
+        publishedLinear = None
+        for line in linear_out.splitlines():
+            prefix = f"joint {EXPECTED_JOINT_LINEAR} = "
+            if line.startswith(prefix):
+                publishedLinear = float(line[len(prefix):].strip())
+                break
+        assert publishedLinear is not None, \
+            f"could not parse published value for '{EXPECTED_JOINT_LINEAR}':\n{linear_out}"
+        assert abs(publishedLinear - EXPECTED_VALUE_LINEAR) < 1e-6, \
+            f"linear joint published as {publishedLinear}, expected {EXPECTED_VALUE_LINEAR} m " \
+            f"(250cm in -> 2.5m out):\n{linear_out}\nmaroBridgeStats={linear_stats}"
+        print(f"linear publish round trip OK (joint={EXPECTED_JOINT_LINEAR}, value={publishedLinear})")
 
         # --- /tf: 같은 라이브 브리지, 두 번째 피어. "/<robot>/joint_states"가
         # 아니라 전역 "/tf" 토픽을 구독한다(runTf()의 주석 참고 -- robotName을

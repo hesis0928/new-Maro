@@ -158,12 +158,26 @@ void MaroPump::collectSamples(MaroRosRuntime& runtime) {
 
         AxisSample sample;
         sample.jointName = joint.asChar();
-        // aOutValue는 MFnUnitAttribute::kAngle이다. asDouble()로 읽으면
-        // Maya가 UI 각도 단위(기본 도)로 변환한 값을 돌려줄 수 있어
-        // 라디안이 필요한 이 파이프라인에서 값이 어긋난다. asAngle()로
-        // 받아 asRadians()로 명시해야 항상 라디안이다.
-        sample.value =
-            axisFn.findPlug(MaroAxisNode::aOutValue, false).asMAngle().asRadians();
+        // driveIsLinear가 이 틱에 어느 출력이 유효한지 알려준다 -- 스택을
+        // 다시 훑지 않고 MaroAxisNode::compute()가 이미 판정해 둔 플래그
+        // 하나만 읽는다(Task 3).
+        if (axisFn.findPlug(MaroAxisNode::aDriveIsLinear, false).asBool()) {
+            // aOutValueLinear는 MFnUnitAttribute::kDistance다.
+            // asMDistance().asMeters()로 읽으면 씬의 내부 선형 단위(Maya는
+            // 항상 센티미터)와 무관하게 항상 미터로 받는다 -- aOutValue를
+            // asMAngle().asRadians()로 읽는 것과 같은 이유, 같은 관례다.
+            sample.value = axisFn.findPlug(MaroAxisNode::aOutValueLinear, false)
+                               .asMDistance()
+                               .asMeters();
+        } else {
+            // aOutValue는 MFnUnitAttribute::kAngle이다. asDouble()로 읽으면
+            // Maya가 UI 각도 단위(기본 도)로 변환한 값을 돌려줄 수 있어
+            // 라디안이 필요한 이 파이프라인에서 값이 어긋난다. asAngle()로
+            // 받아 asRadians()로 명시해야 항상 라디안이다.
+            sample.value = axisFn.findPlug(MaroAxisNode::aOutValue, false)
+                               .asMAngle()
+                               .asRadians();
+        }
         sample.convention = conventionOf(axisFn);
         sample.unit = unit;
 
