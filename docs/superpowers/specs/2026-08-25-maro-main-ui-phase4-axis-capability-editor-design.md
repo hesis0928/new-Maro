@@ -38,6 +38,17 @@ Phase 3(`2026-08-25-maro-main-ui-phase3-ros-proxy-design.md`)에서 우측 뷰�
 - `capabilityOut.capType = 5`.
 
 ### `MaroCouplingNode`
+> **[2026-08-25 최종 리뷰 수정 후 정정]** 아래 `aSourceValue`를 "double"로 적었던
+> 최초 설계는 실제로는 unit-safe하지 않다는 게 최종 리뷰(C-1)에서 밝혀졌다 —
+> unit 타입 어트리뷰트(`outValue`/`outValueLinear`)와 평범한 double 사이를
+> connectAttr로 이으면 Maya가 현재 UI 단위 기준으로 자동 변환을 끼워 넣어
+> (양방향 다 마찬가지) 각도 축 연결 시 ~57배 오차가 났다(실측 확인).
+> 구현은 `aSourceValue`를 `MFnUnitAttribute::kAngle`로 재선언하고,
+> `aSourceValueLinear`(`kDistance`) + `aSourceIsLinear`(bool, `aOutputIsLinear`와
+> 같은 패턴)를 추가해 계열별로 분리하는 쪽으로 수정됐다(`MaroCapabilityNodes.h`
+> 참고 — as-built 소스가 최신이다). 그 결과 **`capabilityOut.capValue`(평범한
+> double)는 더 이상 `sourceValue`의 유효한 연결 소스가 아니다** — 반드시
+> 축의 실제 `outValue`/`outValueLinear`에서 연결해야 한다.
 - `aSourceValue`(double) — 다른 축의 `outValue` 또는 `outValueLinear`에 사용자가 직접 `connectAttr`로 연결(§6 참고 — `maroBindAxis`가 값 연결을 자동화하지 않는 기존 관례를 그대로 따름).
 - `aRatio`(double, 기본 1.0), `aOffset`(double, 기본 0.0) — 곡선이 없을 때 `capValue = aSourceValue * aRatio + aOffset`.
 - `aCurvePoints`(compound array: `aCurveInput` double, `aCurveOutput` double, `setStorable(true)`, `setIndexMatters(false)` — 순서가 아니라 `curveInput` 값으로 정렬해서 보간하므로 논리 인덱스 순서는 의미 없음) — **2개 이상 있으면 곡선 보간이 ratio/offset을 대체**한다.
@@ -92,7 +103,7 @@ if (capType == 0) {            // rotation (기존)
 
 값 연결(`outValue`/`outValueLinear` → `rotateX`/`translateX` 등)은 지금도 사용자가 수동 `connectAttr`로 하는 방식이고(`maroBindAxis`는 `targetObject` message 연결만 담당, `aOutValue`를 자동으로 아무 데도 연결하지 않는다 — `MaroCommands.cpp` 확인됨), `maroTranslation`/`maroCoupling`도 같은 관례를 그대로 따른다. 자동 배선 커맨드는 이번에 만들지 않는다(YAGNI — 필요해지면 별도 계획).
 
-**열린 구현 세부사항**: `maroCoupling`이 `outValue`(각도)에서 왔는지 `outValueLinear`(거리)에서 왔는지는 `aSourceValue`가 순수 double 연결이라 노드 스스로는 알 수 없다. 가장 단순한 해법은 `MaroCouplingNode`에 `aOutputIsLinear`(bool, 사용자가 직접 설정)를 추가해서 명시적으로 알려주는 것 — 구현 태스크에서 이 방식으로 확정하거나, 더 나은 방법이 있으면 구현 중 바꾸고 이유를 기록한다(이 프로젝트의 기존 규율).
+**열린 구현 세부사항 — 해결됨**: `maroCoupling`이 `outValue`(각도)에서 왔는지 `outValueLinear`(거리)에서 왔는지는 `aOutputIsLinear`(bool)로 명시적으로 알려주는 방식으로 확정됐다(§4 그대로). 다만 그 과정에서 최종 리뷰(C-1)가 입력 쪽(`aSourceValue`)도 같은 문제(unit 안전성)를 가지고 있음을 발견해, **입력도 출력과 대칭으로** `aSourceValue`(kAngle)/`aSourceValueLinear`(kDistance)/`aSourceIsLinear`(bool)로 분리했다 — 위 §4 정정 박스 참고.
 
 ## 8. 새 커맨드 (`src/maro_plugin/MaroAxisEditorCommands.h/.cpp`, 신규 파일 쌍)
 
