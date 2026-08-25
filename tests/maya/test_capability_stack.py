@@ -124,6 +124,30 @@ cmds.setAttr(axis + ".enabled", False)
 assert abs(cmds.getAttr(axis + ".position")) < 1e-9, "disabled axis must output zero"
 print("disabled OK")
 
+# maroTranslation: 회전과 대칭인 직선 구동값. 단위는 센티미터로 고정해
+# 둔다(회전 절이 currentUnit(angle="rad")로 고정한 것과 같은 이유).
+cmds.currentUnit(linear="cm")
+axisLinear = cmds.createNode("maroAxis", name="axisLinear")
+trans = cmds.createNode("maroTranslation", name="trans1")
+cmds.connectAttr(trans + ".capabilityOut", axisLinear + ".capabilityIn[0]")
+assert cmds.getAttr(trans + ".capabilityOut.capType") == 4, "translation capType"
+cmds.setAttr(trans + ".distance", 25.0)
+outVal = cmds.getAttr(trans + ".capabilityOut.capValue")
+assert abs(outVal - 25.0) < 1e-9, f"translation capValue must carry centimeters (got {outVal})"
+print("translation node OK")
+
+# maroTranslationLimit: maroLimit과 대칭인 직선 클램프.
+transLim = cmds.createNode("maroTranslationLimit", name="transLim1")
+cmds.setAttr(transLim + ".enableY", True)
+cmds.setAttr(transLim + ".minY", -5.0)
+cmds.setAttr(transLim + ".maxY", 5.0)
+assert cmds.getAttr(transLim + ".capabilityOut.capType") == 5, "translationLimit capType"
+minY = cmds.getAttr(transLim + ".capabilityOut.capMin")[0][1]
+maxY = cmds.getAttr(transLim + ".capabilityOut.capMax")[0][1]
+assert abs(minY - (-5.0)) < 1e-9 and abs(maxY - 5.0) < 1e-9, \
+    f"translationLimit min/max must carry centimeters (got {minY}, {maxY})"
+print("translationLimit node OK")
+
 # 단위 계약: MFnUnitAttribute는 데이터블록(항상 라디안)과 cmds/Attribute
 # Editor 표면(현재 UI 각도 단위, 기본 도) 사이를 변환한다. 그 변환이 실제로
 # 걸려 있는지 끝까지 증명한다 -- rotation을 180 "도"로 설정하고 axis의

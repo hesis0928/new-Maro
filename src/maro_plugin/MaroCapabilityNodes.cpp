@@ -3,6 +3,7 @@
 #include <maya/MAngle.h>
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
+#include <maya/MDistance.h>
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnNumericAttribute.h>
@@ -332,6 +333,148 @@ MStatus MaroSensorRangeNode::compute(const MPlug& plug, MDataBlock& data) {
         maro::BoadMaro::error("MaroSensorRangeNode.compute.UnknownException",
                               "Maro: maroSensorRange compute failed.",
                               computeContext(*this, "maroSensorRange"));
+        return MS::kFailure;
+    }
+}
+
+MTypeId MaroTranslationNode::id(0x00135107);
+MObject MaroTranslationNode::aDistance;
+CapabilityOutAttrs MaroTranslationNode::out;
+
+void* MaroTranslationNode::creator() { return new MaroTranslationNode(); }
+
+MStatus MaroTranslationNode::initialize() {
+    MFnUnitAttribute distFn;
+
+    // maroRotation.angle과 같은 관례: AE는 사용자의 UI 선형 단위(cm/in/m)를
+    // 보여주고 받지만, 데이터블록은 항상 센티미터(Maya 내부 선형 단위)로
+    // 저장한다.
+    aDistance = distFn.create("distance", "dst", MFnUnitAttribute::kDistance, 0.0);
+    distFn.setStorable(true);
+    distFn.setKeyable(true);
+    addAttribute(aDistance);
+
+    createCapabilityOut(out);
+    addAttribute(out.compound);
+
+    attributeAffects(aDistance, out.compound);
+    return MS::kSuccess;
+}
+
+MStatus MaroTranslationNode::compute(const MPlug& plug, MDataBlock& data) {
+    try {
+        if (plug != out.compound && plug.parent() != out.compound) {
+            return MS::kUnknownParameter;
+        }
+
+        MDataHandle handle = data.outputValue(out.compound);
+        handle.child(out.type).setShort(4);   // 4 = translation
+        // .asDistance().asCentimeters()가 단위를 명시한다; 이 컴파운드가
+        // 먹이는 자식(capValue)은 센티미터를 나르는 평범한 double이다 --
+        // maroRotation이 라디안을 나르는 것과 같은 관례.
+        handle.child(out.value).setDouble(
+            data.inputValue(aDistance).asDistance().asCentimeters());
+        data.setClean(plug);
+        return MS::kSuccess;
+    } catch (...) {
+        maro::BoadMaro::error("MaroTranslationNode.compute.UnknownException",
+                              "Maro: maroTranslation compute failed.",
+                              computeContext(*this, "maroTranslation"));
+        return MS::kFailure;
+    }
+}
+
+MTypeId MaroTranslationLimitNode::id(0x00135108);
+MObject MaroTranslationLimitNode::aEnableX;
+MObject MaroTranslationLimitNode::aEnableY;
+MObject MaroTranslationLimitNode::aEnableZ;
+MObject MaroTranslationLimitNode::aMinX;
+MObject MaroTranslationLimitNode::aMaxX;
+MObject MaroTranslationLimitNode::aMinY;
+MObject MaroTranslationLimitNode::aMaxY;
+MObject MaroTranslationLimitNode::aMinZ;
+MObject MaroTranslationLimitNode::aMaxZ;
+CapabilityOutAttrs MaroTranslationLimitNode::out;
+
+void* MaroTranslationLimitNode::creator() { return new MaroTranslationLimitNode(); }
+
+namespace {
+// 거리 단위 어트리뷰트 헬퍼. 위 makeAngle/makeBool과 같은 관례 --
+// 의도(기본 범위)가 반복되는 리터럴 대신 named MDistance로 읽힌다.
+MObject makeDistance(MFnUnitAttribute& fn, const char* longName,
+                     const char* shortName, const MDistance& value) {
+    MObject attr = fn.create(longName, shortName, value);
+    fn.setStorable(true);
+    fn.setKeyable(true);
+    return attr;
+}
+}  // namespace
+
+MStatus MaroTranslationLimitNode::initialize() {
+    MFnNumericAttribute numFn;
+    MFnUnitAttribute distFn;
+
+    aEnableX = makeBool(numFn, "enableX", "enx");
+    addAttribute(aEnableX);
+    aEnableY = makeBool(numFn, "enableY", "eny");
+    addAttribute(aEnableY);
+    aEnableZ = makeBool(numFn, "enableZ", "enz");
+    addAttribute(aEnableZ);
+
+    // 기본 범위 +-10cm -- maroLimit의 +-180도와 같은 성격의 "합리적인 전체
+    // 범위" 기본값, 특정 로봇 스펙을 반영하지 않는다.
+    aMinX = makeDistance(distFn, "minX", "mnx", MDistance(-10.0, MDistance::kCentimeters));
+    addAttribute(aMinX);
+    aMaxX = makeDistance(distFn, "maxX", "mxx", MDistance(10.0, MDistance::kCentimeters));
+    addAttribute(aMaxX);
+    aMinY = makeDistance(distFn, "minY", "mny", MDistance(-10.0, MDistance::kCentimeters));
+    addAttribute(aMinY);
+    aMaxY = makeDistance(distFn, "maxY", "mxy", MDistance(10.0, MDistance::kCentimeters));
+    addAttribute(aMaxY);
+    aMinZ = makeDistance(distFn, "minZ", "mnz", MDistance(-10.0, MDistance::kCentimeters));
+    addAttribute(aMinZ);
+    aMaxZ = makeDistance(distFn, "maxZ", "mxz", MDistance(10.0, MDistance::kCentimeters));
+    addAttribute(aMaxZ);
+
+    createCapabilityOut(out);
+    addAttribute(out.compound);
+
+    for (const MObject& src : {aEnableX, aEnableY, aEnableZ, aMinX, aMaxX,
+                               aMinY, aMaxY, aMinZ, aMaxZ}) {
+        attributeAffects(src, out.compound);
+    }
+    return MS::kSuccess;
+}
+
+MStatus MaroTranslationLimitNode::compute(const MPlug& plug, MDataBlock& data) {
+    try {
+        if (plug != out.compound && plug.parent() != out.compound) {
+            return MS::kUnknownParameter;
+        }
+
+        MDataHandle handle = data.outputValue(out.compound);
+        handle.child(out.type).setShort(5);   // 5 = translationLimit
+
+        handle.child(out.enable).set3Short(
+            static_cast<short>(data.inputValue(aEnableX).asBool()),
+            static_cast<short>(data.inputValue(aEnableY).asBool()),
+            static_cast<short>(data.inputValue(aEnableZ).asBool()));
+
+        handle.child(out.minimum).set3Double(
+            data.inputValue(aMinX).asDistance().asCentimeters(),
+            data.inputValue(aMinY).asDistance().asCentimeters(),
+            data.inputValue(aMinZ).asDistance().asCentimeters());
+        handle.child(out.maximum).set3Double(
+            data.inputValue(aMaxX).asDistance().asCentimeters(),
+            data.inputValue(aMaxY).asDistance().asCentimeters(),
+            data.inputValue(aMaxZ).asDistance().asCentimeters());
+
+        data.setClean(plug);
+        return MS::kSuccess;
+    } catch (...) {
+        maro::BoadMaro::error("MaroTranslationLimitNode.compute.UnknownException",
+                              "Maro: maroTranslationLimit compute failed.",
+                              computeContext(*this, "maroTranslationLimit"));
         return MS::kFailure;
     }
 }

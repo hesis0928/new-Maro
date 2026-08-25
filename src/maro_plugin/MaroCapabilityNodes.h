@@ -85,4 +85,34 @@ public:
     static CapabilityOutAttrs out;
 };
 
+class MaroTranslationNode : public MPxNode {
+public:
+    static void* creator();
+    static MStatus initialize();
+    MStatus compute(const MPlug& plug, MDataBlock& data) override;
+    static MTypeId id;
+
+    static MObject aDistance;        // MFnUnitAttribute::kDistance (AE: cm/in/m 등, 내부: 센티미터)
+    static CapabilityOutAttrs out;
+};
+
+class MaroTranslationLimitNode : public MPxNode {
+public:
+    static void* creator();
+    static MStatus initialize();
+    MStatus compute(const MPlug& plug, MDataBlock& data) override;
+    static MTypeId id;
+
+    static MObject aEnableX;
+    static MObject aEnableY;
+    static MObject aEnableZ;
+    static MObject aMinX;            // MFnUnitAttribute::kDistance (AE: cm/in/m, 내부: 센티미터)
+    static MObject aMaxX;
+    static MObject aMinY;
+    static MObject aMaxY;
+    static MObject aMinZ;
+    static MObject aMaxZ;
+    static CapabilityOutAttrs out;
+};
+
 }  // namespace maro
