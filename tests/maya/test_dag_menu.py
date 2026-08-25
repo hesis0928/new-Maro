@@ -1,0 +1,205 @@
+"""maroDagMenu의 dagMenuProc 체이닝 계약을 배치 모드에서 고정한다.
+
+이 파일이 무엇을 **못** 하는지 먼저 분명히 해 둔다. 배치 mayapy에는 실제
+팝업 메뉴가 없으므로 "우클릭했을 때 마킹 메뉴에 항목이 실제로 보이는가"는
+여기서 확인할 수 없다 -- 그건 대화형 Maya에서 사람이 봐야 한다
+(test_main_menu.py / test_main_window.py와 같은 한계).
+
+여기서 확인할 수 있는 것 -- 그리고 이 태스크에서 가장 위험한 부분이 바로
+이것이다: **원본 dagMenuProc의 항목들이 보존되는가.** dagMenuProc는
+프로세스 전역 프로시저 하나뿐이라, 체이닝이 잘못되면 이 플러그인만이 아니라
+Maya 자신과 다른 모든 플러그인의 오브젝트 우클릭 메뉴가 조용히 사라진다.
+그 계약은 UI 없이도 값으로 고정할 수 있다:
+
+  - 플러그인을 로드하면 원본이 `maroDagMenuProcOriginal`로 보존된다.
+  - 우리 래퍼가 **원본을 먼저** 부르고 **그 다음에** 우리 항목을 붙인다
+    (호출 순서와 인자를 스텁으로 기록해 확인한다).
+  - 인자(팝업 메뉴 이름, DAG 경로)가 MEL -> Python으로 그대로 건너간다.
+  - 언로드하면 dagMenuProc가 Maya 원본 정의로 되돌아간다(whatIs가 다시
+    Maya의 .mel 파일을 가리킨다).
+  - 백업 복사본이 지역화 리소스 키를 망가뜨리지 않는다(`uiRes` 실측).
+
+배치 모드에서 dagMenuProc를 **직접 실행**할 수는 없다는 것도 기록해 둔다:
+Maya 2026의 dagMenuProc는 2589행에서 `nexCtx`(모델링 툴킷 커맨드, GUI에서만
+로드된다)를 부르므로 배치에서는 원본이든 우리 체인이든 똑같이
+"Cannot find procedure nexCtx"로 실패한다. 그래서 아래 순서 검증은 백업
+프로시저를 기록용 스텁으로 갈아 끼운 뒤에 한다 -- 검증 대상은 원본 본문이
+아니라 **우리 래퍼의 체이닝 구조**이기 때문이다.
+"""
+import os
+import sys
+
+import maya.standalone
+
+maya.standalone.initialize(name="python")
+
+import maya.cmds as cmds  # noqa: E402
+import maya.mel as mel  # noqa: E402
+
+plugin = os.environ["MARO_PLUGIN_PATH"]
+pluginName = os.path.splitext(os.path.basename(plugin))[0]
+pluginDir = os.path.dirname(plugin)
+
+stagedModule = os.path.join(pluginDir, "maroDagMenu.py")
+assert os.path.isfile(stagedModule), (
+    f"maroDagMenu.py must be staged next to the plug-in, not found at {stagedModule}"
+)
+print("module staged next to the plug-in OK")
+
+# 로드 전 상태. dagMenuProc.mel은 첫 우클릭 때 지연 소스되므로 아직
+# 소스되지 않았고, whatIs는 "Mel procedure found in: "가 아니라
+# "Script found in: "으로 보고한다. 이 사실이 maroDagMenu._originalProcSourceFile()
+# 이 두 접두사를 모두 받아야 하는 이유이므로 값으로 고정해 둔다 --
+# 한쪽만 보는 구현은 경로를 못 찾고 원본 보존에 실패한다.
+pristine = mel.eval('whatIs "dagMenuProc"')
+assert pristine.startswith("Script found in: "), (
+    f"expected an unsourced dagMenuProc to be reported as 'Script found in: ', "
+    f"got {pristine!r} -- maroDagMenu._WHATIS_PREFIXES needs re-checking"
+)
+assert mel.eval('exists("maroDagMenuProcOriginal")') == 0
+print(f"pristine whatIs OK: {pristine!r}")
+
+cmds.loadPlugin(plugin)
+cmds.file(new=True, force=True)
+
+import maroDagMenu  # noqa: E402  (플러그인 디렉터리가 sys.path에 들어간 뒤)
+
+assert "maroDagMenu" in sys.modules
+assert maroDagMenu._INSTALLED is True, "initializePlugin should have installed the chain"
+assert mel.eval('exists("maroDagMenuProcOriginal")') == 1, (
+    "the original dagMenuProc must be preserved under a backup name"
+)
+assert mel.eval('exists("dagMenuProc")') == 1
+print("install() ran from initializePlugin OK")
+
+# 백업 복사본이 선언 헤더 한 줄만 바꿨는가. 파일 전체를 무조건 치환하면
+# uiRes("m_dagMenuProc.*") 리소스 키 200여 개가 함께 망가진다.
+with open(maroDagMenu._BACKUP_TEMP_FILE, "rb") as f:
+    backupSrc = f.read()
+assert backupSrc.count(b"global proc maroDagMenuProcOriginal(") == 1
+assert backupSrc.count(b"global proc dagMenuProc(") == 0
+assert b'uiRes("m_dagMenuProc.kSelect")' in backupSrc, (
+    "localisation resource keys must survive the rename"
+)
+assert b"m_maroDagMenuProcOriginal" not in backupSrc
+# 그리고 헤더 한 줄 말고는 원본과 **바이트 단위로** 같아야 한다. 디코딩을
+# 거치면 UTF-8이 아닌 바이트가 조용히 U+FFFD로 바뀔 수 있는데, 그 사본이
+# 곧 세션 전체의 우클릭 메뉴가 된다.
+with open(maroDagMenu._ORIGINAL_SOURCE_FILE, "rb") as f:
+    originalSrc = f.read()
+assert (backupSrc.replace(b"global proc maroDagMenuProcOriginal(",
+                          b"global proc dagMenuProc(") == originalSrc), (
+    "the backup copy must be byte-identical to Maya's file apart from the "
+    "renamed declaration header"
+)
+# 그리고 그 키가 실제로 해소되는지 Maya에게 직접 물어본다.
+assert mel.eval('uiRes("m_dagMenuProc.kSelect")') not in ("", None)
+# 같은 파일의 다른 전역 프로시저들이 원래 이름 그대로 살아 있는가.
+for proc in ("createSelectMenuItems", "showSG", "canMakeLive",
+             "dagMenuProc_selectionMask_melToUI"):
+    assert mel.eval(f'exists("{proc}")') == 1, f"{proc} must keep its real name"
+print("backup copy renames exactly one declaration header OK")
+
+# --- 핵심: 래퍼가 원본을 먼저 부르고 그 다음에 우리 항목을 붙이는가 ------
+#
+# 백업 프로시저를 기록용 스텁으로 갈아 끼운다(배치에서는 진짜 원본 본문이
+# nexCtx 때문에 돌지 않는다 -- 파일 독스트링 참고). 우리 파이썬 훅도
+# 기록용으로 바꾼다. 그러면 dagMenuProc 한 번 호출로 순서와 인자를 모두
+# 관찰할 수 있다.
+calls = []
+mel.eval('''
+    global proc maroDagMenuProcOriginal(string $parent, string $object)
+    {
+        python("import maroDagMenu; maroDagMenu._testRecordOriginal()");
+    }
+''')
+
+
+def _recordOriginal():
+    calls.append(("original",
+                  maroDagMenu._melGlobalString(maroDagMenu._MEL_PARENT_VAR),
+                  maroDagMenu._melGlobalString(maroDagMenu._MEL_OBJECT_VAR)))
+
+
+def _recordOurs():
+    calls.append(("ours",
+                  maroDagMenu._melGlobalString(maroDagMenu._MEL_PARENT_VAR),
+                  maroDagMenu._melGlobalString(maroDagMenu._MEL_OBJECT_VAR)))
+
+
+maroDagMenu._testRecordOriginal = _recordOriginal
+realAddMenuItem = maroDagMenu._addMenuItem
+maroDagMenu._addMenuItem = _recordOurs
+
+# 스텁 원본은 인자를 못 보므로(전역 변수는 우리 래퍼가 나중에 채운다)
+# 원본 호출 시점에는 아직 이전 값이 남아 있을 수 있다. 순서만 본다.
+probes = ["|group1|pCube1", "pCube1", "ns:rig|ns:jointA", ""]
+for probe in probes:
+    calls[:] = []
+    mel.eval(f'dagMenuProc("maroProbeMenu", "{probe}")')
+    order = [c[0] for c in calls]
+    assert order == ["original", "ours"], (
+        f"the wrapper must call the preserved original FIRST and add our item "
+        f"second; got {order!r} for object {probe!r}"
+    )
+    # 우리 훅이 받은 인자가 MEL이 받은 것과 같은가 (따옴표/이스케이프 없이
+    # MEL 전역 변수로 건너간다).
+    assert calls[1][1] == "maroProbeMenu", calls
+    assert calls[1][2] == probe, (
+        f"DAG path must round-trip MEL -> Python unchanged; "
+        f"sent {probe!r} got {calls[1][2]!r}"
+    )
+print(f"chain order + argument round-trip OK for {probes!r}")
+
+maroDagMenu._addMenuItem = realAddMenuItem
+
+# _addMenuItem은 절대 예외를 밖으로 내보내면 안 된다 -- MEL로 새어 나가면
+# 우클릭 메뉴 생성 전체가 에러로 끝난다. 배치에는 팝업 메뉴가 없으므로
+# 아래 호출은 popupMenu 가드에 걸려 조용히 아무것도 안 해야 한다.
+mel.eval('global string $gMaroDagMenuParent; $gMaroDagMenuParent = "noSuchMenu";')
+maroDagMenu._addMenuItem()
+print("_addMenuItem is a safe no-op without a real popup menu OK")
+
+# 커서 아래에 아무것도 없을 때(buildObjectMenuItemsNow.mel이 빈 문자열을
+# 넘기는 경우) 쓰는 대체 경로. Maya 자신의 dagMenuProc와 같은 질의를 한다.
+cube = cmds.polyCube(name="maroDagMenuProbeCube")[0]
+cmds.select(cube, replace=True)
+assert maroDagMenu._leadObject() != "", "should fall back to the selection"
+cmds.select(clear=True)
+assert maroDagMenu._leadObject() == "", "empty selection should give an empty string"
+print("_leadObject fallback OK")
+
+# 멱등성.
+assert maroDagMenu.install() is True
+assert mel.eval('exists("maroDagMenuProcOriginal")') == 1
+print("install() idempotent OK")
+
+tempCopy = maroDagMenu._BACKUP_TEMP_FILE
+assert os.path.isfile(tempCopy)
+
+# --- 언로드하면 Maya 원본으로 되돌아가는가 --------------------------------
+cmds.unloadPlugin(pluginName)
+assert maroDagMenu._INSTALLED is False, "uninitializePlugin should have uninstalled"
+restored = mel.eval('whatIs "dagMenuProc"')
+assert restored.startswith("Mel procedure found in: "), restored
+assert restored.replace("\\", "/").endswith("others/dagMenuProc.mel"), (
+    f"dagMenuProc must point back at Maya's own file after unload, got {restored!r}"
+)
+assert not os.path.exists(tempCopy), "the temp backup copy must be cleaned up"
+# 원본과 함께 다시 소스된 다른 전역 프로시저들도 멀쩡한가.
+assert mel.eval('exists("createSelectMenuItems")') == 1
+print(f"unload restored Maya's own dagMenuProc OK: {restored!r}")
+
+maroDagMenu.uninstall()  # 멱등
+print("uninstall() idempotent OK")
+
+# --- 로드/언로드를 다시 한 번 (세션 안에서 모듈 상태가 남아 있는 경우) ----
+cmds.loadPlugin(plugin)
+assert maroDagMenu._INSTALLED is True
+assert mel.eval('exists("maroDagMenuProcOriginal")') == 1
+cmds.unloadPlugin(pluginName)
+assert maroDagMenu._INSTALLED is False
+assert mel.eval('whatIs "dagMenuProc"').startswith("Mel procedure found in: ")
+print("reload cycle OK")
+
+print("test_dag_menu OK")

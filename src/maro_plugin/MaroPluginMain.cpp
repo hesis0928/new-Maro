@@ -461,6 +461,18 @@ MStatus initializePlugin(MObject obj) {
             "Maro: failed to queue the Maro menu build (non-fatal -- UI convenience only).");
     }
 
+    // 오브젝트 우클릭(마킹) 메뉴에 "Maro node editor" 항목을 붙인다.
+    // 위 maroBuildMenu와 달리 유휴 큐를 쓰지 않는다: dagMenuProc 체이닝은
+    // Maya 메인 윈도우가 아니라 MEL 전역 프로시저 테이블만 건드리므로
+    // UI 구성 완료를 기다릴 이유가 없다(그리고 배치 mayapy에서도 그대로
+    // 성립해서 tests/maya가 검증할 수 있다).
+    //
+    // 실패해도 로드를 막지 않는다 -- 메뉴 항목이 안 붙는 것은 불편일 뿐이고,
+    // maroDagMenu.install()은 원본 dagMenuProc를 확실히 보존하지 못하면
+    // 아무것도 바꾸지 않고 돌아오도록 설계돼 있다(python/maroDagMenu.py의
+    // 모듈 독스트링 참고).
+    maro::runPluginPythonModule("maroDagMenu", "maroDagMenu.install()");
+
     maro::BoadMaro::info("Maro: plugin loaded.");
     // 로드가 끝까지 성공한 유일한 지점이다. 여기서 가드를 해제해야 정상
     // 로드된 세션의 저널/감시자/큐가 살아남는다 -- 이 줄이 없으면 모든
@@ -522,6 +534,15 @@ MStatus uninitializePlugin(MObject obj) {
         //
         // 실패해도 언로드를 막지 않는다 -- runPluginPythonModule은 예외를
         // 삼키고 MStatus로만 알린다(그리고 이 블록 전체가 try/catch 안이다).
+        // dagMenuProc를 Maya 원본 정의로 되돌린다. initializePlugin의
+        // install()과 짝이며, 둘 다 멱등이라 install이 실패해서 아무것도
+        // 바꾸지 않았어도 여기서 하는 일이 없다.
+        //
+        // **이 복원을 빠뜨리면 언로드 뒤에도 세션 전체의 오브젝트 우클릭
+        // 메뉴가 사라진 플러그인의 파이썬 코드를 계속 부른다** -- 이 파일의
+        // 다른 어떤 정리보다 파급이 넓은 항목이라 언로드 정리의 맨 앞에 둔다.
+        maro::runPluginPythonModule("maroDagMenu", "maroDagMenu.uninstall()");
+
         maro::runPluginPythonModule("maroMainWindow", "maroMainWindow.teardown()");
 
         // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
