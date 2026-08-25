@@ -187,6 +187,61 @@ clamped = cmds.getAttr(coupling + ".capabilityOut.capValue")
 assert abs(clamped - 10.0) < 1e-9, f"out-of-domain must clamp to last point, not extrapolate (got {clamped})"
 print("coupling curve interpolation OK")
 
+# maroAxis가 translation을 outValueLinear로 라우팅하고, driveIsLinear가
+# 그것을 알린다. 기존 rotation 경로(outValue)는 회귀 없이 그대로 유지돼야
+# 한다 -- axis(맨 처음 만든 rotation 전용 축)로 재확인한다.
+assert cmds.getAttr(axis + ".driveIsLinear") is False, "rotation axis must report driveIsLinear=False"
+assert abs(cmds.getAttr(axis + ".positionLinear")) < 1e-9, "rotation axis outValueLinear must stay 0"
+print("rotation axis regression (driveIsLinear/positionLinear) OK")
+
+axisTrans = cmds.createNode("maroAxis", name="axisTrans")
+transDrive = cmds.createNode("maroTranslation", name="transDrive1")
+cmds.connectAttr(transDrive + ".capabilityOut", axisTrans + ".capabilityIn[0]")
+cmds.setAttr(transDrive + ".distance", 12.5)
+assert cmds.getAttr(axisTrans + ".driveIsLinear") is True, "translation axis must report driveIsLinear=True"
+posLinear = cmds.getAttr(axisTrans + ".positionLinear")
+assert abs(posLinear - 12.5) < 1e-9, f"translation axis positionLinear wrong (got {posLinear})"
+assert abs(cmds.getAttr(axisTrans + ".position")) < 1e-9, "translation axis outValue(angular) must stay 0"
+print("translation axis routing OK")
+
+# translationLimit이 직선 구동값을 클램프한다.
+transLimDrive = cmds.createNode("maroTranslationLimit", name="transLimDrive1")
+cmds.setAttr(transLimDrive + ".enableY", True)
+cmds.setAttr(transLimDrive + ".minY", -5.0)
+cmds.setAttr(transLimDrive + ".maxY", 5.0)
+cmds.connectAttr(transLimDrive + ".capabilityOut", axisTrans + ".capabilityIn[1]")
+clampedLinear = cmds.getAttr(axisTrans + ".positionLinear")
+assert abs(clampedLinear - 5.0) < 1e-9, f"translationLimit did not clamp (got {clampedLinear})"
+print("translationLimit clamp OK")
+
+# coupling-선형이 다른 축의 outValue를 소스로 받아 axis를 직선 구동한다.
+axisCoupled = cmds.createNode("maroAxis", name="axisCoupled")
+couplingDrive = cmds.createNode("maroCoupling", name="couplingDrive1")
+cmds.setAttr(couplingDrive + ".outputIsLinear", True)
+cmds.setAttr(couplingDrive + ".ratio", 3.0)
+cmds.connectAttr(axisTrans + ".positionLinear", couplingDrive + ".sourceValue")
+cmds.connectAttr(couplingDrive + ".capabilityOut", axisCoupled + ".capabilityIn[0]")
+assert cmds.getAttr(axisCoupled + ".driveIsLinear") is True, "coupling-linear axis must report driveIsLinear=True"
+coupledLinear = cmds.getAttr(axisCoupled + ".positionLinear")
+assert abs(coupledLinear - 5.0 * 3.0) < 1e-9, f"coupling-linear routing wrong (got {coupledLinear})"
+print("coupling-linear axis routing OK")
+
+# §3 상호배타 규칙의 DG 레벨 방어: rotation과 translation을 같은 축에
+# 억지로(스크립트로, 커맨드 검증을 우회해) 연결해도 죽지 않고 "먼저 나온
+# 것이 이긴다"로 조용히 처리된다.
+axisConflict = cmds.createNode("maroAxis", name="axisConflict")
+rotConflict = cmds.createNode("maroRotation", name="rotConflict")
+transConflict = cmds.createNode("maroTranslation", name="transConflict")
+cmds.setAttr(rotConflict + ".angle", 0.4)
+cmds.setAttr(transConflict + ".distance", 40.0)
+cmds.connectAttr(rotConflict + ".capabilityOut", axisConflict + ".capabilityIn[0]")
+cmds.connectAttr(transConflict + ".capabilityOut", axisConflict + ".capabilityIn[1]")
+assert cmds.getAttr(axisConflict + ".driveIsLinear") is False, \
+    "first primary driver (index 0, rotation) must win over a later conflicting one"
+assert abs(cmds.getAttr(axisConflict + ".position") - 0.4) < 1e-9, \
+    "conflicting stack must still drive from the first primary driver"
+print("primary-driver conflict defensive handling OK")
+
 # 단위 계약: MFnUnitAttribute는 데이터블록(항상 라디안)과 cmds/Attribute
 # Editor 표면(현재 UI 각도 단위, 기본 도) 사이를 변환한다. 그 변환이 실제로
 # 걸려 있는지 끝까지 증명한다 -- rotation을 180 "도"로 설정하고 axis의

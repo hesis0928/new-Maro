@@ -7,6 +7,7 @@
 #include <maya/MArrayDataHandle.h>
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
+#include <maya/MDistance.h>
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnEnumAttribute.h>
@@ -86,6 +87,8 @@ MObject MaroAxisNode::aRosCommand;
 MObject MaroAxisNode::aEnabled;
 MObject MaroAxisNode::aOutValue;
 MObject MaroAxisNode::aOutTransform;
+MObject MaroAxisNode::aOutValueLinear;
+MObject MaroAxisNode::aDriveIsLinear;
 
 void* MaroAxisNode::creator() {
     return new MaroAxisNode();
@@ -176,11 +179,22 @@ MStatus MaroAxisNode::initialize() {
     angFn.setWritable(false);
     addAttribute(aOutValue);
 
+    aOutValueLinear = angFn.create("positionLinear", "otvl",
+                                   MFnUnitAttribute::kDistance, 0.0);
+    angFn.setStorable(false);
+    angFn.setWritable(false);
+    addAttribute(aOutValueLinear);
+
     aOutTransform = matFn.create("outTransform", "ott",
                                  MFnMatrixAttribute::kDouble);
     matFn.setStorable(false);
     matFn.setWritable(false);
     addAttribute(aOutTransform);
+
+    aDriveIsLinear = numFn.create("driveIsLinear", "dil", MFnNumericData::kBoolean, false);
+    numFn.setStorable(false);
+    numFn.setWritable(false);
+    addAttribute(aDriveIsLinear);
 
     // aConventionInvert는 여기서 attributeAffects에 넣지 않는다: compute()가
     // 실제로 읽지 않기 때문이다 (v1에는 반전 보정이 구현되어 있지 않다,
@@ -189,10 +203,14 @@ MStatus MaroAxisNode::initialize() {
     for (const MObject& src : {aConventionAxis, aEnabled,
                                aControlMode, aRosCommand}) {
         attributeAffects(src, aOutValue);
+        attributeAffects(src, aOutValueLinear);
+        attributeAffects(src, aDriveIsLinear);
         attributeAffects(src, aOutTransform);
     }
 
     attributeAffects(aCapabilityIn, aOutValue);
+    attributeAffects(aCapabilityIn, aOutValueLinear);
+    attributeAffects(aCapabilityIn, aDriveIsLinear);
     attributeAffects(aCapabilityIn, aOutTransform);
 
     return MS::kSuccess;
@@ -200,19 +218,24 @@ MStatus MaroAxisNode::initialize() {
 
 MStatus MaroAxisNode::compute(const MPlug& plug, MDataBlock& data) {
     try {
-        if (plug != aOutValue && plug != aOutTransform) {
+        if (plug != aOutValue && plug != aOutValueLinear &&
+            plug != aOutTransform && plug != aDriveIsLinear) {
             return MS::kUnknownParameter;
         }
 
         const bool enabled = data.inputValue(aEnabled).asBool();
 
         double value = 0.0;
+        bool isLinearDrive = false;
+        // §3 상호배타 규칙: 커맨드 레벨(Task 6의 maroAddCapability/
+        // maroConnectCapability)이 정상적으로는 1차 구동 타입(rotation/
+        // translation/coupling)을 축 하나에 하나만 허용하지만, DG 자체는
+        // 스크립트로 그 규칙을 우회한 씬도 방어적으로 처리해야 한다 --
+        // 먼저 나온(인덱스가 낮은) 1차 구동 타입이 이기고 나머지는 무시한다.
+        bool primaryDriverSeen = false;
 
         if (enabled) {
             // 스택은 capabilityIn 인덱스 순서대로 평가한다.
-            // rotation이 값을 만들고, 뒤따르는 limit들이 순차적으로 클램프한다.
-            // 값은 전부 데이터블록에서 읽는다. 플러그를 직접 조회하면 DG 더티
-            // 전파를 우회해 병렬 평가에서 값이 어긋난다.
             const short axisIndex = data.inputValue(aConventionAxis).asShort();
             const unsigned int component =
                 (axisIndex == 0) ? 0u : ((axisIndex == 2) ? 2u : 1u);
@@ -228,10 +251,25 @@ MStatus MaroAxisNode::compute(const MPlug& plug, MDataBlock& data) {
 
                 const short capType = element.child(aCapType).asShort();
 
-                if (capType == 0) {           // rotation
-                    value = rosDriven ? data.inputValue(aRosCommand).asDouble()
-                                      : element.child(aCapValue).asDouble();
-                } else if (capType == 1) {    // limit
+                if (capType == 0 || capType == 4 || capType == 6 || capType == 7) {
+                    // 1차 구동 타입: rotation(0)/translation(4)/
+                    // coupling-각도(6)/coupling-선형(7).
+                    if (!primaryDriverSeen) {
+                        value = rosDriven ? data.inputValue(aRosCommand).asDouble()
+                                          : element.child(aCapValue).asDouble();
+                        isLinearDrive = (capType == 4 || capType == 7);
+                        primaryDriverSeen = true;
+                    }
+                } else if (capType == 1) {    // limit (각도 계열 클램프, 기존 로직)
+                    const short3& enable = element.child(aCapEnable).asShort3();
+                    if (enable[component] != 0) {
+                        const double3& lo = element.child(aCapMin).asDouble3();
+                        const double3& hi = element.child(aCapMax).asDouble3();
+                        value = std::clamp(value,
+                                           std::min(lo[component], hi[component]),
+                                           std::max(lo[component], hi[component]));
+                    }
+                } else if (capType == 5) {    // translationLimit (직선 계열 클램프, limit과 동일 로직)
                     const short3& enable = element.child(aCapEnable).asShort3();
                     if (enable[component] != 0) {
                         const double3& lo = element.child(aCapMin).asDouble3();
@@ -246,20 +284,29 @@ MStatus MaroAxisNode::compute(const MPlug& plug, MDataBlock& data) {
         }
 
         // NaN/inf를 Maya에 흘리지 않는다.
-        // 이 자리는 매 DG 평가마다 지나간다. warn()은 book을 건드리지 않으므로
-        // (파일 I/O가 없다) 여기 그대로 두어도 안전하다 -- error()로 바꾸면
-        // 평가마다 book 병합 로드 + 추가 기록이 붙는다. 바꾸지 않는다.
         if (!std::isfinite(value)) {
             maro::BoadMaro::warn(
                 "Maro: axis produced a non-finite value; holding zero.");
             value = 0.0;
         }
 
-        // aOutValue is MFnUnitAttribute::kAngle now; write via setMAngle so
-        // Maya stores it correctly instead of reinterpreting the raw double.
+        // isLinearDrive가 아닌 쪽 출력은 0으로 clean 처리한다 -- §3의
+        // 상호배타 규칙 덕분에 항상 둘 중 하나만 의미 있는 값을 가진다.
         MDataHandle outVal = data.outputValue(aOutValue);
-        outVal.setMAngle(MAngle(value, MAngle::kRadians));
+        MDataHandle outValLinear = data.outputValue(aOutValueLinear);
+        if (isLinearDrive) {
+            outVal.setMAngle(MAngle(0.0, MAngle::kRadians));
+            outValLinear.setMDistance(MDistance(value, MDistance::kCentimeters));
+        } else {
+            outVal.setMAngle(MAngle(value, MAngle::kRadians));
+            outValLinear.setMDistance(MDistance(0.0, MDistance::kCentimeters));
+        }
         outVal.setClean();
+        outValLinear.setClean();
+
+        MDataHandle outDriveLinear = data.outputValue(aDriveIsLinear);
+        outDriveLinear.setBool(isLinearDrive);
+        outDriveLinear.setClean();
 
         MDataHandle outXf = data.outputValue(aOutTransform);
         outXf.setMMatrix(MMatrix::identity);

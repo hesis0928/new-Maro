@@ -25,6 +25,8 @@ public:
     // 능력 스택. 데이터 복합 배열이다 (message가 아니다 — 값을 날라야 하므로).
     static MObject aCapabilityIn;   // compound array
     static MObject aCapType;        //   short  0=rotation 1=limit 2=sensorDir 3=sensorRange
+                                     //          4=translation 5=translationLimit
+                                     //          6=coupling(각도출력) 7=coupling(선형출력)
     static MObject aCapValue;       //   double rotation 각도
     static MObject aCapEnable;      //   short3 limit 활성 X/Y/Z
     static MObject aCapMin;         //   double3 limit 하한
@@ -53,6 +55,15 @@ public:
     // asAngle().asRadians()로 읽으면 UI 단위와 무관하게 항상 라디안이다.
     static MObject aOutValue;       // MFnUnitAttribute::kAngle (내부: 라디안)
     static MObject aOutTransform;   // matrix
+    static MObject aOutValueLinear; // MFnUnitAttribute::kDistance (내부: 센티미터) --
+                                     // 직선 구동 축(translation/translationLimit/
+                                     // coupling-선형)의 출력. aDriveIsLinear가
+                                     // true인 축만 이 값이 유효하다.
+    static MObject aDriveIsLinear;  // bool -- compute()가 채운다. true면
+                                     // aOutValueLinear가, false면 aOutValue가
+                                     // 이 틱의 유효한 구동값이다. MaroPump가
+                                     // 스택을 다시 훑지 않고 이 플래그 하나로
+                                     // 어느 출력을 읽을지 결정한다.
 };
 
 }  // namespace maro
