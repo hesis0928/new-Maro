@@ -43,6 +43,11 @@ public:
                                         // 소스 목록에서 뺐다 -- 안 읽는데
                                         // 영향권에 넣으면 더티 전파만
                                         // 낭비된다.
+    static MObject aDisplayName;    // string -- MaroUI ONE(GSON)/SONE 표시용 라벨.
+                                     // jointName(ROS 발행에 실제로 쓰이는 값)과는
+                                     // 완전히 별개다.
+    static MObject aDisplayColor;   // float3 색상 -- GSON 색. compute()에 관여하지
+                                     // 않는 순수 UI 데이터, attributeAffects 대상 아님.
     static MObject aControlMode;    // enum: 0=Manual 1=ROS
     static MObject aRosCommand;     // double, ROS 모드에서의 기준값 (펌프가 씀)
     static MObject aEnabled;        // bool

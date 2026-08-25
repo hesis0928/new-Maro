@@ -82,6 +82,8 @@ MObject MaroAxisNode::aCapMax;
 MObject MaroAxisNode::aJointName;
 MObject MaroAxisNode::aConventionAxis;
 MObject MaroAxisNode::aConventionInvert;
+MObject MaroAxisNode::aDisplayName;
+MObject MaroAxisNode::aDisplayColor;
 MObject MaroAxisNode::aControlMode;
 MObject MaroAxisNode::aRosCommand;
 MObject MaroAxisNode::aEnabled;
@@ -150,6 +152,14 @@ MStatus MaroAxisNode::initialize() {
     numFn.setStorable(true);
     numFn.setKeyable(true);
     addAttribute(aConventionInvert);
+
+    aDisplayName = typFn.create("displayName", "dpn", MFnData::kString);
+    typFn.setStorable(true);
+    addAttribute(aDisplayName);
+
+    aDisplayColor = numFn.createColor("displayColor", "dpc");
+    numFn.setStorable(true);
+    addAttribute(aDisplayColor);
 
     aControlMode = enumFn.create("controlMode", "cmd", 0);  // 기본 Manual
     enumFn.addField("Manual", 0);

@@ -345,6 +345,17 @@ assert abs(seededRot - 0.75) < 1e-9, (
 )
 print("maroSetControlMode linear seeding (C-2b) OK")
 
+# --- aDisplayName/aDisplayColor round-trip (Task 1) ---
+displayAxis = cmds.createNode("maroAxis", name="displayAxis1")
+cmds.setAttr(displayAxis + ".displayName", "My Axis", type="string")
+cmds.setAttr(displayAxis + ".displayColor", 0.2, 0.6, 0.9, type="double3")
+assert cmds.getAttr(displayAxis + ".displayName") == "My Axis", \
+    "displayName did not round-trip"
+color = cmds.getAttr(displayAxis + ".displayColor")[0]
+assert abs(color[0] - 0.2) < 1e-6 and abs(color[1] - 0.6) < 1e-6 and abs(color[2] - 0.9) < 1e-6, \
+    f"displayColor did not round-trip: {color}"
+print("aDisplayName/aDisplayColor round-trip OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
