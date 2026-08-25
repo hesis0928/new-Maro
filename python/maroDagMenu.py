@@ -345,6 +345,71 @@ def _leadObject():
     return ""
 
 
+def _findBoundAxis(object_):
+    """object_에 이미 바인딩된 maroAxis가 있으면 그 풀 DAG 경로, 없으면 None.
+
+    풀 경로로 정규화하는 이유: openSingleObjectNodeEditor()의 싱글턴
+    레지스트리(_OPEN_EDITORS, maroSingleObjectNodeEditor.py)는 넘겨받은
+    문자열을 그대로 딕셔너리 키로 쓴다. cmds.listConnections()는 이름
+    충돌이 없으면 짧은 이름을 줄 수 있는데, MaroAxisEditorCommands.cpp의
+    listAxes()(ONE이 GSON 더블클릭 시 쓰는 경로, Task 6)는 항상
+    MDagPath::fullPathName()을 낸다. 두 호출부가 같은 축에 대해 다른
+    문자열을 넘기면 싱글턴 검사가 같은 축을 다른 축으로 오판해 SONE
+    창이 중복 생성된다 -- 그래서 여기서 항상 풀 경로로 맞춘다.
+
+    `shapes=True`가 반드시 필요하다 (실측으로 발견): maroAxis는 로케이터형
+    DAG 셰이프 노드라서, cmds.listConnections()는 기본값(shapes=False)일 때
+    셰이프 자신이 아니라 그 부모 트랜스폼 이름을 돌려준다. type="maroAxis"
+    필터는 셰이프 기준으로 올바르게 매치하지만, 결과로 나오는 이름은
+    부모 트랜스폼("transform1" 같은 평범한 이름)이라 그 다음
+    attributeQuery("targetObject", node=connection, ...)가 targetObject가
+    없는 트랜스폼을 조회하게 되어 항상 False -> 이미 바인딩된 축을 절대
+    못 찾는다(매번 "축 없음" 경로로 빠져 새 축이 중복 생성된다). mayapy로
+    직접 재현: shapes=True 없이는 ['transform1']을, 있으면 실제 셰이프
+    ['maroAxis1']을 돌려줌을 확인했다.
+    """
+    for connection in cmds.listConnections(
+            object_, type="maroAxis", plugs=False, shapes=True) or []:
+        if cmds.attributeQuery("targetObject", node=connection, exists=True):
+            return cmds.ls(connection, long=True)[0]
+    return None
+
+
 def _onMenuItemClicked(object_):
-    # Task 8이 이 자리를 openSingleObjectNodeEditor(object_) 호출로 바꾼다.
-    print("Maro node editor clicked for: {}".format(object_))
+    import maroSingleObjectNodeEditor
+
+    existingAxis = _findBoundAxis(object_)
+    if existingAxis is not None:
+        maroSingleObjectNodeEditor.openSingleObjectNodeEditor(existingAxis)
+        return
+
+    shortName = object_.split("|")[-1]
+    result = cmds.promptDialog(
+        title="New Maro Axis", message="Display name:",
+        text=shortName, button=["OK", "Cancel"],
+        defaultButton="OK", cancelButton="Cancel", dismissString="Cancel")
+    if result != "OK":
+        return
+    displayName = cmds.promptDialog(query=True, text=True)
+
+    colorResult = cmds.colorEditor(rgbValue=(0.5, 0.7, 0.9))
+    values = colorResult.split()
+    if values[-1] != "1":  # colorEditor's last token is 0 on cancel, 1 on OK
+        return
+    r, g, b = float(values[0]), float(values[1]), float(values[2])
+
+    cmds.undoInfo(openChunk=True)
+    try:
+        axis = cmds.createNode("maroAxis")
+        # 풀 경로로 정규화 -- 위 _findBoundAxis()의 docstring과 같은 이유.
+        # createNode()는 이름이 유일하면 짧은 이름을 주므로, 나중에 같은
+        # 짧은 이름의 노드가 다른 계층에 생겨도 이 축의 SONE 키는 처음
+        # 만들어질 때의 형태에 머물러 있지 않게 항상 여기서 확정한다.
+        axis = cmds.ls(axis, long=True)[0]
+        cmds.maroBindAxis(axis, object_)
+        cmds.setAttr(axis + ".displayName", displayName, type="string")
+        cmds.setAttr(axis + ".displayColor", r, g, b, type="double3")
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+    maroSingleObjectNodeEditor.openSingleObjectNodeEditor(axis)
