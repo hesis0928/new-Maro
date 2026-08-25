@@ -5,6 +5,7 @@
 #include <maya/MArgDatabase.h>
 #include <maya/MArgList.h>
 #include <maya/MDagPath.h>
+#include <maya/MFnAttribute.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MItDependencyNodes.h>
 #include <maya/MPlugArray.h>
@@ -235,17 +236,82 @@ struct CapabilityTypeInfo {
     const char* flagName;
     const char* nodeTypeName;
     bool isPrimaryDriver;
+    // 이 타입의 노드를 "새로" 만들었을 때의 capType. maroCoupling만
+    // outputIsLinear에 따라 6/7로 갈리는데, 갓 만든 노드는 그 기본값이
+    // false이므로 6이다. 이미 존재하는 노드를 잇는
+    // maroConnectCapability는 이 표가 아니라 노드의 실제
+    // capabilityOut.capType을 읽는다.
+    short defaultCapType;
 };
 
 const CapabilityTypeInfo kCapabilityTypes[] = {
-    {"rotation", "maroRotation", true},
-    {"translation", "maroTranslation", true},
-    {"limit", "maroLimit", false},
-    {"translationLimit", "maroTranslationLimit", false},
-    {"sensorDirection", "maroSensorDirection", false},
-    {"sensorRange", "maroSensorRange", false},
-    {"coupling", "maroCoupling", true},
+    {"rotation", "maroRotation", true, 0},
+    {"translation", "maroTranslation", true, 4},
+    {"limit", "maroLimit", false, 1},
+    {"translationLimit", "maroTranslationLimit", false, 5},
+    {"sensorDirection", "maroSensorDirection", false, 2},
+    {"sensorRange", "maroSensorRange", false, 3},
+    {"coupling", "maroCoupling", true, 6},
 };
+
+// 리뷰 Finding I-1: 각도 능력과 선형 능력은 서로 다른 물리 단위를 나른다.
+// maroLimit(capType 1)의 min/max는 라디안, maroTranslationLimit(capType 5)의
+// min/max는 센티미터다. 그런데 지금까지는 어느 쪽이든 아무 축에나 붙일 수
+// 있었다 -- 직선축(센티미터)에 각도 리밋(기본 +-pi)을 얹으면 25cm가 조용히
+// 3.14로 잘려 나간다. 반대(회전축에 +-10cm 리밋)는 +-10라디안(=+-573도)이라
+// 사실상 아무 일도 안 하는데, 그게 "동작한다"로 오해되기 딱 좋다.
+//
+// 그래서 §3의 상호배타 검사를 "같은 물리 계열끼리만"이라는 더 일반적인
+// 검사로 넓힌다. 커맨드 계층에서만 막는다 -- 이 코드베이스의 방침대로
+// DG(MaroAxisNode::compute())는 크래시/정의되지 않은 값만 방어하고 모든
+// 의미론적 오용까지 막지는 않는다.
+enum class CapabilityFamily { Angular, Linear, Neutral };
+
+CapabilityFamily familyOfCapType(short capType) {
+    switch (capType) {
+        case 0: case 1: case 6: return CapabilityFamily::Angular;
+        case 4: case 5: case 7: return CapabilityFamily::Linear;
+        default: return CapabilityFamily::Neutral;  // 2/3 = 센서: 계열 제약 없음
+    }
+}
+
+// capability 노드의 capabilityOut 컴파운드에서 capType 자식을 이름으로
+// 찾아 읽는다. 자식 순서(createCapabilityOut()의 addChild 순서)에 기대지
+// 않으려고 이름으로 찾는다. 못 찾으면 0(rotation) -- 호출부에서 계열
+// 판정에만 쓰이고, capabilityOut을 가진 노드라면 항상 있다.
+short capTypeOf(const MPlug& capabilityOutPlug) {
+    for (unsigned int i = 0; i < capabilityOutPlug.numChildren(); ++i) {
+        MPlug child = capabilityOutPlug.child(i);
+        if (MFnAttribute(child.attribute()).name() == "capType") {
+            return child.asShort();
+        }
+    }
+    return 0;
+}
+
+// 새로 붙이려는 capType이, 이미 연결된 어떤 슬롯과 물리 계열이 어긋나는지.
+// 순회는 이 파일의 다른 곳과 같은 관용구를 쓴다 --
+// evaluateNumElements()+elementByPhysicalIndex(). elementByLogicalIndex()는
+// 조회만으로도 없는 원소를 만들어 버리므로 순회에 절대 쓰지 않는다.
+bool hasConflictingFamily(MPlug capabilityInPlug, short newCapType) {
+    const CapabilityFamily newFamily = familyOfCapType(newCapType);
+    if (newFamily == CapabilityFamily::Neutral) return false;
+
+    const unsigned int count = capabilityInPlug.evaluateNumElements();
+    for (unsigned int i = 0; i < count; ++i) {
+        MPlug element = capabilityInPlug.elementByPhysicalIndex(i);
+        MPlugArray sources;
+        element.connectedTo(sources, true, false);
+        if (sources.length() == 0) continue;
+
+        const short existingType = element.child(MaroAxisNode::aCapType).asShort();
+        const CapabilityFamily existingFamily = familyOfCapType(existingType);
+        if (existingFamily != CapabilityFamily::Neutral && existingFamily != newFamily) {
+            return true;
+        }
+    }
+    return false;
+}
 
 const CapabilityTypeInfo* findCapabilityTypeByFlag(const MString& flagValue) {
     for (const auto& info : kCapabilityTypes) {
@@ -330,6 +396,20 @@ MStatus MaroAddCapabilityCommand::doIt(const MArgList& args) {
                 maro::onfix::capture(axisFn.typeName(), "capabilityIn", axisFn.name()));
             return MS::kFailure;
         }
+        if (hasConflictingFamily(capabilityIn, info->defaultCapType)) {
+            maro::BoadMaro::error(
+                "MaroAddCapabilityCommand.FamilyMismatch",
+                MString("Maro: '") + typeName + "' is an " +
+                (familyOfCapType(info->defaultCapType) == CapabilityFamily::Linear
+                     ? "linear" : "angular") +
+                " capability, but '" + axisFn.name() +
+                "' already carries capabilities of the other physical family. "
+                "Angular (rotation/limit/coupling) and linear (translation/"
+                "translationLimit/coupling-linear) capabilities cannot be mixed "
+                "on one axis -- their values are in different units.",
+                maro::onfix::capture(axisFn.typeName(), "capabilityIn", axisFn.name()));
+            return MS::kFailure;
+        }
 
         const unsigned int slot = nextFreeCapabilitySlot(capabilityIn);
         MObject capNode = m_modifier.createNode(info->nodeTypeName, &status);
@@ -340,16 +420,42 @@ MStatus MaroAddCapabilityCommand::doIt(const MArgList& args) {
                 maro::onfix::capture(info->nodeTypeName, "", axisFn.name()));
             return MS::kFailure;
         }
+        // 리뷰 Finding(Minor): createNode()가 성공한 뒤의 실패 경로들은
+        // m_modifier에 이미 쌓인 DG 변경을 되돌려야 한다. 이 doIt() 자체가
+        // 실패하면 Maya는 이 커맨드의 undoIt()을 절대 부르지 않으므로
+        // (undo는 doIt()이 성공한 커맨드에만 걸린다), 여기서 안 치우면
+        // 만들다 만 노드가 그래프에 그대로 남는다.
+        //
+        // 최선 노력(best-effort) 정리다 -- 정리가 또 실패해도 원래 오류를
+        // 덮어쓰지 않게 삼킨다.
+        const auto rollbackStagedNode = [this]() {
+            try {
+                m_modifier.undoIt();
+            } catch (...) {
+                maro::BoadMaro::warn(
+                    "Maro: could not roll back a partially created capability node.");
+            }
+        };
+
         MFnDependencyNode capFn(capNode);
         MPlug capOut = capFn.findPlug("capabilityOut", false, &status);
-        if (!status) return status;
+        if (!status) {
+            rollbackStagedNode();
+            return status;
+        }
         MPlug capIn = capabilityIn.elementByLogicalIndex(slot);
         status = m_modifier.connect(capOut, capIn);
-        if (!status) return status;
+        if (!status) {
+            rollbackStagedNode();
+            return status;
+        }
 
         m_stagedChange = true;
         status = redoIt();
-        if (!status) return status;
+        if (!status) {
+            rollbackStagedNode();
+            return status;
+        }
 
         // capFn.name()은 createNode() 직후가 아니라 doIt()으로 실제
         // dependency graph에 편입된 뒤에 물어봐야 한다 -- createNode()가
@@ -483,6 +589,25 @@ MStatus MaroConnectCapabilityCommand::doIt(const MArgList& args) {
             return MS::kFailure;
         }
 
+        // 리뷰 Finding I-1: 계열(각도/선형) 호환성. 이미 존재하는 노드를
+        // 잇는 것이므로 표의 기본값이 아니라 노드가 실제로 내고 있는
+        // capabilityOut.capType을 읽는다 -- maroCoupling은 outputIsLinear에
+        // 따라 6/7로 갈리므로 이 구분이 실제로 중요하다.
+        const short incomingCapType = capTypeOf(capOut);
+        if (hasConflictingFamily(capabilityIn, incomingCapType)) {
+            maro::BoadMaro::error(
+                "MaroConnectCapabilityCommand.FamilyMismatch",
+                MString("Maro: '") + capFn.name() + "' is an " +
+                (familyOfCapType(incomingCapType) == CapabilityFamily::Linear
+                     ? "linear" : "angular") +
+                " capability, but '" + axisFn.name() +
+                "' already carries capabilities of the other physical family. "
+                "Angular and linear capabilities cannot be mixed on one axis -- "
+                "their values are in different units.",
+                maro::onfix::capture(capFn.typeName(), "capabilityIn", axisFn.name()));
+            return MS::kFailure;
+        }
+
         unsigned int slot;
         if (argData.isFlagSet("-idx")) {
             int requested = 0;
@@ -608,11 +733,38 @@ MStatus MaroDisconnectCapabilityCommand::doIt(const MArgList& args) {
             return MS::kFailure;
         }
 
+        // 리뷰 Finding I-3(수정된 결론): 리뷰는 "elementByLogicalIndex()가
+        // 조회만으로도 없는 원소를 만들어서, -index 99 같은 잘못된 인자가
+        // 패널에 지울 수 없는 유령 행을 남긴다"고 봤다. Maya 2026에서
+        // 실측한 결과 그 증상은 재현되지 않았다 -- 값을 쓰거나 연결하지
+        // 않은 원소는 evaluateNumElements()에도, getAttr -multiIndices에도
+        // 잡히지 않는다(OpenMaya에서 직접 elementByLogicalIndex(77)을
+        // 불러도 마찬가지였다).
+        //
+        // 그래도 이 순회 방식을 쓴다. 이 파일이 다른 모든 곳에서 이미
+        // 쓰는 관용구이고(문서화되지 않은 Maya의 지연 생성 동작에 기대지
+        // 않는다), "실재하고 연결된 원소만 만진다"는 의도를 코드가 직접
+        // 드러내기 때문이다. 아래 테스트(test_axis_editor_commands.py의
+        // I-3 절)가 그 계약을 못 박아 둔다.
         MPlug capabilityIn = axisFn.findPlug(MaroAxisNode::aCapabilityIn, false);
-        MPlug element = capabilityIn.elementByLogicalIndex(static_cast<unsigned int>(index));
+        MPlug element;
         MPlugArray sources;
-        element.connectedTo(sources, true, false);
-        if (sources.length() == 0) {
+        bool found = false;
+        const unsigned int total = capabilityIn.evaluateNumElements();
+        for (unsigned int i = 0; i < total; ++i) {
+            MPlug candidate = capabilityIn.elementByPhysicalIndex(i);
+            if (candidate.logicalIndex() != static_cast<unsigned int>(index)) continue;
+
+            MPlugArray candidateSources;
+            candidate.connectedTo(candidateSources, true, false);
+            if (candidateSources.length() == 0) break;  // 존재하지만 연결 안 됨
+
+            element = candidate;
+            sources = candidateSources;
+            found = true;
+            break;
+        }
+        if (!found) {
             maro::BoadMaro::error(
                 "MaroDisconnectCapabilityCommand.NotConnected",
                 MString("Maro: capabilityIn[") + index + "] is not connected.",
