@@ -203,13 +203,21 @@ print("_onIdle() self-stops when the viewports are gone OK")
 # 실질적 담당이다 -- 누가 지워도 대화형 Maya에서 언로드해 보기 전에는
 # 드러나지 않으므로 여기서 고정한다(test_main_window.py가 UI 이름 계약을
 # 같은 방식으로 고정한다).
+#
+# Task 7부터는 C++가 maroRosProxy.stop()을 직접 부르지 않고
+# maroMainWindow.teardown()을 부른다(여러 서브시스템의 stop()을 한 곳에
+# 모으는 리팩터 -- maroMainWindow.py 도크스트링 참고). 그래서 여기서
+# 고정하는 것은 두 단계로 나뉜다: (1) C++가 teardown()을 부르는가,
+# (2) teardown()이 실제로 maroRosProxy.stop()에 닿는가(아래 "maroMainWindow
+# wiring" 블록이 maroRosProxy.stop()이 maroMainWindow.py 소스에 있는지를
+# 이미 고정한다).
 _thisDir = os.path.dirname(os.path.abspath(__file__))
 _pluginMainCpp = os.path.join(_thisDir, "..", "..", "src", "maro_plugin", "MaroPluginMain.cpp")
 with open(_pluginMainCpp, encoding="utf-8") as handle:
     _pluginMainSource = handle.read()
-assert 'runPluginPythonModule("maroRosProxy", "maroRosProxy.stop()")' in _pluginMainSource, (
-    "MaroPluginMain.cpp must call maroRosProxy.stop() on unload -- otherwise the "
-    "idle scriptJob can outlive the plug-in")
+assert 'runPluginPythonModule("maroMainWindow", "maroMainWindow.teardown()")' in _pluginMainSource, (
+    "MaroPluginMain.cpp must call maroMainWindow.teardown() on unload -- otherwise "
+    "the idle scriptJob can outlive the plug-in")
 print("C++ unload-cleanup call is present OK")
 
 # maroMainWindow가 이 모듈을 실제로 배선했는가(창 열림/닫힘 양쪽).

@@ -134,6 +134,27 @@ gtest_discover_tests(maro_plugin_logic_tests)
 if(MARO_BUILD_PLUGIN)
     set(MAYAPY "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe")
 
+    # maroAxisPanel.py의 순수 함수(sliceAxisRows/sliceCapabilityRows)만
+    # 검증한다 -- 위 foreach(maya_test ...) 그룹과 달리 maya.standalone도,
+    # 플러그인 로드도, MARO_DIAG_BOOK_DIR도 필요 없다(test_axis_panel.py는
+    # 자체적으로 그저 "import maroAxisPanel" 하나만 한다 -- QWidget을 만들면
+    # 배치 mayapy가 프로세스를 abort시키므로 그쪽은 절대 부르지 않는다).
+    #
+    # maroDiagPanel.py의 같은 성격 함수(sliceRows)는 지금 별도로 등록돼
+    # 있지 않다 -- test_panel_commands.py 안에 maya.standalone 기반 커맨드
+    # 계약 검증과 한데 묶여 있다(그 파일은 위 foreach의 panel_commands
+    # 항목). 이 태스크의 요구사항(순수 함수만, maya.standalone 금지)은 그
+    # 패턴을 그대로 재사용할 수 없으므로, 이미 정의된 MAYAPY를 그대로 쓰되
+    # maya.standalone.initialize()도, 플러그인 의존도 없는 새 add_test로
+    # 등록한다. mayapy.exe는 "import maya.cmds"만으로는(실제 커맨드를
+    # 부르지 않는 한) 초기화를 요구하지 않고, "from PySide6 import
+    # QtWidgets"도 위젯을 생성하지 않는 한 안전하다는 것을 실측으로 확인했다
+    # (mayapy -c로 두 import를 각각 단독 실행, 둘 다 종료 코드 0).
+    add_test(NAME maya_axis_panel
+             COMMAND "${MAYAPY}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_axis_panel.py")
+    set_tests_properties(maya_axis_panel PROPERTIES TIMEOUT 60)
+
     file(GLOB ROS2_PACKAGE_INCLUDES LIST_DIRECTORIES true "${ROS2_INSTALL}/include/*")
     set(PEER_INCLUDES ${ROS2_INSTALL}/include)
     foreach(dir ${ROS2_PACKAGE_INCLUDES})

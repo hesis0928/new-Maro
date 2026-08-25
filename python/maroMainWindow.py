@@ -41,6 +41,7 @@ from PySide6 import QtWidgets
 CONTROL_NAME = "maroMainWindowControl"
 VIEWPORT_NAME_MAYA = "maroMainWindowViewportMaya"
 VIEWPORT_NAME_ROS = "maroMainWindowViewportRos"
+EDITOR_HOST_NAME = "maroMainWindowEditorHost"
 
 # 끼워 넣은 PySide6 위젯을 컨트롤 이름별로 하나씩만 붙들어 둔다.
 #
@@ -141,15 +142,19 @@ def buildUI():
 
     form = cmds.formLayout()
 
-    pane = cmds.paneLayout(configuration="vertical2", parent=form)
+    outerPane = cmds.paneLayout(configuration="vertical2", parent=form)
+    viewportPane = cmds.paneLayout(configuration="vertical2", parent=outerPane)
     # 두 호출의 반환값(각 패널의 control 이름)은 여기서 안 쓴다. Phase 3의
-    # 격리/동기화는 control 이름이 아니라 **패널 이름**을 쓰기 때문이다 --
-    # isolateSelect가 받는 것은 에디터(패널) 이름이지 그것을 담고 있는
-    # 레이아웃 컨트롤이 아니다(_buildLabeledViewport 도크스트링이 설명하는
-    # 그 구분의 반대쪽). 그래서 아래 start()에는 VIEWPORT_NAME_* 상수를
-    # 그대로 넘긴다.
-    _buildLabeledViewport(pane, "Maya", VIEWPORT_NAME_MAYA)
-    _buildLabeledViewport(pane, "ROS", VIEWPORT_NAME_ROS)
+    # 격리/동기화는 control 이름이 아니라 **패널 이름**을 쓰기 때문이다.
+    _buildLabeledViewport(viewportPane, "Maya", VIEWPORT_NAME_MAYA)
+    _buildLabeledViewport(viewportPane, "ROS", VIEWPORT_NAME_ROS)
+
+    # Phase 4: 축/capability 에디터 패널. modelPanel이 아닌 평범한
+    # formLayout이라(_buildLabeledViewport의 modelPanel과 달리) 전역 패널
+    # 레지스트리에 등록되지 않는다 -- 부모(outerPane/form)가 사라지면 이
+    # 레이아웃도 함께 완전히 사라진다. 그래서 _deleteStalePanel 같은 잔여물
+    # 정리가 필요 없다.
+    editorHost = cmds.formLayout(EDITOR_HOST_NAME, parent=outerPane)
 
     # --- 여기부터가 이 스파이크의 핵심 두 줄 -----------------------------
     # MQtUtil의 파이썬 바인딩은 QWidget*를 **정수 포인터**로 주고받는다.
@@ -184,6 +189,34 @@ def buildUI():
     _EMBEDDED[CONTROL_NAME] = button
     # ---------------------------------------------------------------------
 
+    # Phase 4: maroAxisPanel을 editorHost에 임베드한다 -- 테스트 버튼과
+    # 완전히 같은 두 단계(MQtUtil.findLayout -> addWidgetToMayaLayout)를
+    # 재사용한다. import는 함수 안에서 한다(테스트 버튼 임베드 위
+    # maroRosProxy import와 같은 이유 -- 이 모듈의 import 시점과
+    # maroAxisPanel이 필요한 시점을 떼어 놓는다).
+    import maroAxisPanel
+    axisPanelWidget = maroAxisPanel.buildWidget()
+
+    editorHostLayoutPtr = omui.MQtUtil.findLayout(
+        cmds.control(editorHost, query=True, fullPathName=True))
+    if editorHostLayoutPtr is None:
+        raise RuntimeError(
+            "maroMainWindow: MQtUtil.findLayout() could not resolve editorHost "
+            "{!r} -- cannot embed the axis panel widget.".format(editorHost))
+    axisPanelName = omui.MQtUtil.addWidgetToMayaLayout(
+        int(shiboken6.getCppPointer(axisPanelWidget)[0]), int(editorHostLayoutPtr))
+    if not axisPanelName:
+        raise RuntimeError(
+            "maroMainWindow: MQtUtil.addWidgetToMayaLayout() returned no UI name "
+            "for the axis panel.")
+    _EMBEDDED[EDITOR_HOST_NAME] = axisPanelWidget
+    cmds.formLayout(
+        editorHost, edit=True,
+        attachForm=[
+            (axisPanelName, "top", 0), (axisPanelName, "left", 0),
+            (axisPanelName, "right", 0), (axisPanelName, "bottom", 0),
+        ])
+
     # 버튼은 위쪽 좁은 띠, 뷰포트가 나머지 전부. 정확한 비율은 스파이크
     # 목적상 중요하지 않다 -- 중요한 것은 네이티브 attachForm/attachControl이
     # 끼워 넣은 Qt 위젯을 다른 네이티브 컨트롤과 똑같이 다룬다는 사실이다.
@@ -196,15 +229,15 @@ def buildUI():
             form, edit=True,
             attachForm=[
                 (buttonName, "top", 4), (buttonName, "left", 4), (buttonName, "right", 4),
-                (pane, "left", 0), (pane, "right", 0), (pane, "bottom", 0),
+                (outerPane, "left", 0), (outerPane, "right", 0), (outerPane, "bottom", 0),
             ],
-            attachControl=[(pane, "top", 4, buttonName)])
+            attachControl=[(outerPane, "top", 4, buttonName)])
     except RuntimeError as error:
         raise RuntimeError(
             "maroMainWindow: the native formLayout refused to lay out the "
             "embedded widget ({!r}) next to the dual-viewport pane ({!r}): {} "
             "-- see docs/maro-main-ui-manual-checklist.md".format(
-                buttonName, pane, error))
+                buttonName, outerPane, error))
 
     # Phase 3: 좌/우 뷰포트 격리 + ROS 프록시 동기화(설계 스펙 §6/§7).
     #
@@ -229,6 +262,23 @@ def buildUI():
     return form
 
 
+def teardown():
+    """모든 서브시스템의 stop()을 한 곳에서 부른다.
+
+    closeCommand(문자열)와 MaroPluginMain.cpp의 언로드 경로가 각각 이걸
+    가리킨다 -- 서브시스템이 늘 때마다(Phase 3의 maroRosProxy, 이번의
+    SelectionChanged job) 두 곳을 따로 늘리지 않기 위해서다. 여기서
+    부르는 stop()들은 전부 start()가 한 번도 안 불렸어도 안전한
+    무동작이어야 한다(maroRosProxy.stop()이 이미 그렇다).
+    """
+    try:
+        import maroRosProxy
+        maroRosProxy.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
+        import traceback
+        traceback.print_exc()
+
+
 def show():
     """maroMainWindow 커맨드가 부른다."""
     if cmds.workspaceControl(CONTROL_NAME, exists=True):
@@ -242,16 +292,5 @@ def show():
         initialWidth=900,
         initialHeight=600,
         requiredPlugin="maro",
-        # [최종 리뷰] closeCommand를 파이썬 콜러블이 아니라 uiScript와
-        # 같은 형태의 문자열로 준다. 콜러블로 줬을 때는 Maya가 실제로
-        # 그것을 부르는지 확인할 방법이 없었다(uiScript는 이 프로젝트가
-        # 이미 대화형 Maya에서 검증한 문자열 형태이고, Maya 자신의 MEL도
-        # 항상 문자열을 쓴다) -- 검증 안 된 두 번째 호출 방식을 새로 쓰는
-        # 대신, 이미 증명된 방식 하나로 통일한다.
-        #
-        # 이것만으로는 부족하다 -- MaroPluginMain.cpp의 uninitializePlugin도
-        # 같은 stop()을 따로 부른다: 창을 연 적이 없는 세션에서는 이
-        # 콜백이 아예 없고, `workspaceControl -e -close`가 closeCommand를
-        # 실제로 부르는지는 여전히 문서로 확정하지 못했다.
-        closeCommand="import maroRosProxy; maroRosProxy.stop()",
+        closeCommand="import maroMainWindow; maroMainWindow.teardown()",
         uiScript="import maroMainWindow; maroMainWindow.buildUI()")

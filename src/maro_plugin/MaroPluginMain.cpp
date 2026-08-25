@@ -498,17 +498,18 @@ MStatus uninitializePlugin(MObject obj) {
         maro::shutdownBridge();
         maro::MaroDeleteWatcher::uninstall();
 
-        // ROS 프록시의 idle scriptJob을 뗀다. 창의 closeCommand가 이미
-        // maroRosProxy.stop()을 부르지만, 그것만으로는 세 경로 중 하나만
-        // 덮인다:
+        // 모든 서브시스템(ROS 프록시의 idle scriptJob 등)을 뗀다. 창의
+        // closeCommand가 이미 maroMainWindow.teardown()을 부르지만, 그것만
+        // 으로는 세 경로 중 하나만 덮인다:
         //   (1) 사용자가 창을 닫음(언로드 없음) -> closeCommand가 처리.
         //   (2) 창이 열린 채 언로드 -> 아래 workspaceControl -e -close가
         //       closeCommand를 실제로 부르는지 Autodesk 문서로 확정하지
         //       못했다. 부른다면 이 호출은 무해한 중복이고, 안 부른다면
         //       이 호출이 유일한 정리다.
         //   (3) 창을 연 적이 없거나 이미 닫힌 상태에서 언로드 ->
-        //       closeCommand 자체가 존재하지 않는다. stop()은 start()가
-        //       한 번도 안 불렸어도 안전한 무동작이다(멱등).
+        //       closeCommand 자체가 존재하지 않는다. teardown()이 부르는
+        //       stop()들은 전부 start()가 한 번도 안 불렸어도 안전한
+        //       무동작이다(멱등).
         // 즉 이것은 "있으면 좋은" 이중 안전장치가 아니라 (2)/(3)을 실제로
         // 책임지는 경로다.
         //
@@ -521,7 +522,7 @@ MStatus uninitializePlugin(MObject obj) {
         //
         // 실패해도 언로드를 막지 않는다 -- runPluginPythonModule은 예외를
         // 삼키고 MStatus로만 알린다(그리고 이 블록 전체가 try/catch 안이다).
-        maro::runPluginPythonModule("maroRosProxy", "maroRosProxy.stop()");
+        maro::runPluginPythonModule("maroMainWindow", "maroMainWindow.teardown()");
 
         // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
         // devkit의 workspaceControlCmd 샘플이 같은 이유로 같은 일을 한다.
