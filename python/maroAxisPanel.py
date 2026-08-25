@@ -10,7 +10,7 @@ maroListAxisNodes가 돌려준 것을 그리고, 버튼 클릭을 커맨드 호�
 자동 검증된다(maroDiagPanel.py의 sliceRows와 같은 이유).
 """
 import maya.cmds as cmds
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 # C++ 쪽 계약. 바뀌면 양쪽을 함께 고쳐야 한다(MaroAxisEditorCommands.cpp 참고).
 AXIS_FIELDS = 8
@@ -127,7 +127,7 @@ class AxisPanel(QtWidgets.QWidget):
         for row in sliceAxisRows(cmds.maroListAxisNodes()):
             item = QtWidgets.QListWidgetItem(
                 "{} ({})".format(row["axisFullPath"], row["jointName"] or "-"))
-            item.setData(1, row["axisFullPath"])
+            item.setData(QtCore.Qt.UserRole, row["axisFullPath"])
             self._axisList.addItem(item)
 
     def selectAxis(self, axisFullPath):
@@ -146,11 +146,11 @@ class AxisPanel(QtWidgets.QWidget):
                 "[{}] {} ({})".format(
                     row["logicalIndex"], row["capabilityNodeType"],
                     row["capabilityNodeName"] or "disconnected"))
-            item.setData(1, row["logicalIndex"])
+            item.setData(QtCore.Qt.UserRole, row["logicalIndex"])
             self._capList.addItem(item)
 
     def _onAxisRowClicked(self, item):
-        axisFullPath = item.data(1)
+        axisFullPath = item.data(QtCore.Qt.UserRole)
         self._selectedAxis = axisFullPath
         self._refreshCapabilityList()
         # 양방향 동기화(설계 스펙 §9): 패널에서 축을 고르면 씬 선택도 바꾼다.
@@ -178,7 +178,7 @@ class AxisPanel(QtWidgets.QWidget):
         if item is None:
             return
         try:
-            cmds.maroDisconnectCapability(self._selectedAxis, index=item.data(1))
+            cmds.maroDisconnectCapability(self._selectedAxis, index=item.data(QtCore.Qt.UserRole))
         except RuntimeError as error:
             print("Maro: maroDisconnectCapability failed -- {}".format(error))
             return
