@@ -134,11 +134,13 @@ gtest_discover_tests(maro_plugin_logic_tests)
 if(MARO_BUILD_PLUGIN)
     set(MAYAPY "C:/Program Files/Autodesk/Maya2026/bin/mayapy.exe")
 
-    # maroAxisPanel.py의 순수 함수(sliceAxisRows/sliceCapabilityRows)만
-    # 검증한다 -- 위 foreach(maya_test ...) 그룹과 달리 maya.standalone도,
-    # 플러그인 로드도, MARO_DIAG_BOOK_DIR도 필요 없다(test_axis_panel.py는
-    # 자체적으로 그저 "import maroAxisPanel" 하나만 한다 -- QWidget을 만들면
-    # 배치 mayapy가 프로세스를 abort시키므로 그쪽은 절대 부르지 않는다).
+    # maroSingleObjectNodeEditor.py/maroObjectNodeEditor.py의 순수 함수
+    # (sliceCapabilityRows/sliceAxisRows/computeRadialLayout/
+    # computeGsonGridLayout/...)만 검증한다 -- 위 foreach(maya_test ...)
+    # 그룹과 달리 maya.standalone도, 플러그인 로드도, MARO_DIAG_BOOK_DIR도
+    # 필요 없다(각 test_*.py는 자체적으로 그저 "import maro*" 하나만 한다 --
+    # QWidget을 만들면 배치 mayapy가 프로세스를 abort시키므로 그쪽은 절대
+    # 부르지 않는다).
     #
     # maroDiagPanel.py의 같은 성격 함수(sliceRows)는 지금 별도로 등록돼
     # 있지 않다 -- test_panel_commands.py 안에 maya.standalone 기반 커맨드
@@ -150,11 +152,10 @@ if(MARO_BUILD_PLUGIN)
     # 부르지 않는 한) 초기화를 요구하지 않고, "from PySide6 import
     # QtWidgets"도 위젯을 생성하지 않는 한 안전하다는 것을 실측으로 확인했다
     # (mayapy -c로 두 import를 각각 단독 실행, 둘 다 종료 코드 0).
-    add_test(NAME maya_axis_panel
-             COMMAND "${MAYAPY}"
-                     "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_axis_panel.py")
-    set_tests_properties(maya_axis_panel PROPERTIES TIMEOUT 60)
-
+    #
+    # 예전에는 maroAxisPanel.py의 같은 성격 함수를 검증하는 maya_axis_panel
+    # 항목이 여기 있었다 -- Task 6이 maroAxisPanel.py를 ONE/SONE(이 두
+    # 항목)으로 완전히 대체하면서 함께 지웠다.
     add_test(NAME maya_single_object_node_editor
              COMMAND "${MAYAPY}"
                      "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_single_object_node_editor.py")

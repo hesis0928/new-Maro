@@ -189,13 +189,13 @@ def buildUI():
     _EMBEDDED[CONTROL_NAME] = button
     # ---------------------------------------------------------------------
 
-    # Phase 4: maroAxisPanel을 editorHost에 임베드한다 -- 테스트 버튼과
-    # 완전히 같은 두 단계(MQtUtil.findLayout -> addWidgetToMayaLayout)를
+    # Phase 4: maroObjectNodeEditor(ONE)를 editorHost에 임베드한다 -- 테스트
+    # 버튼과 완전히 같은 두 단계(MQtUtil.findLayout -> addWidgetToMayaLayout)를
     # 재사용한다. import는 함수 안에서 한다(테스트 버튼 임베드 위
     # maroRosProxy import와 같은 이유 -- 이 모듈의 import 시점과
-    # maroAxisPanel이 필요한 시점을 떼어 놓는다).
-    import maroAxisPanel
-    axisPanelWidget = maroAxisPanel.buildWidget()
+    # maroObjectNodeEditor가 필요한 시점을 떼어 놓는다).
+    import maroObjectNodeEditor
+    axisPanelWidget = maroObjectNodeEditor.buildWidget()
 
     editorHostLayoutPtr = omui.MQtUtil.findLayout(
         cmds.control(editorHost, query=True, fullPathName=True))
@@ -263,8 +263,8 @@ def buildUI():
     # 바로 뒤, buildUI() 조립이 전부 끝난 이 자리에 두는 이유는 위 주석과
     # 같다 -- 조립 중간에 예외가 나면 이 scriptJob도 주인 없는 콜백으로
     # 남으면 안 되므로, 조립이 끝까지 성공했을 때만 잡이 생기게 한다.
-    import maroAxisPanel
-    maroAxisPanel.start()
+    import maroObjectNodeEditor
+    maroObjectNodeEditor.start()
 
     return form
 
@@ -286,8 +286,8 @@ def teardown():
         traceback.print_exc()
 
     try:
-        import maroAxisPanel
-        maroAxisPanel.stop()
+        import maroObjectNodeEditor
+        maroObjectNodeEditor.stop()
     except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
         import traceback
         traceback.print_exc()

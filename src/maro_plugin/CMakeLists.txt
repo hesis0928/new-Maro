@@ -156,11 +156,12 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 # 젠엑스가 정상 동작하므로(빌드 규칙별로 해소되며 OUTPUT 파싱 시점이 아니다)
 # 디렉터리 생성에는 그것을 그대로 쓴다.
 set(MARO_PLUGIN_PY_MODULES
-    maroAxisPanel
     maroDiagPanel
     maroMainWindow
     maroMenu
+    maroObjectNodeEditor
     maroRosProxy
+    maroSingleObjectNodeEditor
 )
 foreach(pyModule IN LISTS MARO_PLUGIN_PY_MODULES)
     set(pyModuleSrc "${CMAKE_SOURCE_DIR}/python/${pyModule}.py")
