@@ -750,8 +750,10 @@ Expected: FAIL — module does not exist yet.
 ```python
 """ONE -- 오브젝트 노드 에디터. MaroUI 하단에 임베드되어 지금까지 만들어진
 SONE들을 GSON(그루핑된 노드)으로 조망한다 (설계 스펙 2026-08-25-...-v2 §6).
+
+이 파일의 순수 함수는 Maya에 의존하지 않는다 -- Task 6이 여기에 QWidget과
+maya.cmds import를 덧붙이기 전까지는 순수 Python만 남긴다.
 """
-import maya.cmds as cmds
 
 # C++ 쪽 계약. 바뀌면 MaroAxisEditorCommands.cpp의 listAxes()도 함께 고쳐야
 # 한다.
@@ -991,7 +993,7 @@ def stop():
         _PANEL = None
 ```
 
-Add `import maya.cmds as cmds` at the top of the file, alongside the existing plain imports from Task 5.
+Add `import maya.cmds as cmds` at the top of the file (Task 5 left the file with no imports at all, since its pure functions need none).
 
 - [ ] **Step 2: Delete `python/maroAxisPanel.py` and `tests/maya/test_axis_panel.py`**
 
