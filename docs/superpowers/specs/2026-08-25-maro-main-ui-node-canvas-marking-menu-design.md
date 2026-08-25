@@ -9,7 +9,7 @@ Phase 4(`2026-08-25-maro-main-ui-phase4-axis-capability-editor-design.md`)는 �
 3. (v1) 캔버스 모델: 모든 축이 한 캔버스에 동시에 보이고, 우클릭으로 그 자리에 축/능력을 만드는 완전한 노드 그래프 에디터.
 4. **(v2, 이 개정) "축/capability 편집"의 진입점만 MaroUI에서 Maya 네이티브 오브젝트 마킹 메뉴로 옮긴다 — MaroUI의 Maya/ROS 듀얼 뷰포트(Phase 2/3)는 이 개정과 무관하게 그대로 남는다.** MaroUI는 원래 두 가지 다른 목적을 한 창에 담고 있었다: (a) 축·capability를 편집하는 것과 (b) 노드를 연결한 뒤 Maya 쪽 뷰포트와 ROS 좌표계로 변환된 뷰포트가 서로 동기화되어 똑같이 움직이는지 눈으로 확인하는 것. 이번 개정은 (a)만 팝업(SONE)으로 옮기는 것이고, (b)는 이 UI의 존재 이유 자체이므로 손대지 않는다 — 아래 §6에서 다시 강조한다. Maro 플러그인이 로드돼 있으면(MaroUI를 열었든 안 열었든) 씬의 아무 오브젝트나 우클릭했을 때 나오는 네이티브 마킹 메뉴(사용자가 캡처해 보여준 Vertex/Edge/Face/Object Mode/UV/Multi 메뉴)에 `Maro node editor` 항목이 추가되고, 그걸 고르면 그 오브젝트 전용 팝업 노드 에디터가 뜬다. 다른 축과의 연결(예: Coupling의 소스 축)은 그 팝업 안의 드롭다운으로 처리한다. MaroUI 안에는 이 모든 팝업을 한눈에 조망하고 다시 열 수 있는 상위 뷰를 남겨 둔다.
 
-이 v2는 v1이 정했던 세부 상호작용(마킹 메뉴 중첩/반투명, Delete가 능력만 지우고 노드는 남기는 것, 2개 이상 쌓이면 드롭다운으로 접히는 것)은 대부분 그대로 재사용하되, **적용 범위를 "캔버스 전체"에서 "축 하나"로 좁히고, 그 결과 캔버스 좌표 저장/빈 캔버스 클릭/`Axis` 메뉴 항목이 전부 불필요해진다.** C++ 쪽은 Phase 4가 만든 커맨드 5종 + 기존 `maroBindAxis`를 그대로 재사용하고, `maroAxis`에 표시용 속성(이름/색상) 2개만 추가한다.
+이 v2는 브레인스토밍 중 v1 단계에서 정했던 세부 상호작용(마킹 메뉴 중첩/반투명, Delete가 능력만 지우고 노드는 남기는 것, 2개 이상 쌓이면 드롭다운으로 접히는 것 — 아래 §5에 전부 다시 옮겨 적었다)은 그대로 재사용하되, **적용 범위를 "캔버스 전체"에서 "축 하나"로 좁히고, 그 결과 캔버스 좌표 저장/빈 캔버스 클릭/`Axis` 메뉴 항목이 전부 불필요해진다.** C++ 쪽은 Phase 4가 만든 커맨드 5종 + 기존 `maroBindAxis`를 그대로 재사용하고, `maroAxis`에 표시용 속성(이름/색상) 2개만 추가한다.
 
 ## 2. 세 계층 구조
 
@@ -17,7 +17,7 @@ Phase 4(`2026-08-25-maro-main-ui-phase4-axis-capability-editor-design.md`)는 �
 |---|---|---|---|
 | 네이티브 마킹 메뉴 진입점 | — | Maya 뷰포트, `dagMenuProc` 확장 | 오브젝트 우클릭 → `Maro node editor` 항목 |
 | 싱글 오브젝트 노드 에디터 | **SONE** | 독립 팝업 창(MaroUI와 무관, MaroUI 안 열어도 뜸) | 축 하나의 capability 스택을 마킹 메뉴로 편집 |
-| 오브젝트 노드 에디터 | **ONE** | MaroUI 하단 패널(v1 §2 레이아웃 그대로 유지) | 지금까지 만들어진 SONE들을 각각 노드 하나(**GSON**, Grouped Single Object Node)로 그루핑해 조망, 더블클릭으로 해당 SONE 재오픈 |
+| 오브젝트 노드 에디터 | **ONE** | MaroUI 하단 패널(레이아웃은 §6에서 그대로 유지) | 지금까지 만들어진 SONE들을 각각 노드 하나(**GSON**, Grouped Single Object Node)로 그루핑해 조망, 더블클릭으로 해당 SONE 재오픈 |
 
 세 계층의 관계: **SONE이 진짜 편집 화면**이고, **ONE은 SONE들의 목록/재진입 창구**다. 축 하나를 처음 만들 때만 네이티브 메뉴 → 이름/색 지정 → SONE 순서를 거치고, 이후에는 네이티브 메뉴에서 바로 그 SONE가 뜨거나, ONE에서 해당 GSON을 더블클릭해도 같은 SONE가 뜬다(SONE는 축마다 유일하게 존재 — 이미 열려 있으면 새로 만들지 않고 그 창을 앞으로 가져온다, `maroMainWindow.CONTROL_NAME` 싱글턴 패턴과 같은 원리).
 
@@ -41,7 +41,7 @@ Phase 4(`2026-08-25-maro-main-ui-phase4-axis-capability-editor-design.md`)는 �
 
 ### 5.1 표시
 
-팝업 안에는 이 축 하나의 capability 상태를 나타내는 노드가 **하나만** 있다(v1의 다축 캔버스와 달리 여기선 "축 이름 vs capability" 두 영역을 가를 필요도, 여러 축을 구분할 필요도 없다 — 창 자체가 이미 축 하나로 스코프됨). 표시 상태는 v1 §3.1의 capability 상태 표와 동일:
+팝업 안에는 이 축 하나의 capability 상태를 나타내는 노드가 **하나만** 있다(브레인스토밍 v1 단계의 다축 캔버스와 달리 여기선 "축 이름 vs capability" 두 영역을 가를 필요도, 여러 축을 구분할 필요도 없다 — 창 자체가 이미 축 하나로 스코프됨). 표시 상태:
 
 | 상태 | 표시 |
 |---|---|
@@ -53,16 +53,16 @@ Phase 4(`2026-08-25-maro-main-ui-phase4-axis-capability-editor-design.md`)는 �
 
 팝업 안 **아무 데나** 우클릭한 채로 드래그하면(빈 공간이든 노드 위든 구분 없음 — 창 안에 편집 대상이 이 축 하나뿐이라 클릭 위치를 가릴 이유가 없다) 우클릭 지점을 중심으로 방사형 메뉴가 열린다. 릴리즈한 위치의 항목이 확정된다.
 
-**항목은 7개 고정**(`Rotation`/`Translation`/`Limit`/`TranslationLimit`/`SensorDirection`/`SensorRange`/`Coupling`) — v1에 있던 `Axis` 항목은 **완전히 삭제**한다. 축 식별/바인딩은 이미 §4에서 오브젝트 우클릭으로 끝났으므로, SONE 내부에서 "어느 축인지" 또는 "새 축 만들기"를 다시 물을 이유가 없다.
+**항목은 7개 고정**(`Rotation`/`Translation`/`Limit`/`TranslationLimit`/`SensorDirection`/`SensorRange`/`Coupling`) — 브레인스토밍 v1 단계에 있던 `Axis` 항목은 **완전히 삭제**한다. 축 식별/바인딩은 이미 §4에서 오브젝트 우클릭으로 끝났으므로, SONE 내부에서 "어느 축인지" 또는 "새 축 만들기"를 다시 물을 이유가 없다.
 
-리프를 골라 릴리즈하면 v1 §3.4와 동일하게 동작:
+리프를 골라 릴리즈하면 다음과 같이 동작:
 - `undefined` 상태였다면 `maroAddCapability(axis, type=...)`.
 - 이미 능력이 있었다면 같은 커맨드로 다음 빈 슬롯에 추가(중첩).
-- 1차 구동값 상호배타 규칙 위반 시 커맨드가 거부 → 팝업 하단에 짧은 오류 텍스트(v1 §3.5 그대로).
+- 1차 구동값 상호배타 규칙 위반 시 커맨드가 거부 → 팝업 하단에 짧은 오류 텍스트.
 
-하위 옵션이 있는 항목을 위한 중첩/반투명/"◀ 상위로" 메커니즘(v1 §3.3)은 **컴포넌트 자체는 그대로 남겨 둔다**(범용으로 짜 둔 것 그대로) — 지금은 7개 다 리프라 실제로 중첩이 발생하지 않을 뿐, 향후 어떤 capability 타입이 하위 선택지를 가지게 되면 같은 경로를 탄다.
+하위 옵션이 있는 항목을 위한 중첩/반투명/"◀ 상위로" 메커니즘은 **컴포넌트 자체는 그대로 남겨 둔다**(범용으로 짜 둔 것 그대로) — 지금은 7개 다 리프라 실제로 중첩이 발생하지 않을 뿐, 향후 어떤 capability 타입이 하위 선택지를 가지게 되면 같은 경로를 탄다.
 
-### 5.3 능력 제거/조회 (v1 §3.4 그대로 승계)
+### 5.3 능력 제거/조회
 
 - Delete(접힌 상태) → 가장 나중에 추가된 능력 하나만 제거(`maroListAxisNodes(capabilities=axis)`로 최대 `logicalIndex` 조회 후 `maroDisconnectCapability(axis, index=그값)`). 능력이 1개였다면 `undefined`로 복귀.
 - `▾` 클릭 또는 노드 더블클릭 → 쌓인 순서 목록 펼침/접힘 토글.
@@ -79,7 +79,7 @@ Phase 4(`2026-08-25-maro-main-ui-phase4-axis-capability-editor-design.md`)는 �
 
 ## 6. ONE — 오브젝트 노드 에디터 (MaroUI 하단)
 
-**MaroUI의 Maya/ROS 듀얼 뷰포트는 이번 개정과 무관하게 그대로 유지한다** — Phase 2/3이 만든 그 뷰포트는 축 편집 도구가 아니라 "능력을 부여한 뒤 두 뷰포트(Maya 좌표계 / ROS로 변환된 좌표계)가 실제로 서로 동기화되어 똑같이 움직이는지 확인하는" 이 UI의 원래 존재 이유이고, §1에서 이미 명시했듯 이번 개정 대상이 아니다. v1 §2의 MaroUI 레이아웃(메뉴바 + 뷰포트 상단 + 편집 영역 하단)도 그대로 유지한다 — 하단 `editorHost`에 임베드되는 위젯의 **내용**만 "다축 캔버스"에서 "GSON 그리드"로 바뀔 뿐이다.
+**MaroUI의 Maya/ROS 듀얼 뷰포트는 이번 개정과 무관하게 그대로 유지한다** — Phase 2/3이 만든 그 뷰포트는 축 편집 도구가 아니라 "능력을 부여한 뒤 두 뷰포트(Maya 좌표계 / ROS로 변환된 좌표계)가 실제로 서로 동기화되어 똑같이 움직이는지 확인하는" 이 UI의 원래 존재 이유이고, §1에서 이미 명시했듯 이번 개정 대상이 아니다. 브레인스토밍 v1 단계에서 정한 MaroUI 레이아웃(메뉴바 + 뷰포트 상단 + 편집 영역 하단)도 그대로 유지한다 — 하단 `editorHost`에 임베드되는 위젯의 **내용**만 "다축 캔버스"에서 "GSON 그리드"로 바뀔 뿐이다.
 
 - 씬에 바인딩된 축(=SONE가 하나라도 만들어진 축)마다 GSON 노드 하나. 라벨 = `aDisplayName`, 색 = `aDisplayColor`.
 - **더블클릭** → 그 GSON에 대응하는 SONE 팝업을 연다(이미 열려 있으면 앞으로 가져오기만).
@@ -97,7 +97,7 @@ Phase 4(`2026-08-25-maro-main-ui-phase4-axis-capability-editor-design.md`)는 �
 
 ## 8. 커맨드 재사용 (신규 C++ 커맨드 없음)
 
-Phase 4가 만든 5개(`maroListAxisNodes`/`maroAddCapability`/`maroConnectCapability`/`maroDisconnectCapability`/`maroUnbindAxis`) + 기존 `maroBindAxis`를 그대로 쓴다. 이름/색 설정, 다른 축 연결, GSON 삭제는 전부 `cmds.setAttr`/`cmds.connectAttr`/`cmds.delete`의 조합이라 새 undoable 커맨드가 필요 없다(단순 속성 조작이라 원자성 요구가 낮다는 Phase 4의 기존 판단 그대로 승계, §8 원문 참고).
+Phase 4가 만든 5개(`maroListAxisNodes`/`maroAddCapability`/`maroConnectCapability`/`maroDisconnectCapability`/`maroUnbindAxis`) + 기존 `maroBindAxis`를 그대로 쓴다. 이름/색 설정, 다른 축 연결, GSON 삭제는 전부 `cmds.setAttr`/`cmds.connectAttr`/`cmds.delete`의 조합이라 새 undoable 커맨드가 필요 없다(단순 속성 조작이라 원자성 요구가 낮다는 Phase 4 스펙 §8의 기존 판단 그대로 승계).
 
 ## 9. `python` 쪽 파일 구성
 
