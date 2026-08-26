@@ -192,28 +192,60 @@ def checkMeshCollisions(boundingBoxesByMesh):
     return findings
 
 
+_MAX_ANCESTOR_CHAIN_DEPTH = 1024
+
+
+def _ancestorAxes(axis, parentByAxis):
+    """`axis`의 부모, 조부모, ... 를 뿌리까지 전부 모은 리스트.
+
+    `parentAxisPath` 체인을 한 번만 따라가는 게 아니라 끝까지 걷는다 --
+    아래 `adjacentMeshPairs()`의 도크스트링 참고. 씬이 깨져서 부모 체인이
+    순환하면(이론상 있어서는 안 되지만, 손상된 씬 파일이 만들 수 있다)
+    무한 루프에 빠지지 않도록 방문한 축을 추적해 재방문 시 멈추고, 추가로
+    `_MAX_ANCESTOR_CHAIN_DEPTH` 깊이에서도 강제로 멈춘다."""
+    ancestors = []
+    visited = {axis}
+    current = parentByAxis.get(axis)
+    depth = 0
+    while current and depth < _MAX_ANCESTOR_CHAIN_DEPTH:
+        if current in visited:
+            break
+        ancestors.append(current)
+        visited.add(current)
+        current = parentByAxis.get(current)
+        depth += 1
+    return ancestors
+
+
 def adjacentMeshPairs(axisRows):
-    """부모-자식 관계인 축 쌍에 각각 바인딩된 메쉬 쌍의 집합.
+    """서로 조상/자손 관계인 축 쌍에 각각 바인딩된 메쉬 쌍의 집합.
 
     `maroAxis`는 `parentAxis`(message)로 명시적인 축 체인을 갖고, Maya의
-    `exactWorldBoundingBox()`는 그 트랜스폼의 DAG 자손을 전부 포함한다.
-    링크 메쉬가 DAG로 중첩된 흔한 리깅에서는 부모 링크의 월드 AABB가 자식
-    링크의 것을 항상 품으므로, 인접한 조인트 쌍마다 "충돌"이 무조건 하나씩
-    나온다 -- 실제 문제가 아니라 잡음이다. 이 쌍들을 미리 뽑아
+    `exactWorldBoundingBox()`는 그 트랜스폼의 DAG 자손을 전부 포함한다 --
+    직속 자식 하나만이 아니라 전부다. 그래서 링크 메쉬가 DAG로 중첩된 흔한
+    리깅에서는, 3단 체인 조부모->부모->자식이라면 조부모 링크의 월드 AABB가
+    부모 링크뿐 아니라 자식 링크까지 통째로 품는다. 인접(직속 부모-자식)
+    쌍만 걸러내면 조부모-자식처럼 한 단계 건너뛴 조상/자손 쌍은 그대로
+    남아 여전히 잡음 충돌을 낸다 -- N단 체인이면 원래 N(N-1)/2쌍 중
+    N-1쌍만 걸러지고 나머지가 그대로 통과한다. 그래서 각 축마다
+    `parentAxisPath` 체인을 뿌리까지 전부 따라가(`_ancestorAxes()`) 어느
+    조상과도 이루는 쌍을 전부 뽑는다. 이 쌍들을 미리 뽑아
     `filterAdjacentMeshCollisions()`로 걸러낸다.
 
     Maya를 부르지 않는 순수 함수다(축 행에 이미 들어 있는 필드만 본다)."""
     targetByAxis = {row["axisFullPath"]: row["boundTargetPath"] for row in axisRows}
+    parentByAxis = {row["axisFullPath"]: row.get("parentAxisPath") for row in axisRows}
     pairs = set()
     for row in axisRows:
-        parentAxis = row.get("parentAxisPath")
-        if not parentAxis:
+        axis = row["axisFullPath"]
+        mesh = row["boundTargetPath"]
+        if not mesh:
             continue
-        childMesh = row["boundTargetPath"]
-        parentMesh = targetByAxis.get(parentAxis)
-        if not childMesh or not parentMesh or childMesh == parentMesh:
-            continue
-        pairs.add(frozenset((childMesh, parentMesh)))
+        for ancestorAxis in _ancestorAxes(axis, parentByAxis):
+            ancestorMesh = targetByAxis.get(ancestorAxis)
+            if not ancestorMesh or ancestorMesh == mesh:
+                continue
+            pairs.add(frozenset((mesh, ancestorMesh)))
     return pairs
 
 
@@ -323,6 +355,12 @@ class _CheckSidePanel(QtWidgets.QWidget):
         except Exception:  # noqa: BLE001 -- 위와 같은 이유
             import traceback
             traceback.print_exc()
+            # 위 _onRunClicked과 같은 원칙: 해법 적용이 터진 것과 "적용은
+            # 잘 됐고 그대로 재검사한 결과"를 같은 화면으로 보여주면 안
+            # 된다. 여기서 끝내지 않고 재검사(_onRunClicked)로 흘려보내면
+            # 실패 이전의 stale 목록이 아무 표시 없이 그대로 남는다.
+            self._resultList.clear()
+            self._resultList.addItem("해법 적용 실패 -- 스크립트 에디터 참조")
             return
         self._onRunClicked()  # 적용 후 다시 검사해서 목록을 갱신
 

@@ -190,6 +190,28 @@ assert {frozenset(f["meshes"]) for f in filtered} == {
     frozenset(("|linkP", "|linkU")), frozenset(("|linkC", "|linkU"))}, filtered
 print("adjacentMeshPairs/filterAdjacentMeshCollisions OK")
 
+# 2차 재검토: exactWorldBoundingBox()가 담는 것은 "DAG 자손 전부"이지 직속
+# 자식 하나가 아니다. 3단 체인 axP(조부모) -> axC(부모) -> axG(자식)에서는
+# bbox(axP)가 bbox(axG)까지 통째로 품는다 -- 그런데 한 단계짜리 필터는
+# (axP,axC)와 (axC,axG)만 걸러내고 조부모-자손 쌍인 (axP,axG)는 그대로
+# 남겨 진짜 충돌처럼 잡음을 낸다. parentAxisPath 체인을 뿌리까지 전부
+# 따라가 조상/자손 관계에 있는 모든 축 쌍을 걸러내야 한다.
+grandchainRows = [
+    {"axisFullPath": "|axP", "jointName": "p", "boundTargetPath": "|linkP",
+     "parentAxisPath": "", "enabled": True, "conventionAxis": 0, "capabilityCount": 1},
+    {"axisFullPath": "|axC", "jointName": "c", "boundTargetPath": "|linkC",
+     "parentAxisPath": "|axP", "enabled": True, "conventionAxis": 0, "capabilityCount": 1},
+    {"axisFullPath": "|axG", "jointName": "g", "boundTargetPath": "|linkG",
+     "parentAxisPath": "|axC", "enabled": True, "conventionAxis": 0, "capabilityCount": 1},
+]
+grandPairs = diag.adjacentMeshPairs(grandchainRows)
+assert grandPairs == {
+    frozenset(("|linkP", "|linkC")),
+    frozenset(("|linkC", "|linkG")),
+    frozenset(("|linkP", "|linkG")),
+}, grandPairs
+print("adjacentMeshPairs three-level ancestor chain OK")
+
 # --- suggestDisambiguatedJointName (pure) ---
 assert diag.suggestDisambiguatedJointName("shoulder") == "shoulder_2"
 # 최종 리뷰 Important-4: 이미 쓰이는 이름을 알려주면 충돌을 옮기지 않고 피한다.
