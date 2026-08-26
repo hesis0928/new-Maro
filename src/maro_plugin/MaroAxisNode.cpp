@@ -158,6 +158,15 @@ MStatus MaroAxisNode::initialize() {
     addAttribute(aDisplayName);
 
     aDisplayColor = numFn.createColor("displayColor", "dpc");
+    // [최종 리뷰 I-4] 기본값을 명시한다. createColor()는 기본값을 주지
+    // 않으면 (0,0,0)으로 두는데(실측: mayapy에서 갓 만든 maroAxis의
+    // displayColor가 [(0.0, 0.0, 0.0)]), 그러면 이 UI가 생기기 전에
+    // 만들어진 축이나 스크립트로 만든 축이 ONE에서 전부 새까만 GSON으로
+    // 그려진다 -- "사용자가 검정을 골랐다"와 구별되지 않는다. 값은
+    // python/maroDagMenu.py의 색상 선택 기본값(cmds.colorEditor(
+    // rgbValue=(0.5, 0.7, 0.9)))과 같게 맞춘다: 마킹 메뉴로 만든 축과
+    // 그렇지 않은 축이 같은 색으로 보여야 한다.
+    numFn.setDefault(0.5f, 0.7f, 0.9f);
     numFn.setStorable(true);
     addAttribute(aDisplayColor);
 

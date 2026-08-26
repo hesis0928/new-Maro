@@ -1,5 +1,6 @@
 #include "MaroAxisEditorCommands.h"
 
+#include <locale>
 #include <sstream>
 
 #include <maya/MArgDatabase.h>
@@ -95,6 +96,14 @@ MStatus listAxes(MStringArray& result) {
 
         MPlug colorPlug = axisFn.findPlug(MaroAxisNode::aDisplayColor, false);
         std::ostringstream colorStream;
+        // [최종 리뷰 Minor-5] 로케일을 C로 고정한다. ostringstream은 기본
+        // 전역 로케일을 쓰므로, 소수점이 쉼표인 로케일(de_DE, fr_FR 등)이
+        // 활성화된 세션에서는 0.1/0.5/0.8이 "0,1,0,5,0,8"로 나간다 -- 필드
+        // 구분자가 바로 그 쉼표라 파이썬 쪽 파서
+        // (maroObjectNodeEditor.sliceAxisRows의 f[9].split(","))가 값 세
+        // 개가 아니라 여섯 개를 보고 깨진다. 이 필드는 사람이 읽는 텍스트가
+        // 아니라 기계 계약이므로 시스템 로케일을 따라갈 이유가 없다.
+        colorStream.imbue(std::locale::classic());
         colorStream << colorPlug.child(0).asFloat() << ","
                     << colorPlug.child(1).asFloat() << ","
                     << colorPlug.child(2).asFloat();
