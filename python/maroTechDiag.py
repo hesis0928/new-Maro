@@ -1,15 +1,24 @@
 """테크 Diag -- 기구학/ROS 정합성 능동 검증 (설계 스펙 2026-08-26-maro-tech-diag-design.md).
 
 기존 boad/book 디버깅 Diag와 완전히 독립된 서브시스템이다. 새 C++ 커맨드나
-DG 어트리뷰트 없이 기존 maroListAxisNodes 조회 + cmds.getAttr만으로 동작한다.
-검사 결과는 실행할 때마다 새로 계산되고 저장되지 않는다.
+DG 어트리뷰트 없이 기존 maroListAxisNodes 조회 + cmds.getAttr(+ 단위 변환용
+maya.api.OpenMaya의 MAngle/MDistance)만으로 동작한다. 검사 결과는 실행할
+때마다 새로 계산되고 저장되지 않는다.
 
-이 파일의 순수 함수는 Maya에 의존하지 않는다 -- mayapy 배치 모드에서 QWidget
-없이 계약을 검증한다.
+검사/파싱 함수(`sliceAxisTechRows`, `sliceCapabilityTechRows`,
+`checkLimitProximity`, `checkJointStatesIntegrity`, `checkMeshCollisions`,
+`adjacentMeshPairs`, `filterAdjacentMeshCollisions`,
+`suggestDisambiguatedJointName`)는 Maya
+호출을 하나도 하지 않는 순수 함수라 mayapy 배치 모드에서 QWidget 없이 계약을
+검증할 수 있다. 다만 **모듈 자체**는 순수하지 않다 -- 아래 `_run*Checks`/
+구제 함수/사이드 패널이 모듈 스코프에서 `maya.cmds`, `maya.api.OpenMaya`,
+`PySide6.QtWidgets`를 import하므로, 이 모듈을 import하는 것만으로도 셋 다
+사용 가능해야 한다(= mayapy 안에서만 import된다).
 """
 
 import itertools
 
+import maya.api.OpenMaya as om2
 import maya.cmds as cmds
 from PySide6 import QtWidgets
 
@@ -38,6 +47,9 @@ def sliceAxisTechRows(flat):
             "axisFullPath": f[0],
             "jointName": f[1],
             "boundTargetPath": f[2],
+            # f[3]은 부모 축 노드의 full DAG path(없으면 ""). 메쉬 충돌
+            # 검사에서 "인접(부모-자식) 링크 쌍"을 걸러내는 데 쓴다.
+            "parentAxisPath": f[3],
             "enabled": f[5] == "1",
             "conventionAxis": int(f[6]),
             "capabilityCount": int(f[7]),
@@ -87,12 +99,27 @@ def checkLimitProximity(axisRows, capabilityRowsByAxis, currentValueByAxis):
             if span <= 0:
                 continue
             proximity = (currentValue - minV) / span
-            if proximity >= LIMIT_PROXIMITY_THRESHOLD or proximity <= (1.0 - LIMIT_PROXIMITY_THRESHOLD):
+            nearMax = proximity >= LIMIT_PROXIMITY_THRESHOLD
+            nearMin = proximity <= (1.0 - LIMIT_PROXIMITY_THRESHOLD)
+            if nearMax or nearMin:
+                # 어느 쪽 끝에 붙었는지, 지금 값이 얼마인지, 어느 capability
+                # 슬롯이 건 리밋인지를 전부 요약에 담는다. 해법 버튼이 없는
+                # "설명만" 항목이라 요약 문자열이 사용자가 받는 정보의
+                # 전부이고, 한 축에 리밋 슬롯이 여러 개면 슬롯 인덱스가
+                # 없을 경우 결과가 글자 하나 안 틀리고 똑같아진다.
+                # 이 함수는 Maya를 부르지 않는다 -- 아래 값들은 전부 인자로
+                # 이미 들어와 있다.
+                boundLabel = "max" if nearMax else "min"
+                boundValue = maxV if nearMax else minV
                 findings.append({
                     "category": "limitProximity",
                     "severity": "warning",
-                    "summary": "{}: current value is within {:.0f}% of its limit range".format(
-                        axis, (1.0 - LIMIT_PROXIMITY_THRESHOLD) * 100),
+                    "summary": (
+                        "{}: capability[{}] current value {:.4f} is within {:.0f}% of its "
+                        "{} limit {:.4f} (range {:.4f}..{:.4f})".format(
+                            axis, capRow["logicalIndex"], currentValue,
+                            (1.0 - LIMIT_PROXIMITY_THRESHOLD) * 100,
+                            boundLabel, boundValue, minV, maxV)),
                     "axis": axis,
                     "remedy": None,
                 })
@@ -165,8 +192,53 @@ def checkMeshCollisions(boundingBoxesByMesh):
     return findings
 
 
-def suggestDisambiguatedJointName(jointName):
-    return jointName + "_2"
+def adjacentMeshPairs(axisRows):
+    """부모-자식 관계인 축 쌍에 각각 바인딩된 메쉬 쌍의 집합.
+
+    `maroAxis`는 `parentAxis`(message)로 명시적인 축 체인을 갖고, Maya의
+    `exactWorldBoundingBox()`는 그 트랜스폼의 DAG 자손을 전부 포함한다.
+    링크 메쉬가 DAG로 중첩된 흔한 리깅에서는 부모 링크의 월드 AABB가 자식
+    링크의 것을 항상 품으므로, 인접한 조인트 쌍마다 "충돌"이 무조건 하나씩
+    나온다 -- 실제 문제가 아니라 잡음이다. 이 쌍들을 미리 뽑아
+    `filterAdjacentMeshCollisions()`로 걸러낸다.
+
+    Maya를 부르지 않는 순수 함수다(축 행에 이미 들어 있는 필드만 본다)."""
+    targetByAxis = {row["axisFullPath"]: row["boundTargetPath"] for row in axisRows}
+    pairs = set()
+    for row in axisRows:
+        parentAxis = row.get("parentAxisPath")
+        if not parentAxis:
+            continue
+        childMesh = row["boundTargetPath"]
+        parentMesh = targetByAxis.get(parentAxis)
+        if not childMesh or not parentMesh or childMesh == parentMesh:
+            continue
+        pairs.add(frozenset((childMesh, parentMesh)))
+    return pairs
+
+
+def filterAdjacentMeshCollisions(findings, pairs):
+    """`checkMeshCollisions()` 결과에서 인접(부모-자식) 메쉬 쌍의 항목을 뺀다.
+
+    필터링을 `checkMeshCollisions()` 안이 아니라 여기에 두는 이유: 그
+    함수의 계약("박스들을 주면 겹치는 것을 찾아준다")은 그 자체로 여전히
+    옳다 -- 축의 부모 관계를 아는 것은 씬을 읽는 호출자(`_runMayaSideChecks`)
+    쪽이다."""
+    return [f for f in findings if frozenset(f["meshes"]) not in pairs]
+
+
+def suggestDisambiguatedJointName(jointName, taken=None):
+    """중복된 jointName에 붙일 접미사 제안. `taken`(이미 쓰이는 이름들)이
+    주어지면 거기에 없는 이름이 나올 때까지 `_2`, `_3`, ... 로 올린다 --
+    같은 이름을 쓰는 축이 셋 이상일 때 제안 자체가 또 다른 충돌을 만드는
+    것을 막는다. `taken` 없이 부르면 종전대로 `_2`."""
+    takenNames = set(taken) if taken else set()
+    suffix = 2
+    candidate = "{}_{}".format(jointName, suffix)
+    while candidate in takenNames:
+        suffix += 1
+        candidate = "{}_{}".format(jointName, suffix)
+    return candidate
 
 
 def suggestJointNameForFill(axis):
@@ -219,10 +291,16 @@ class _CheckSidePanel(QtWidgets.QWidget):
     def _onRunClicked(self):
         try:
             self._findings = self._runCheckFn()
-        except Exception as error:  # noqa: BLE001 -- Qt 콜백 경계, 버튼 클릭마다 도는 코드가 예외를 흘리면 안 됨
+        except Exception:  # noqa: BLE001 -- Qt 콜백 경계, 버튼 클릭마다 도는 코드가 예외를 흘리면 안 됨
             import traceback
             traceback.print_exc()
+            # 검사 함수가 터진 것과 "정말 아무 문제도 없었다"를 절대로 같은
+            # 화면으로 보여주면 안 된다. 아래 "문제 없음" 분기로 흘려보내지
+            # 말고 여기서 끝낸다.
             self._findings = []
+            self._resultList.clear()
+            self._resultList.addItem("검사 실패 -- 스크립트 에디터 참조")
+            return
         self._resultList.clear()
         if not self._findings:
             self._resultList.addItem("문제 없음")
@@ -242,11 +320,34 @@ class _CheckSidePanel(QtWidgets.QWidget):
     def _onApplyRemedy(self, finding):
         try:
             finding["remedy"]()
-        except Exception as error:  # noqa: BLE001 -- 위와 같은 이유
+        except Exception:  # noqa: BLE001 -- 위와 같은 이유
             import traceback
             traceback.print_exc()
             return
         self._onRunClicked()  # 적용 후 다시 검사해서 목록을 갱신
+
+
+def _readCurrentValue(axis, driveIsLinear):
+    """축의 현재 구동값을 **데이터블록과 같은 생 단위**(라디안/센티미터)로 읽는다.
+
+    `position`은 `MFnUnitAttribute::kAngle`, `positionLinear`는 `kDistance`라
+    `cmds.getAttr()`이 값을 **현재 UI 단위**(각도 기본값 = 도)로 돌려준다.
+    반면 비교 상대인 `capabilityIn[i].capMin/capMax`는 평범한
+    `MFnNumericData::k3Double`이고, `compute()`가 데이터블록의 생 라디안/
+    센티미터 값을 그대로 그 경계에 클램프한다
+    (`MaroCapabilityNodes.cpp`, `tests/maya/test_capability_stack.py`의
+    "unit contract" 절). 그래서 `cmds.getAttr()` 값을 그대로 쓰면 도 단위
+    숫자를 라디안 경계와 비교하게 된다 -- ±pi/2로 제한된 회전축이 안전한
+    45도에 있어도 45.0 vs 1.5708로 비교돼 거의 모든 회전축이 경고로 뜬다.
+
+    `cmds.currentUnit()`으로 세션 단위를 바꿔서 해결하지 않는다 -- 설계
+    스펙의 "검사는 씬을 바꾸지 않는다" 제약을 어기는 전역 상태 변경이다.
+    대신 UI 단위에서 생 단위로 명시적으로 변환한다."""
+    attrName = ".positionLinear" if driveIsLinear else ".position"
+    raw = cmds.getAttr(axis + attrName)
+    if driveIsLinear:
+        return om2.MDistance(raw, om2.MDistance.uiUnit()).asCentimeters()
+    return om2.MAngle(raw, om2.MAngle.uiUnit()).asRadians()
 
 
 def _runMayaSideChecks():
@@ -272,8 +373,7 @@ def _runMayaSideChecks():
         capsByAxis[axis] = capRows
         if row["enabled"] and row["boundTargetPath"]:
             driveIsLinear = cmds.getAttr(axis + ".driveIsLinear")
-            currentValueByAxis[axis] = cmds.getAttr(
-                axis + (".positionLinear" if driveIsLinear else ".position"))
+            currentValueByAxis[axis] = _readCurrentValue(axis, driveIsLinear)
 
     findings = checkLimitProximity(axisRows, capsByAxis, currentValueByAxis)
 
@@ -283,7 +383,9 @@ def _runMayaSideChecks():
     for mesh in boundMeshes:
         bbox = cmds.exactWorldBoundingBox(mesh)
         boxes[mesh] = tuple(bbox)
-    findings += checkMeshCollisions(boxes)
+    # 부모-자식 축에 물린 메쉬끼리의 겹침은 뺀다(adjacentMeshPairs 도크스트링).
+    findings += filterAdjacentMeshCollisions(checkMeshCollisions(boxes),
+                                             adjacentMeshPairs(axisRows))
     return findings
 
 
@@ -291,6 +393,11 @@ def _runRosSideChecks():
     axisRows = sliceAxisTechRows(cmds.maroListAxisNodes())
     findings = checkJointStatesIntegrity(axisRows)
     rowByAxis = {row["axisFullPath"]: row for row in axisRows}
+    # 지금 씬에서 실제로 쓰이고 있는 모든 jointName. 제안이 다른 축의 이름과
+    # 또 부딪히지 않도록 넘긴다. 이미 낸 제안도 여기에 넣어 둔다 -- 같은
+    # 이름을 쓰는 축이 셋이면 두 번째는 `_2`, 세 번째는 `_3`이 돼야지 둘 다
+    # `_2`를 제안해서 충돌을 옮기기만 하면 안 된다.
+    takenJointNames = {row["jointName"] for row in axisRows if row["jointName"]}
     for finding in findings:
         if finding["category"] == "emptyJointName":
             axis = finding["axis"]
@@ -298,7 +405,8 @@ def _runRosSideChecks():
         elif finding["category"] == "duplicateJointName":
             axis = finding["axis"]
             existingName = rowByAxis[axis]["jointName"]
-            suggestion = suggestDisambiguatedJointName(existingName)
+            suggestion = suggestDisambiguatedJointName(existingName, takenJointNames)
+            takenJointNames.add(suggestion)
             finding["remedy"] = lambda a=axis, s=suggestion: remedyRenameDuplicateJointName(a, s)
     return findings
 

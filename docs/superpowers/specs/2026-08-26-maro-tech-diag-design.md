@@ -38,10 +38,14 @@ MaroUI(현재: 메뉴바 / Maya·ROS 듀얼 뷰포트 / ONE 오브젝트 노드 
 ### 3.1 리밋 근접 경고
 `Limit`/`TranslationLimit` capability가 있는 축마다, 현재 구동값이 그 capability의 min/max 범위 중 어느 한쪽 끝에 **90%**(기본 임계값) 이상 근접했으면 경고를 낸다. `Coupling`으로 간접 구동되는 축도 포함한다 — 판정 기준은 그 축의 최종 구동값(coupling이 계산해 넘긴 값)이지, coupling의 `ratio`/`offset` 원본 파라미터가 아니다.
 
+**단위 주의**: `maroAxis.position`/`positionLinear`는 `MFnUnitAttribute`(kAngle/kDistance)라 `cmds.getAttr()`이 **현재 UI 단위**(각도 기본값 = 도)로 답하는 반면, 비교 상대인 `capabilityIn[i].capMin/capMax`는 평범한 `k3Double`로 **데이터블록의 생 라디안/센티미터**를 담는다(`MaroCapabilityNodes.cpp`). 그래서 검사는 `cmds.getAttr()` 값을 `MAngle`/`MDistance`로 감싸 생 단위로 명시 변환한 뒤 비교한다 — `cmds.currentUnit()`으로 세션 단위를 바꾸는 방법은 §10의 "검사는 씬을 바꾸지 않는다"를 어기므로 쓰지 않는다.
+
 이미 커맨드 레벨에서 막고 있는 것(1차 구동값 상호배타, 각도/선형 계열 불일치)과는 다른 문제다 — 저건 "애초에 만들 수 없는 조합"을 막는 것이고, 이건 "만들 수는 있지만 지금 값이 위험 구간에 있다"는 사전 경고다.
 
 ### 3.2 메쉬 충돌(바운딩박스) 검사
 씬에 바인딩된 모든 타겟 메쉬 쌍에 대해, 현재 포즈에서의 월드 바운딩박스(`cmds.exactWorldBoundingBox()`)가 서로 겹치는지 축정렬(AABB) 기준으로 검사한다. **v1은 폴리곤 단위 정밀 충돌이 아니라 바운딩박스 겹침만 본다** — 계산이 가볍고, "이 근처에서 뭔가 부딪힐 수 있다"는 1차 경고로 충분하다는 판단. 정밀 검사(예: 이미 LiDAR가 쓰는 Embree 엔진 재사용)는 이번 범위 밖(§8).
+
+**부모-자식 축 쌍은 제외한다**: `maroAxis`는 `parentAxis`로 명시적 축 체인을 갖고, `exactWorldBoundingBox()`는 그 트랜스폼의 DAG 자손을 전부 포함한다. 링크 메쉬를 DAG로 중첩하는 흔한 리깅에서는 부모 링크의 월드 AABB가 자식 것을 **항상** 품으므로 인접 조인트 쌍마다 "충돌"이 하나씩 나온다 — 실제 문제가 아니라 잡음이다. 겹침 판정 자체("박스를 주면 겹치는 것을 찾는다")는 그대로 두고, 씬의 축 부모 관계를 아는 호출자 쪽에서 그 쌍만 결과에서 걸러낸다.
 
 ## 4. ROS측 검사 — "로보틱스 관점"
 
@@ -60,7 +64,7 @@ MaroUI(현재: 메뉴바 / Maya·ROS 듀얼 뷰포트 / ONE 오브젝트 노드 
 | 리밋 근접 경고 | 없음, 설명만 | "값을 어떻게 바꿔야 안전한지"는 사용자의 창작 의도에 달려 있어 일반해가 없다 |
 | 메쉬 충돌 | 없음, 어느 축이 관여하는지만 안내 | 충돌을 없애려면 어떤 축을 어떻게 바꿔야 하는지도 일반해가 없다 |
 | 빈 `jointName` | **있음** — 오브젝트 짧은 이름으로 채움 | 구조화된 단순 `setAttr`, 부작용 없음 |
-| `jointName` 중복 | **있음** — 나중에 발견된 쪽에 접미사(`_2`)를 붙여 재명명 | 마찬가지로 단순 `setAttr` |
+| `jointName` 중복 | **있음** — 나중에 발견된 쪽에 접미사(`_2`, 그것도 이미 쓰이고 있으면 `_3`, `_4`, ...)를 붙여 재명명 | 마찬가지로 단순 `setAttr`. 같은 이름을 쓰는 축이 셋 이상일 때 제안이 서로 또 부딪히면 충돌을 옮기기만 하는 셈이라, 제안은 항상 "지금 씬에서 쓰이는 이름 + 이미 낸 제안"을 피해서 고른다 |
 | 구동값 없는 활성 축 | 없음, 설명만 | "능력을 추가해라" 또는 "비활성화해라" 둘 다 사용자 판단 영역 |
 
 해법 적용은 기존 디버깅 Diag의 안전 규칙(§4.3, `2026-08-14-...design.md`)과 동일한 모델을 그대로 따른다 — **제시가 기본, 적용은 사용자가 버튼을 눌러야 함, undoable 커맨드 경유(Ctrl+Z로 되돌릴 수 있음), 씬을 말없이 고치지 않음.** 단, 구현 자체는 기존 `boad`/`book`/`maroApplyRemedy`와 완전히 독립적이다(코드 재사용 없음, §1의 표 참고) — 안전 원칙만 같은 것을 반복 채택한다.
@@ -96,7 +100,7 @@ MaroUI(현재: 메뉴바 / Maya·ROS 듀얼 뷰포트 / ONE 오브젝트 노드 
 
 ## 9. 테스트 전략
 
-- `python/maroTechDiag.py`의 순수 함수(리밋 근접 비율 계산, AABB 겹침 판정, `jointName` 공백/중복/무구동 탐지)는 새 mayapy 배치 테스트 `tests/maya/test_tech_diag.py`로 검증 — 이번 세션의 `test_single_object_node_editor.py`/`test_object_node_editor.py`와 같은 관례(평범한 assert/print 스크립트, `maya.standalone` 없이 mayapy로 직접 실행).
+- `python/maroTechDiag.py`의 순수 함수(리밋 근접 비율 계산, AABB 겹침 판정, `jointName` 공백/중복/무구동 탐지)는 새 mayapy 배치 테스트 `tests/maya/test_tech_diag.py`로 검증 — 이번 세션의 `test_single_object_node_editor.py`/`test_object_node_editor.py`와 같은 관례(평범한 assert/print 스크립트). 다만 이 파일은 그 둘과 달리 `maya.standalone.initialize()`로 시작하고 플러그인을 로드한다 — 같은 파일에서 구제 함수의 undo 왕복(`cmds.setAttr` + `cmds.undo()`)과 Maya 통합 계층(`_runMayaSideChecks`/`_runRosSideChecks`)을 실제 `maroAxis` 씬에 대고 검증하기 때문이다. 그래서 `tests/CMakeLists.txt`에서도 "플러그인만 있으면 되는" 그룹에 속해 `MARO_PLUGIN_PATH`/`MARO_DIAG_BOOK_DIR` 격리를 함께 받는다.
 - 해법 적용(`jointName` 채우기/재명명)의 undo 가능 여부는 mayapy 배치로 검증 가능(실제 `cmds.setAttr` + `cmds.undo()` 왕복).
 - 사이드 패널 위젯의 실제 버튼 클릭/렌더링은 대화형 Maya 수동 체크리스트로만 검증 — `docs/maro-main-ui-manual-checklist.md`에 새 절 추가.
 
