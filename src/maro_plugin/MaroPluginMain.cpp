@@ -9,6 +9,7 @@
 #include "MaroDeleteWatcher.h"
 #include "MaroDiag.h"
 #include "MaroDiagCommands.h"
+#include "MaroLidarCommands.h"
 #include "MaroLidarNode.h"
 #include "MaroMainThreadQueue.h"
 #include "MaroMainWindowCommand.h"
@@ -440,6 +441,14 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroSnapshotLidarScan",
+                                    maro::MaroSnapshotLidarScanCommand::creator,
+                                    maro::MaroSnapshotLidarScanCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroSnapshotLidarScan");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -589,6 +598,7 @@ MStatus uninitializePlugin(MObject obj) {
         // maroMainWindow 블록보다 "먼저" 온다(가장 나중에 등록된 것부터
         // 먼저 해제) -- 위 maroLidar/maroAxis, maroApplyRemedy/
         // maroDiagRequestRemedy 선례와 같은 논리.
+        plugin.deregisterCommand("maroSnapshotLidarScan");
         plugin.deregisterCommand("maroUnbindAxis");
         plugin.deregisterCommand("maroDisconnectCapability");
         plugin.deregisterCommand("maroConnectCapability");

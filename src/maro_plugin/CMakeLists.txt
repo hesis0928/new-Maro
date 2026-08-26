@@ -10,6 +10,7 @@ set(SOURCE_FILES
     MaroLidarNode.cpp
     MaroPointCloudNode.cpp
     MaroLidarScan.cpp
+    MaroLidarCommands.cpp
     MaroCommands.cpp
     MaroDeleteWatcher.cpp
     MaroRosRuntime.cpp
