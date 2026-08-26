@@ -43,6 +43,12 @@ VIEWPORT_NAME_MAYA = "maroMainWindowViewportMaya"
 VIEWPORT_NAME_ROS = "maroMainWindowViewportRos"
 EDITOR_HOST_NAME = "maroMainWindowEditorHost"
 
+# Tech Diag(Task 4) 사이드 패널 -- C++와의 계약은 아니다(위 네 이름과 달리
+# MaroPluginMain.cpp가 참조하지 않는다), _EMBEDDED 딕셔너리의 키로만 쓴다.
+MAYA_SIDE_PANEL_NAME = "maroMainWindowMayaSidePanel"
+ROS_SIDE_PANEL_NAME = "maroMainWindowRosSidePanel"
+SIDE_PANEL_WIDTH = 180
+
 # 끼워 넣은 PySide6 위젯을 컨트롤 이름별로 하나씩만 붙들어 둔다.
 #
 # 왜: addWidgetToMayaLayout는 위젯을 네이티브 레이아웃의 QWidget 아래로
@@ -143,11 +149,69 @@ def buildUI():
     form = cmds.formLayout()
 
     outerPane = cmds.paneLayout(configuration="vertical2", parent=form)
-    viewportPane = cmds.paneLayout(configuration="vertical2", parent=outerPane)
+
+    # Tech Diag(Task 4): 듀얼 뷰포트를 Maya측/ROS측 사이드 패널로 좌우에서
+    # 감싼다. viewportRow는 outerPane의 첫 번째 칸에 들어가는 새 formLayout
+    # 이고, viewportPane(및 그 내부의 두 modelPanel)은 그 안 가운데 칸으로
+    # 옮겨진다 -- 내부 조립은 그대로다. _buildLabeledViewport가 이미 쓰는
+    # 기법(formLayout + attachForm/attachControl)을 그대로 재사용한다.
+    viewportRow = cmds.formLayout(parent=outerPane)
+    viewportPane = cmds.paneLayout(configuration="vertical2", parent=viewportRow)
     # 두 호출의 반환값(각 패널의 control 이름)은 여기서 안 쓴다. Phase 3의
     # 격리/동기화는 control 이름이 아니라 **패널 이름**을 쓰기 때문이다.
     _buildLabeledViewport(viewportPane, "Maya", VIEWPORT_NAME_MAYA)
     _buildLabeledViewport(viewportPane, "ROS", VIEWPORT_NAME_ROS)
+
+    # Tech Diag 사이드 패널 두 개를 viewportRow에 끼워 넣는다 -- 테스트
+    # 버튼/ONE 위젯과 똑같은 두 단계(MQtUtil.findLayout ->
+    # addWidgetToMayaLayout)를 재사용한다. import를 함수 안에서 하는 것은
+    # 이 파일의 기존 관례(ONE/maroRosProxy와 같은 이유)를 따른다.
+    import maroTechDiag
+    mayaSidePanelWidget = maroTechDiag.buildMayaSidePanel()
+    rosSidePanelWidget = maroTechDiag.buildRosSidePanel()
+
+    viewportRowLayoutPtr = omui.MQtUtil.findLayout(
+        cmds.control(viewportRow, query=True, fullPathName=True))
+    if viewportRowLayoutPtr is None:
+        raise RuntimeError(
+            "maroMainWindow: MQtUtil.findLayout() could not resolve viewportRow "
+            "{!r} -- cannot embed the tech-diag side panels.".format(viewportRow))
+    mayaSidePanelName = omui.MQtUtil.addWidgetToMayaLayout(
+        int(shiboken6.getCppPointer(mayaSidePanelWidget)[0]), int(viewportRowLayoutPtr))
+    if not mayaSidePanelName:
+        raise RuntimeError(
+            "maroMainWindow: MQtUtil.addWidgetToMayaLayout() returned no UI name "
+            "for the Maya-side tech-diag panel.")
+    rosSidePanelName = omui.MQtUtil.addWidgetToMayaLayout(
+        int(shiboken6.getCppPointer(rosSidePanelWidget)[0]), int(viewportRowLayoutPtr))
+    if not rosSidePanelName:
+        raise RuntimeError(
+            "maroMainWindow: MQtUtil.addWidgetToMayaLayout() returned no UI name "
+            "for the ROS-side tech-diag panel.")
+    _EMBEDDED[MAYA_SIDE_PANEL_NAME] = mayaSidePanelWidget
+    _EMBEDDED[ROS_SIDE_PANEL_NAME] = rosSidePanelWidget
+
+    # 좌: 고정 폭 Maya 패널, 가운데: 뷰포트(늘어남), 우: 고정 폭 ROS 패널.
+    # attachForm만으로 폭을 고정하는 두 변(top/bottom/left 또는
+    # top/bottom/right)만 붙이고 반대쪽 변은 attachControl로 가운데
+    # viewportPane에 맡긴다 -- 그러면 formLayout이 두 사이드 패널의 폭을
+    # cmds.control(width=...)로 명시한 값 그대로 유지하고 나머지 공간을
+    # viewportPane에 전부 준다.
+    cmds.control(mayaSidePanelName, edit=True, width=SIDE_PANEL_WIDTH)
+    cmds.control(rosSidePanelName, edit=True, width=SIDE_PANEL_WIDTH)
+    cmds.formLayout(
+        viewportRow, edit=True,
+        attachForm=[
+            (mayaSidePanelName, "top", 0), (mayaSidePanelName, "bottom", 0),
+            (mayaSidePanelName, "left", 0),
+            (rosSidePanelName, "top", 0), (rosSidePanelName, "bottom", 0),
+            (rosSidePanelName, "right", 0),
+            (viewportPane, "top", 0), (viewportPane, "bottom", 0),
+        ],
+        attachControl=[
+            (viewportPane, "left", 0, mayaSidePanelName),
+            (viewportPane, "right", 0, rosSidePanelName),
+        ])
 
     # Phase 4: 축/capability 에디터 패널. modelPanel이 아닌 평범한
     # formLayout이라(_buildLabeledViewport의 modelPanel과 달리) 전역 패널
@@ -318,7 +382,10 @@ def show():
         label="Maro",
         retain=False,
         floating=True,
-        initialWidth=900,
+        # Tech Diag(Task 4)가 뷰포트 양옆에 고정폭(SIDE_PANEL_WIDTH=180)
+        # 사이드 패널 두 개를 추가했다 -- 기존 900에 2*180 + 여유 마진을
+        # 더해 뷰포트 자체는 줄어들지 않게 한다.
+        initialWidth=900 + 2 * SIDE_PANEL_WIDTH + 40,
         initialHeight=600,
         requiredPlugin="maro",
         closeCommand="import maroMainWindow; maroMainWindow.teardown()",

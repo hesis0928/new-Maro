@@ -163,6 +163,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroObjectNodeEditor
     maroRosProxy
     maroSingleObjectNodeEditor
+    maroTechDiag
 )
 foreach(pyModule IN LISTS MARO_PLUGIN_PY_MODULES)
     set(pyModuleSrc "${CMAKE_SOURCE_DIR}/python/${pyModule}.py")

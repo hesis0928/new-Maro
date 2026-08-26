@@ -11,6 +11,7 @@ DG 어트리뷰트 없이 기존 maroListAxisNodes 조회 + cmds.getAttr만으�
 import itertools
 
 import maya.cmds as cmds
+from PySide6 import QtWidgets
 
 LIMIT_PROXIMITY_THRESHOLD = 0.9
 
@@ -190,3 +191,121 @@ def remedyRenameDuplicateJointName(axis, suggestedName):
         cmds.setAttr(axis + ".jointName", suggestedName, type="string")
     finally:
         cmds.undoInfo(closeChunk=True)
+
+
+# ---------------------------------------------------------------------------
+# 사이드 패널 위젯 (설계 스펙 §5). 위 순수 함수/구제 함수와 같은 파일에
+# 둔다 -- maroSingleObjectNodeEditor.py/maroObjectNodeEditor.py가 이미 쓰는
+# "서브시스템별로 순수 함수와 그걸 쓰는 위젯을 한 파일에 함께 둔다" 관례를
+# 따른다. 배치 mayapy에서는 QWidget 생성 자체가 프로세스를 abort시키므로
+# (모듈 도크스트링과 maroMainWindow.py의 도크스트링 참고) 이 아래 클래스/
+# 팩토리 함수는 자동 테스트 대상이 아니다 -- 대화형 Maya 수동 체크리스트로만
+# 검증한다.
+class _CheckSidePanel(QtWidgets.QWidget):
+    """Maya측/ROS측 검사 사이드 패널의 공통 뼈대. setStyleSheet()를 부르지
+    않는다."""
+
+    def __init__(self, buttonLabel, runCheckFn, parent=None):
+        super().__init__(parent)
+        self._runCheckFn = runCheckFn
+        layout = QtWidgets.QVBoxLayout(self)
+        self._runButton = QtWidgets.QPushButton(buttonLabel)
+        self._runButton.clicked.connect(self._onRunClicked)
+        layout.addWidget(self._runButton)
+        self._resultList = QtWidgets.QListWidget()
+        layout.addWidget(self._resultList)
+        self._findings = []
+
+    def _onRunClicked(self):
+        try:
+            self._findings = self._runCheckFn()
+        except Exception as error:  # noqa: BLE001 -- Qt 콜백 경계, 버튼 클릭마다 도는 코드가 예외를 흘리면 안 됨
+            import traceback
+            traceback.print_exc()
+            self._findings = []
+        self._resultList.clear()
+        if not self._findings:
+            self._resultList.addItem("문제 없음")
+            return
+        for finding in self._findings:
+            item = QtWidgets.QListWidgetItem(finding["summary"])
+            self._resultList.addItem(item)
+            if finding.get("remedy") is not None:
+                applyButton = QtWidgets.QPushButton("적용")
+                applyButton.clicked.connect(
+                    lambda checked=False, f=finding: self._onApplyRemedy(f))
+                itemWidget = QtWidgets.QWidget()
+                itemLayout = QtWidgets.QHBoxLayout(itemWidget)
+                itemLayout.addWidget(applyButton)
+                self._resultList.setItemWidget(item, itemWidget)
+
+    def _onApplyRemedy(self, finding):
+        try:
+            finding["remedy"]()
+        except Exception as error:  # noqa: BLE001 -- 위와 같은 이유
+            import traceback
+            traceback.print_exc()
+            return
+        self._onRunClicked()  # 적용 후 다시 검사해서 목록을 갱신
+
+
+def _runMayaSideChecks():
+    axisRows = sliceAxisTechRows(cmds.maroListAxisNodes())
+    capsByAxis = {}
+    currentValueByAxis = {}
+    for row in axisRows:
+        axis = row["axisFullPath"]
+        capFlat = cmds.maroListAxisNodes(capabilities=axis)
+        capRows = []
+        for capRow in sliceCapabilityTechRows(capFlat):
+            if not capRow["connected"] or capRow["capType"] not in (1, 5):
+                continue
+            idx = capRow["logicalIndex"]
+            capRows.append({
+                "logicalIndex": idx,
+                "capType": capRow["capType"],
+                "capMin": tuple(cmds.getAttr("{}.capabilityIn[{}].capMin".format(axis, idx))[0]),
+                "capMax": tuple(cmds.getAttr("{}.capabilityIn[{}].capMax".format(axis, idx))[0]),
+                "capEnable": tuple(bool(v) for v in
+                                   cmds.getAttr("{}.capabilityIn[{}].capEnable".format(axis, idx))[0]),
+            })
+        capsByAxis[axis] = capRows
+        if row["enabled"] and row["boundTargetPath"]:
+            driveIsLinear = cmds.getAttr(axis + ".driveIsLinear")
+            currentValueByAxis[axis] = cmds.getAttr(
+                axis + (".positionLinear" if driveIsLinear else ".position"))
+
+    findings = checkLimitProximity(axisRows, capsByAxis, currentValueByAxis)
+
+    boundMeshes = [row["boundTargetPath"] for row in axisRows
+                   if row["enabled"] and row["boundTargetPath"]]
+    boxes = {}
+    for mesh in boundMeshes:
+        bbox = cmds.exactWorldBoundingBox(mesh)
+        boxes[mesh] = tuple(bbox)
+    findings += checkMeshCollisions(boxes)
+    return findings
+
+
+def _runRosSideChecks():
+    axisRows = sliceAxisTechRows(cmds.maroListAxisNodes())
+    findings = checkJointStatesIntegrity(axisRows)
+    rowByAxis = {row["axisFullPath"]: row for row in axisRows}
+    for finding in findings:
+        if finding["category"] == "emptyJointName":
+            axis = finding["axis"]
+            finding["remedy"] = lambda a=axis: remedyFillEmptyJointName(a)
+        elif finding["category"] == "duplicateJointName":
+            axis = finding["axis"]
+            existingName = rowByAxis[axis]["jointName"]
+            suggestion = suggestDisambiguatedJointName(existingName)
+            finding["remedy"] = lambda a=axis, s=suggestion: remedyRenameDuplicateJointName(a, s)
+    return findings
+
+
+def buildMayaSidePanel():
+    return _CheckSidePanel("Maya 검사 실행", _runMayaSideChecks)
+
+
+def buildRosSidePanel():
+    return _CheckSidePanel("ROS 검사 실행", _runRosSideChecks)
