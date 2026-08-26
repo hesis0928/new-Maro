@@ -166,13 +166,6 @@ if(MARO_BUILD_PLUGIN)
                      "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_object_node_editor.py")
     set_tests_properties(maya_object_node_editor PROPERTIES TIMEOUT 60)
 
-    add_test(NAME maya_tech_diag
-             COMMAND "${MAYAPY}"
-                     "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_tech_diag.py")
-    set_tests_properties(maya_tech_diag PROPERTIES TIMEOUT 60
-        ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>"
-        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>")
-
     file(GLOB ROS2_PACKAGE_INCLUDES LIST_DIRECTORIES true "${ROS2_INSTALL}/include/*")
     set(PEER_INCLUDES ${ROS2_INSTALL}/include)
     foreach(dir ${ROS2_PACKAGE_INCLUDES})
@@ -278,6 +271,15 @@ if(MARO_BUILD_PLUGIN)
     # 브리지(rclcpp)를 켜지 않으므로 이 그룹에 속한다.
     # main 병합(sentinel, PR #1)과 이 브랜치(lidar_node)가 같은 목록 끝에
     # 각자 새 항목을 붙여서 생긴 충돌 -- 둘 다 유지한다.
+    #
+    # [최종 리뷰 Important-3] tech_diag는 처음에 위쪽 "순수 함수만" 구역에
+    # 따로 add_test로 등록돼 있었다 -- MARO_DIAG_BOOK_DIR도, book 루트 리셋
+    # 픽스처도 없이. 그 사이 Task 3이 이 파일에 maya.standalone.initialize()와
+    # 플러그인 로드를 넣었으므로(= 거부 경로가 BoadMaro::error를 타면 사용자의
+    # 진짜 Maya prefs 디렉터리에 스필이 쌓인다) 이 그룹의 격리가 그대로
+    # 필요하다. TIMEOUT도 60이었는데, 콜드 머신에서 standalone 초기화 +
+    # ROS2/Embree 링크 플러그인 DLL 로드가 60초 안에 끝난다는 보장이 없다 --
+    # 이 그룹의 240을 그대로 쓴다.
     foreach(maya_test load axis_node binding capability_stack delete_rules
                       robustness diag_boad diag_onfix diag_book
                       diag_book_cross_session diag_remedy
@@ -286,7 +288,7 @@ if(MARO_BUILD_PLUGIN)
                       remedy_availability remedy_ambiguous_names
                       main_thread_queue remedy_apply sentinel lidar_node
                       ros_proxy_commands ros_proxy_sync axis_editor_commands
-                      dag_menu)
+                      dag_menu tech_diag)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
