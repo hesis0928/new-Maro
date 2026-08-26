@@ -150,7 +150,11 @@ public:
 
 namespace maro {
 
-MTypeId MaroPointCloudNode::id(0x00135108);
+// [Task 1 구현자가 실측으로 발견/수정] 0x00135100~0x00135109는 전부 Phase 4가
+// 이미 등록한 노드들(MaroAxisNode..MaroCouplingNode)이 쓰고 있다 -- 이 플랜이
+// 작성될 때는 0x00135108이 비어 있었지만 Phase 4 병합으로 채워졌다. 다음
+// 미사용 번호를 쓴다.
+MTypeId MaroPointCloudNode::id(0x0013510A);
 MString MaroPointCloudNode::kDrawDbClassification("drawdb/geometry/maro/pointCloud");
 MString MaroPointCloudNode::kDrawRegistrantId("MaroPointCloudPlugin");
 
@@ -334,6 +338,26 @@ private:
 ```
 
 - [ ] **Step 4: `MaroPluginMain.cpp`에 등록/해제 추가**
+
+**[Task 1 구현자가 실측으로 발견]** `MaroPointCloudDrawOverride`는 Step 3에서
+`MaroPointCloudNode.cpp`의 전역 스코프에 정의되므로, 다른 번역 단위인
+`MaroPluginMain.cpp`에서 그 이름이 보이지 않는다 -- 아래처럼
+`MDrawRegistry::registerDrawOverrideCreator`를 여기서 직접 부르는 코드는
+**컴파일되지 않는다**. `MaroPointCloudNode.h`에 다음 두 함수를 선언하고
+`MaroPointCloudNode.cpp`에서 구현해, `MaroPluginMain.cpp`는 이 둘만 부르게
+한다(등록은 `registerNode` 다음, 해제는 `deregisterNode` 앞이라는 순서
+규율은 그대로 유지):
+```cpp
+// MaroPointCloudNode.h에 선언, .cpp에서 구현
+MStatus registerPointCloudDrawOverride();
+MStatus deregisterPointCloudDrawOverride();
+```
+아래 코드 블록의 `MHWRender::MDrawRegistry::registerDrawOverrideCreator(...)`/
+`deregisterDrawOverrideCreator(...)` 호출은 각각 이 두 함수 **안으로** 옮기고,
+`MaroPluginMain.cpp`는 `maro::registerPointCloudDrawOverride()`/
+`maro::deregisterPointCloudDrawOverride()`를 부른다. 이 경우
+`#include <maya/MDrawRegistry.h>`는 `MaroPluginMain.cpp`가 아니라
+`MaroPointCloudNode.cpp`에 필요하다.
 
 `#include "MaroLidarNode.h"` 바로 아래에 새 include를 추가한다:
 ```cpp
