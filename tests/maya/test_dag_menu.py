@@ -343,4 +343,65 @@ assert mel.eval('exists("maroDagMenuProcOriginal")') == 1
 maroDagMenu.uninstall()
 print("install() declines and changes nothing when the original cannot be preserved OK")
 
+# --- [최종 리뷰 I-5] 남의 체인을 덮어쓰지 않는가 ---------------------------
+#
+# 우리가 로드된 **뒤에** 다른 툴이 우리 래퍼 위에 자기 dagMenuProc를 얹은
+# 경우, 우리 uninstall()이 Maya 원본 .mel을 무조건 다시 source하면 그 툴의
+# 체인까지 함께 날아간다 -- install() 쪽에서 그토록 조심하는 세션 전역 파괴를
+# 언로드 쪽에서 저지르는 것과 같다. 그러지 않는지를 값으로 고정한다.
+mayaDagMenuProcMel = maroDagMenu._ORIGINAL_SOURCE_FILE
+assert os.path.isfile(mayaDagMenuProcMel), mayaDagMenuProcMel
+
+assert maroDagMenu.install() is True
+assert maroDagMenu._melGlobalString(maroDagMenu._MEL_SENTINEL_VAR) == \
+    maroDagMenu._SENTINEL_VALUE, "install() must stamp its sentinel"
+assert maroDagMenu._wrapperStillOurs() is True
+
+# 다른 툴이 파일에서 자기 dagMenuProc를 source한 상황을 만든다(가장 흔하고
+# 가장 확실히 잡히는 형태 -- whatIs가 경로를 가리키게 바뀐다).
+fd, foreignPath = tempfile.mkstemp(suffix=".mel", prefix="maroForeignChain_")
+with os.fdopen(fd, "wb") as f:
+    f.write(b'global proc maroForeignMarker() { }\n'
+            b'global proc dagMenuProc(string $parent, string $object)\n'
+            b'{\n'
+            b'    maroDagMenuProcOriginal($parent, $object);\n'
+            b'}\n')
+mel.eval('source "{}"'.format(foreignPath.replace("\\", "/")))
+foreignWhatIs = mel.eval('whatIs "dagMenuProc"')
+assert foreignWhatIs != maroDagMenu._INSTALLED_WHATIS, foreignWhatIs
+assert maroDagMenu._wrapperStillOurs() is False, (
+    "a dagMenuProc redefined from someone else's file must not look like ours"
+)
+
+maroDagMenu.uninstall()
+assert mel.eval('whatIs "dagMenuProc"') == foreignWhatIs, (
+    "uninstall() must leave the newer chain alone instead of re-sourcing Maya's "
+    "own dagMenuProc.mel over the top of it"
+)
+assert maroDagMenu._INSTALLED is False, "uninstall() must still reset its own state"
+assert maroDagMenu._BACKUP_TEMP_FILE is None, (
+    "uninstall() must still clean up its temp file even when it declines to restore"
+)
+print("uninstall() declines to clobber a chain installed after us OK")
+
+# 남의 체인을 치우고 Maya 원본으로 되돌린다 -- 이 테스트가 만든 상황이므로
+# 이 테스트가 정리한다(그대로 두면 다음 install()이 우리 임시 파일이 아니라
+# 이 가짜 파일을 "원본"으로 삼는다).
+mel.eval('source "{}"'.format(mayaDagMenuProcMel.replace("\\", "/")))
+os.remove(foreignPath)
+
+# 그 상태에서 다시 설치/해제하면 정상 경로로 돌아온다(위 검사가 모듈을
+# 영구히 "설치 불가" 상태로 만들지 않는다는 확인).
+assert maroDagMenu.install() is True
+assert maroDagMenu._wrapperStillOurs() is True
+maroDagMenu.uninstall()
+assert mel.eval('whatIs "dagMenuProc"').startswith("Mel procedure found in: ")
+assert maroDagMenu._melGlobalString(maroDagMenu._MEL_SENTINEL_VAR) == "", (
+    "uninstall() must clear its sentinel so a later check cannot misread it"
+)
+print("install()/uninstall() still work normally after the decline path OK")
+
 print("test_dag_menu OK")
+maya.standalone.uninitialize()
+print("teardown OK")
+sys.exit(0)

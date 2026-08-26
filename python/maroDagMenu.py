@@ -54,6 +54,34 @@ _BACKUP_PROC_NAME = "maroDagMenuProcOriginal"
 _MEL_PARENT_VAR = "gMaroDagMenuParent"
 _MEL_OBJECT_VAR = "gMaroDagMenuObject"
 
+# [최종 리뷰 I-5] 우리가 설치한 래퍼가 **아직도** 현재의 dagMenuProc인지
+# 판정하기 위한 흔적. install()이 세우고 uninstall()이 확인한다.
+#
+# 막으려는 것: 우리가 로드된 **뒤에** 다른 툴이 우리 래퍼 위에 자기 체인을
+# 얹었는데, 우리 언로드가 Maya 원본 .mel을 무조건 다시 source해 버리는 상황.
+# 그러면 그 툴의 체인까지 함께 날아간다 -- 이 모듈이 반대 방향(우리가 남의
+# 것을 덮어쓰는 방향)에 대해 그토록 조심하는 바로 그 세션 전역 파괴를,
+# 언로드 쪽에서 저지르는 셈이다.
+#
+# 판정 재료 두 가지를 실측으로 확인한 뒤 골랐다(mayapy, Maya 2026):
+#
+#  * `whatIs "dagMenuProc"`는 파일에서 온 정의면 경로를, mel.eval로 들어온
+#    정의면 `'Mel procedure entered interactively.'`를 준다. 즉 **파일에서
+#    다시 정의된 경우**(다른 툴이 자기 .mel을 source한 경우, 또는 누군가
+#    Maya 원본을 이미 되돌린 경우)는 install 시점에 기록해 둔 문자열과
+#    달라져서 확실히 잡힌다.
+#  * MEL 전역 문자열은 설정해 두면 그대로 남고, 설정된 적 없으면 빈
+#    문자열로 읽힌다. 새 씬/파일 로드로 MEL 환경이 초기화되는 등으로 흔적이
+#    사라진 경우를 잡는다.
+#
+# 남는 한계를 정직하게 적어 둔다: 다른 툴이 **똑같이 mel.eval로** 자기
+# 래퍼를 얹으면 whatIs는 양쪽 다 'entered interactively.'라서 구별되지
+# 않는다(실측 확인). MEL은 프로시저 본문을 되읽는 수단을 주지 않으므로 이
+# 경우까지 값싸게 가려낼 방법이 없다. 그래도 가장 흔하고 가장 파괴적인
+# 경우(파일 기반 재정의)는 이 검사로 막힌다.
+_MEL_SENTINEL_VAR = "gMaroDagMenuInstalledVersion"
+_SENTINEL_VALUE = "maroDagMenu/1"
+
 # whatIs가 MEL 스크립트를 보고할 때 쓰는 두 접두사. 위 모듈 독스트링 참고 --
 # 소스 전/후로 문구가 다르다.
 _WHATIS_PREFIXES = ("Mel procedure found in: ", "Script found in: ")
@@ -83,6 +111,9 @@ _PROC_HEADER_RE = re.compile(
 _INSTALLED = False
 _ORIGINAL_SOURCE_FILE = None
 _BACKUP_TEMP_FILE = None
+# install()이 래퍼를 설치한 직후의 `whatIs "dagMenuProc"` 값. 위
+# _MEL_SENTINEL_VAR 주석 참고.
+_INSTALLED_WHATIS = None
 
 
 def _originalProcSourceFile():
@@ -135,7 +166,7 @@ def install():
     돌아온다. 우리 항목이 안 보이는 것은 불편일 뿐이지만, 원본 없이
     dagMenuProc를 덮어쓰면 세션 전체의 우클릭 메뉴가 사라진다.
     """
-    global _INSTALLED, _ORIGINAL_SOURCE_FILE, _BACKUP_TEMP_FILE
+    global _INSTALLED, _ORIGINAL_SOURCE_FILE, _BACKUP_TEMP_FILE, _INSTALLED_WHATIS
     if _INSTALLED:
         return True
 
@@ -190,6 +221,13 @@ def install():
                parentVar=_MEL_PARENT_VAR,
                objectVar=_MEL_OBJECT_VAR))
 
+    # [최종 리뷰 I-5] "지금의 dagMenuProc가 아직 우리 것인가"를 언로드 때
+    # 판정하기 위한 흔적 두 개를 남긴다. 위 _MEL_SENTINEL_VAR 주석 참고.
+    mel.eval('global string ${0}; ${0} = "{1}";'.format(
+        _MEL_SENTINEL_VAR, _SENTINEL_VALUE))
+    whatIsNow = mel.eval('whatIs "dagMenuProc"')
+    _INSTALLED_WHATIS = whatIsNow if isinstance(whatIsNow, str) else None
+
     _ORIGINAL_SOURCE_FILE = sourceFile
     # 임시 파일은 세션 동안 남겨 두고 uninstall에서 지운다. MEL은 source
     # 시점에 파일 전체를 메모리로 컴파일하므로 곧바로 지워도 동작하지만,
@@ -207,9 +245,31 @@ def uninstall():
     원본 .mel을 다시 source해서 Maya 본래 정의를 그대로 되돌린다 -- 얇은
     래퍼를 남기는 것보다 깨끗하다(whatIs도 원래 경로를 가리키게 된다).
     다시 source하지 못하면 백업을 그대로 호출하는 래퍼로 대신한다.
+
+    [최종 리뷰 I-5] 단, **지금의 dagMenuProc가 아직 우리 것일 때에만**
+    복원한다. 우리가 로드된 뒤에 다른 툴이 우리 래퍼 위에 자기 체인을
+    얹었다면, 여기서 Maya 원본을 무조건 다시 source하는 것은 그 툴의 체인을
+    말없이 지우는 짓이다 -- 이 모듈이 install() 쪽에서 그토록 조심하는
+    "세션 전역 우클릭 메뉴 파괴"를 언로드 쪽에서 저지르는 것과 같다. 흔적이
+    남아 있지 않으면 복원을 건너뛰고 경고만 한다. 그 경우 남는 것은 남의
+    체인 안에 우리 파이썬 호출이 하나 낀 상태인데, 그건 _addMenuItem()이
+    스스로 방어한다(모듈이 없거나 커맨드가 없으면 cmds.warning만 내고
+    조용히 돌아온다) -- 남의 메뉴를 통째로 날리는 쪽보다 훨씬 낫다.
     """
-    global _INSTALLED, _BACKUP_TEMP_FILE
+    global _INSTALLED, _BACKUP_TEMP_FILE, _INSTALLED_WHATIS
     if not _INSTALLED:
+        return
+
+    if not _wrapperStillOurs():
+        cmds.warning(
+            "Maro: dagMenuProc has been redefined by something else since Maro "
+            "installed its wrapper -- leaving it alone instead of clobbering "
+            "the newer chain. Maro's menu item may linger until Maya restarts.")
+        if _BACKUP_TEMP_FILE:
+            _removeQuietly(_BACKUP_TEMP_FILE)
+            _BACKUP_TEMP_FILE = None
+        _INSTALLED = False
+        _INSTALLED_WHATIS = None
         return
 
     restored = False
@@ -237,6 +297,31 @@ def uninstall():
         _removeQuietly(_BACKUP_TEMP_FILE)
         _BACKUP_TEMP_FILE = None
     _INSTALLED = False
+    _INSTALLED_WHATIS = None
+    # 흔적을 지운다 -- 남겨 두면 다음 install() 전에 누가 이 값을 보고
+    # "아직 설치돼 있다"로 오판할 수 있다.
+    mel.eval('global string ${0}; ${0} = "";'.format(_MEL_SENTINEL_VAR))
+
+
+def _wrapperStillOurs():
+    """지금의 dagMenuProc가 install()이 설치한 우리 래퍼 그대로인가.
+
+    판정에 쓰는 두 재료와 그 한계는 위 _MEL_SENTINEL_VAR 주석에 정리했다.
+    판정 자체가 예외를 내면 **복원하지 않는 쪽**으로 기운다 -- 언로드
+    경로에서 확신이 없을 때는 아무것도 안 하는 것이 남의 체인을 날리는
+    것보다 안전하다(install()이 "원본을 확실히 보존하지 못하면 아무것도
+    바꾸지 않는다"고 정한 것과 같은 방향의 보수성이다).
+    """
+    try:
+        if _melGlobalString(_MEL_SENTINEL_VAR) != _SENTINEL_VALUE:
+            return False
+        if _INSTALLED_WHATIS is None:
+            return False
+        return mel.eval('whatIs "dagMenuProc"') == _INSTALLED_WHATIS
+    except Exception:  # noqa: BLE001 -- 언로드 경계
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 def _removeQuietly(path):
@@ -419,8 +504,26 @@ def _onMenuItemClicked(object_):
             # 씬에 남는다 -- 지운다. 예외는 _addMenuItem과 같은 규율로
             # cmds.warning으로만 알리고 밖으로 내보내지 않는다.
             bindFailed = True
-            if cmds.objExists(axis):
-                cmds.delete(axis)
+            # [최종 리뷰 Minor-4] 정리 자체도 실패할 수 있다(예: 그 사이에
+            # 다른 경로가 이미 지웠거나, 삭제가 거부되는 상태). 여기서 raw
+            # 예외가 새면 이 콜백의 규율이 깨지므로 따로 감싼다.
+            #
+            # 그리고 셰이프만 지우면 빈 부모 트랜스폼이 남는다 --
+            # createNode("maroAxis")는 로케이터형 DAG 셰이프라 Maya가 부모
+            # 트랜스폼을 자동으로 만들고, 셰이프 삭제로는 그것이 사라지지
+            # 않는다(실측 확인, maroObjectNodeEditor._deleteAxis()의
+            # 도크스트링과 같은 근거). 고아를 안 남기는 것이 이 블록의
+            # 존재 이유이므로 부모까지 함께 지운다.
+            try:
+                parents = cmds.listRelatives(axis, parent=True, fullPath=True) or []
+                if cmds.objExists(axis):
+                    cmds.delete(axis)
+                for parent in parents:
+                    if cmds.objExists(parent):
+                        cmds.delete(parent)
+            except Exception as deleteExc:  # noqa: BLE001 -- 마킹 메뉴 콜백 경계
+                cmds.warning("Maro: failed to clean up the orphaned axis '{}': {}"
+                             .format(axis, deleteExc))
             cmds.warning("Maro: failed to bind the new axis to '{}': {}"
                          .format(object_, exc))
     finally:
@@ -428,5 +531,15 @@ def _onMenuItemClicked(object_):
 
     if bindFailed:
         return
+
+    # [최종 리뷰 Minor-7] ONE에 새 축이 생겼음을 **명시적으로** 알린다.
+    # 그전에는 createNode()가 마침 씬 선택을 바꾸고, 그것이 마침
+    # SelectionChanged scriptJob을 깨워 refresh()에 닿는 우연한 경로에
+    # 기대고 있었다. ONE이 안 열려 있으면 무동작이다.
+    try:
+        import maroObjectNodeEditor
+        maroObjectNodeEditor.refreshIfOpen()
+    except Exception as exc:  # noqa: BLE001 -- 마킹 메뉴 콜백 경계
+        cmds.warning("Maro: could not refresh the object node editor: {}".format(exc))
 
     maroSingleObjectNodeEditor.openSingleObjectNodeEditor(axis)
