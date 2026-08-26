@@ -165,12 +165,19 @@ class MaroLidarPanel(QtWidgets.QWidget):
             self._meshList.addItem(cmds.ls(mesh, long=True)[0])
 
     def _onAddTargetMesh(self):
-        selection = cmds.ls(selection=True, long=True) or []
-        if not selection:
-            cmds.warning("Maro: select a mesh to add as a LiDAR target first.")
-            return
+        # [I-4] _refreshMeshList()는 cmds.objExists/listConnections/ls(...)[0]를
+        # 아무 가드 없이 부른다. 예전에는 이 try/except 블록 "밖"에서 호출돼서
+        # 거기서 던지는 예외가 Qt 버튼 클릭 콜백 밖으로 그대로 샜다 -- 이
+        # 파일의 다른 핸들러(_onApply, _onScanNow)와 같은 "Qt 이벤트 핸들러
+        # 경계 밖으로 예외를 절대 내보내지 않는다" 규율을 어기는 것이었다.
+        # 그래서 최초의 selection 읽기부터 마지막 _refreshMeshList() 호출까지
+        # 함수 본문 전체를 하나의 try/except로 감싼다.
         try:
             cmds.undoInfo(openChunk=True)
+            selection = cmds.ls(selection=True, long=True) or []
+            if not selection:
+                cmds.warning("Maro: select a mesh to add as a LiDAR target first.")
+                return
             usedIndices = set(cmds.getAttr(
                 self._lidar + ".targetMeshes", multiIndices=True) or [])
             nextIndex = 0
@@ -183,15 +190,23 @@ class MaroLidarPanel(QtWidgets.QWidget):
             cmds.warning("Maro: failed to add target mesh: {}".format(exc))
         finally:
             cmds.undoInfo(closeChunk=True)
-        self._refreshMeshList()
+            # _refreshMeshList() 자신도 무가드로 cmds를 부르므로(위 주석)
+            # 별도로 감싼다 -- finally 안에서 새는 예외는 위 except가 못
+            # 잡는다(그 except는 try 블록에서 난 예외만 담당한다).
+            try:
+                self._refreshMeshList()
+            except Exception as exc:  # noqa: BLE001 -- Qt 콜백 경계
+                cmds.warning("Maro: failed to refresh target mesh list: {}".format(exc))
 
     def _onRemoveTargetMesh(self):
-        item = self._meshList.currentItem()
-        if item is None:
-            return
-        meshFullPath = item.text()
+        # [I-4] 위 _onAddTargetMesh와 같은 이유로 currentItem()/item.text()
+        # 읽기부터 마지막 _refreshMeshList() 호출까지 전체를 감싼다.
         try:
             cmds.undoInfo(openChunk=True)
+            item = self._meshList.currentItem()
+            if item is None:
+                return
+            meshFullPath = item.text()
             pairs = cmds.listConnections(
                 self._lidar + ".targetMeshes", connections=True, plugs=True,
                 source=True, destination=False) or []
@@ -206,7 +221,13 @@ class MaroLidarPanel(QtWidgets.QWidget):
             cmds.warning("Maro: failed to remove target mesh: {}".format(exc))
         finally:
             cmds.undoInfo(closeChunk=True)
-        self._refreshMeshList()
+            # _refreshMeshList() 자신도 무가드로 cmds를 부르므로(위 주석)
+            # 별도로 감싼다 -- finally 안에서 새는 예외는 위 except가 못
+            # 잡는다(그 except는 try 블록에서 난 예외만 담당한다).
+            try:
+                self._refreshMeshList()
+            except Exception as exc:  # noqa: BLE001 -- Qt 콜백 경계
+                cmds.warning("Maro: failed to refresh target mesh list: {}".format(exc))
 
     def _onScanNow(self):
         try:

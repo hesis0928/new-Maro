@@ -555,13 +555,35 @@ def _onMenuItemClicked(object_):
 
 
 def _findLidarForMesh(object_):
-    """object_가 이미 어떤 maroLidar의 targetMeshes[]에 연결돼 있으면 그 풀
-    DAG 경로, 없으면 None.
+    """object_에 이미 묶여 있는 maroLidar가 있으면 그 풀 DAG 경로, 없으면
+    None.
 
-    _findBoundAxis()와 같은 이유로 shapes=True가 필요하다: maroLidar도
-    로케이터형 DAG 셰이프 노드라서, 기본값(shapes=False)이면 셰이프 자신이
-    아니라 부모 트랜스폼 이름이 돌아온다.
+    [I-1] 두 가지 경로를 모두 확인해야 한다:
+
+      (a) object_ 자신이 어떤 maroLidar의 targetMeshes[]에 .message로 연결돼
+          있는 경우 -- 메쉬를 직접 클릭해서 그 메쉬 자신이 타겟이 된 경우
+          (또는 설정 팝업에서 나중에 타겟으로 추가된 임의의 메쉬).
+
+      (b) object_ 자신이 maroLidar 셰이프를 직속 자식으로 "탑재"하고 있는
+          경우 -- _onLidarMenuItemClicked()는 메쉬가 있든 없든 항상 lidar
+          셰이프를 `cmds.parent(lidar, object_, relative=True, shape=True)`로
+          object_ 밑에 옮긴다. 메쉬가 없어서 placeholder 구가 대신 타겟이
+          된 경우, object_ 자신은 targetMeshes 연결에 전혀 나타나지 않으므로
+          (a)만으로는 못 찾는다 -- 조인트/로케이터 같은 비-메쉬 오브젝트에
+          두 번째로 우클릭하면 기존 LiDAR를 못 찾고 완전한 중복(두 번째
+          maroLidar + maroPointCloud)을 만들던 버그가 이것이었다. (a)가
+          이미 다루는 메쉬 케이스는 그대로 두고, listRelatives로 이 구멍만
+          메운다.
+
+    _findBoundAxis()와 같은 이유로 shapes=True/listRelatives(shapes=True)가
+    필요하다: maroLidar도 로케이터형 DAG 셰이프 노드라서, 기본값이면 셰이프
+    자신이 아니라 부모 트랜스폼 이름이 돌아온다.
     """
+    mounted = cmds.listRelatives(
+        object_, shapes=True, fullPath=True, type="maroLidar") or []
+    if mounted:
+        return cmds.ls(mounted[0], long=True)[0]
+
     connections = cmds.listConnections(
         object_, type="maroLidar", plugs=False, shapes=True) or []
     if not connections:
@@ -591,8 +613,18 @@ def _createPlaceholderTargetMesh(object_):
     """
     shortName = object_.split("|")[-1]
     sphereTransform, _makeNode = cmds.polySphere(name=shortName + "_maroLidarTarget", radius=1.0)
-    cmds.parent(sphereTransform, object_)
-    sphereFullPath = cmds.ls(sphereTransform, long=True)[0]
+    # [C-1] cmds.parent()가 옮긴 뒤에는 옮기기 전의 이름(sphereTransform)이
+    # 더 이상 유효하지 않을 수 있다 -- 씬에 같은 짧은 이름의 노드가 이미
+    # 존재하면(예: 같은 오브젝트에 두 번째로 우클릭해서 placeholder를 다시
+    # 만들려는 경우) polySphere가 "|shortName" 같은 경로-한정 이름을 돌려주고,
+    # cmds.parent() 뒤에는 그 경로가 더는 아무것도 가리키지 않아
+    # cmds.ls(sphereTransform, long=True)가 빈 리스트를 주어 [0]에서
+    # IndexError가 난다(실측 확인). _onLidarMenuItemClicked이 lidar 셰이프에
+    # 대해 이미 쓰는 것과 같은 방식으로, cmds.parent()가 돌려주는 새 이름과
+    # 이미 알고 있는 새 부모(object_)를 조합해 모호하지 않은 새 풀 경로를
+    # 직접 구성한다.
+    newShortName = cmds.parent(sphereTransform, object_)[0].split("|")[-1]
+    sphereFullPath = object_ + "|" + newShortName
 
     bbox = cmds.exactWorldBoundingBox(object_)
     topCenter = ((bbox[0] + bbox[3]) / 2.0, bbox[4], (bbox[2] + bbox[5]) / 2.0)
@@ -621,6 +653,10 @@ def _onLidarMenuItemClicked(object_):
     lidarAutoTransform = None
     pointCloud = None
     pointCloudAutoTransform = None
+    # [I-2] 메쉬가 없어서 _createPlaceholderTargetMesh()가 만든 구도 이
+    # 함수가 만든 노드다 -- 그 뒤에 실패하면(예: connectAttr) 다른 노드들과
+    # 같은 규율로 지워야 고아로 남지 않는다.
+    placeholderSphere = None
     try:
         lidar = cmds.createNode("maroLidar")
         lidar = cmds.ls(lidar, long=True)[0]
@@ -672,7 +708,10 @@ def _onLidarMenuItemClicked(object_):
             pointCloudAutoTransform = None
         cmds.connectAttr(lidar + ".message", pointCloud + ".sourceLidar")
 
-        targetMesh = object_ if _hasMeshShape(object_) else _createPlaceholderTargetMesh(object_)
+        if _hasMeshShape(object_):
+            targetMesh = object_
+        else:
+            targetMesh = placeholderSphere = _createPlaceholderTargetMesh(object_)
         cmds.connectAttr(targetMesh + ".message", lidar + ".targetMeshes[0]")
     except Exception as exc:  # noqa: BLE001 -- 마킹 메뉴 콜백 경계
         cmds.warning("Maro: failed to create a LiDAR on '{}': {}".format(object_, exc))
@@ -685,6 +724,12 @@ def _onLidarMenuItemClicked(object_):
         # 지우는 것은 서로 배타적이지 않다(성공적으로 옮긴 뒤에는
         # lidarAutoTransform/pointCloudAutoTransform을 이미 None으로
         # 되돌려 뒀으므로 이중 삭제 시도가 없다).
+        # [I-2] placeholderSphere는 생성 직후 cmds.select()로 선택돼 있을 수
+        # 있다. 지워지는 노드는 Maya가 알아서 선택 목록에서 걷어내므로(축
+        # 생성 실패 롤백에서도 별도 처리 없이 같은 방식에 기대는 것과 동일)
+        # 따로 선택을 손대지 않는다.
+        if placeholderSphere and cmds.objExists(placeholderSphere):
+            cmds.delete(placeholderSphere)
         if lidar and cmds.objExists(lidar):
             cmds.delete(lidar)
         if lidarAutoTransform and cmds.objExists(lidarAutoTransform):
