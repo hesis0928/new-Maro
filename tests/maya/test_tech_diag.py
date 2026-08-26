@@ -1,6 +1,18 @@
 import os
 import sys
 
+import maya.standalone
+
+maya.standalone.initialize(name="python")
+
+import maya.cmds as cmds  # noqa: E402
+
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
+cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
+cmds.currentUnit(linear="cm")
+
 _pythonDir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "python")
 if _pythonDir not in sys.path:
@@ -117,3 +129,41 @@ assert diag.checkMeshCollisions(touchingBoxes) == [], "exactly-touching boxes sh
 assert diag.checkMeshCollisions({}) == []
 assert diag.checkMeshCollisions({"|onlyOne": (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)}) == []
 print("checkMeshCollisions OK")
+
+# --- suggestDisambiguatedJointName (pure) ---
+assert diag.suggestDisambiguatedJointName("shoulder") == "shoulder_2"
+print("suggestDisambiguatedJointName OK")
+
+# --- remedyFillEmptyJointName + undo ---
+cube = cmds.polyCube(name="techDiagCube1")[0]
+axis = cmds.createNode("maroAxis", name="techDiagAxis1")
+cmds.maroBindAxis(axis, cube)
+# A freshly-created maroAxis.jointName has no MFnStringData default, so
+# cmds.getAttr() on it returns Python None, not "" -- confirmed empirically
+# against the built plugin. Accept either as "empty" rather than asserting
+# a specific one, since which one Maya gives you here is an implementation
+# detail of an unset string attribute, not a contract this module defines.
+assert not cmds.getAttr(axis + ".jointName"), "precondition: jointName starts empty"
+
+suggestion = diag.suggestJointNameForFill(axis)
+assert suggestion == "techDiagCube1", suggestion
+
+diag.remedyFillEmptyJointName(axis)
+assert cmds.getAttr(axis + ".jointName") == "techDiagCube1"
+cmds.undo()
+assert not cmds.getAttr(axis + ".jointName"), "undo must revert the fill"
+print("remedyFillEmptyJointName OK")
+
+# --- remedyRenameDuplicateJointName + undo ---
+axis2 = cmds.createNode("maroAxis", name="techDiagAxis2")
+cmds.setAttr(axis2 + ".jointName", "shoulder", type="string")
+diag.remedyRenameDuplicateJointName(axis2, "shoulder_2")
+assert cmds.getAttr(axis2 + ".jointName") == "shoulder_2"
+cmds.undo()
+assert cmds.getAttr(axis2 + ".jointName") == "shoulder", "undo must revert the rename"
+print("remedyRenameDuplicateJointName OK")
+
+cmds.file(new=True, force=True)
+cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
+maya.standalone.uninitialize()
+sys.exit(0)

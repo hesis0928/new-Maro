@@ -10,6 +10,8 @@ DG 어트리뷰트 없이 기존 maroListAxisNodes 조회 + cmds.getAttr만으�
 
 import itertools
 
+import maya.cmds as cmds
+
 LIMIT_PROXIMITY_THRESHOLD = 0.9
 
 # C++ 쪽 계약. maroObjectNodeEditor.py/maroSingleObjectNodeEditor.py도 각자
@@ -160,3 +162,31 @@ def checkMeshCollisions(boundingBoxesByMesh):
                 "remedy": None,
             })
     return findings
+
+
+def suggestDisambiguatedJointName(jointName):
+    return jointName + "_2"
+
+
+def suggestJointNameForFill(axis):
+    """빈 jointName을 채울 때 제안할 이름 -- 바인딩된 타겟의 짧은 이름."""
+    targets = cmds.listConnections(axis + ".targetObject", shapes=False) or []
+    if not targets:
+        return ""
+    return targets[0].split("|")[-1]
+
+
+def remedyFillEmptyJointName(axis):
+    cmds.undoInfo(openChunk=True)
+    try:
+        cmds.setAttr(axis + ".jointName", suggestJointNameForFill(axis), type="string")
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+
+def remedyRenameDuplicateJointName(axis, suggestedName):
+    cmds.undoInfo(openChunk=True)
+    try:
+        cmds.setAttr(axis + ".jointName", suggestedName, type="string")
+    finally:
+        cmds.undoInfo(closeChunk=True)
