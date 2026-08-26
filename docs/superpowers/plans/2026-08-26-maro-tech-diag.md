@@ -453,15 +453,31 @@ git commit -m "feat: add mesh AABB collision check"
   - `suggestJointNameForFill(axis) -> str` — pure-ish helper (calls `cmds.listRelatives`/`cmds.ls` for the short name, but does no writes) used by `remedyFillEmptyJointName` and by the UI (Task 4) to preview what will be filled in before the user clicks apply.
   - `suggestDisambiguatedJointName(jointName) -> str` — pure function: returns `jointName + "_2"`. (Kept intentionally simple per spec §5 — the spec only requires a suffix, not collision-checked uniqueness beyond one level; do not add a loop searching for `_3`, `_4`, etc., that is out of scope.)
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Restructure `tests/maya/test_tech_diag.py` to bootstrap real Maya, then append the failing test**
 
-Append to `tests/maya/test_tech_diag.py`:
+Tasks 1-2 wrote this file as pure-function-only (no Maya needed at all — it even runs under plain system Python). This task needs a real Maya session for the first time, so the file needs a bootstrap block added **at the very top**, before Tasks 1-2's existing content — matching the exact, already-established pattern used by every other real-Maya mayapy test in this project (e.g. `tests/maya/test_axis_editor_commands.py`), not a novel "defer initialize mid-file" structure (there is no precedent for that in this codebase — verify this yourself by reading `tests/maya/test_axis_editor_commands.py`'s first ~16 lines before writing this).
+
+At the top of `tests/maya/test_tech_diag.py`, before the existing `_pythonDir`/`sys.path` bootstrap Tasks 1-2 wrote, insert:
 
 ```python
 import maya.standalone
-maya.standalone.initialize()
-import maya.cmds as cmds
 
+maya.standalone.initialize(name="python")
+
+import maya.cmds as cmds  # noqa: E402
+
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
+cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
+cmds.currentUnit(linear="cm")
+```
+
+(`os` is likely already imported by Tasks 1-2's `sys.path` bootstrap — reuse that import rather than duplicating it; check the current top of the file before deciding exact placement.) This initializes standalone Maya and loads the Maro plugin once, for the whole file — Tasks 1-2's existing pure-function assertions are unaffected by Maya being initialized around them, since they never call `cmds`.
+
+Then append this test to the end of the file (matching the plain assert/print style already used throughout):
+
+```python
 # --- suggestDisambiguatedJointName (pure) ---
 assert diag.suggestDisambiguatedJointName("shoulder") == "shoulder_2"
 print("suggestDisambiguatedJointName OK")
@@ -470,7 +486,12 @@ print("suggestDisambiguatedJointName OK")
 cube = cmds.polyCube(name="techDiagCube1")[0]
 axis = cmds.createNode("maroAxis", name="techDiagAxis1")
 cmds.maroBindAxis(axis, cube)
-assert cmds.getAttr(axis + ".jointName") == "", "precondition: jointName starts empty"
+# A freshly-created maroAxis.jointName has no MFnStringData default, so
+# cmds.getAttr() on it returns Python None, not "" -- confirmed empirically
+# against the built plugin. Accept either as "empty" rather than asserting
+# a specific one, since which one Maya gives you here is an implementation
+# detail of an unset string attribute, not a contract this module defines.
+assert not cmds.getAttr(axis + ".jointName"), "precondition: jointName starts empty"
 
 suggestion = diag.suggestJointNameForFill(axis)
 assert suggestion == "techDiagCube1", suggestion
@@ -478,7 +499,7 @@ assert suggestion == "techDiagCube1", suggestion
 diag.remedyFillEmptyJointName(axis)
 assert cmds.getAttr(axis + ".jointName") == "techDiagCube1"
 cmds.undo()
-assert cmds.getAttr(axis + ".jointName") == "", "undo must revert the fill"
+assert not cmds.getAttr(axis + ".jointName"), "undo must revert the fill"
 print("remedyFillEmptyJointName OK")
 
 # --- remedyRenameDuplicateJointName + undo ---
@@ -490,11 +511,12 @@ cmds.undo()
 assert cmds.getAttr(axis2 + ".jointName") == "shoulder", "undo must revert the rename"
 print("remedyRenameDuplicateJointName OK")
 
+cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
 sys.exit(0)
 ```
 
-**Note for the implementer:** this file now needs `maya.standalone.initialize()` for this section only, unlike the earlier pure-function sections which ran fine importing only `maroTechDiag`. Place the `import maya.standalone` / `initialize()` calls immediately before this block (not at the top of the file) so the earlier pure-function assertions keep working even if standalone initialization is ever skipped in some other invocation context — match whatever ordering convention `tests/maya/test_dag_menu.py` already established for a file that needs both pure-function and `maya.standalone` sections, since that file solved the identical problem in the previous plan.
+This replaces whatever end-of-file Tasks 1-2 left (a plain `print`/implicit EOF, since they needed no teardown) — the file now has exactly one exit point, at the very end, after everything.
 
 - [ ] **Step 2: Run test to verify it fails**
 

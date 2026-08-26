@@ -169,7 +169,8 @@ if(MARO_BUILD_PLUGIN)
     add_test(NAME maya_tech_diag
              COMMAND "${MAYAPY}"
                      "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_tech_diag.py")
-    set_tests_properties(maya_tech_diag PROPERTIES TIMEOUT 60)
+    set_tests_properties(maya_tech_diag PROPERTIES TIMEOUT 60
+        ENVIRONMENT "MARO_PLUGIN_PATH=$<TARGET_FILE:maro>")
 
     file(GLOB ROS2_PACKAGE_INCLUDES LIST_DIRECTORIES true "${ROS2_INSTALL}/include/*")
     set(PEER_INCLUDES ${ROS2_INSTALL}/include)
