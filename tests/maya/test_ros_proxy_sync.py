@@ -91,7 +91,7 @@ print("proxy node creation preserves the selection OK")
 
 # 두 번 불러도 노드가 늘지 않는다(멱등).
 maroRosProxy._ensureProxyLocator()
-maroRosProxy._ensureProxyGroup()
+maroRosProxy.ensureProxyGroup()
 assert len(cmds.ls("maroRosProxy_loc", long=True)) == 1
 assert len(cmds.ls("maroRosProxy_grp", long=True)) == 1
 print("proxy node creation is idempotent OK")

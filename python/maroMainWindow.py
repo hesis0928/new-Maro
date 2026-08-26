@@ -371,6 +371,13 @@ def teardown():
         import traceback
         traceback.print_exc()
 
+    try:
+        import maroLidarPanel
+        maroLidarPanel.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
+        import traceback
+        traceback.print_exc()
+
 
 def show():
     """maroMainWindow 커맨드가 부른다."""

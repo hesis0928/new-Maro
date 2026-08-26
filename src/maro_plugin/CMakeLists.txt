@@ -161,6 +161,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 set(MARO_PLUGIN_PY_MODULES
     maroDagMenu
     maroDiagPanel
+    maroLidarPanel
     maroMainWindow
     maroMenu
     maroObjectNodeEditor

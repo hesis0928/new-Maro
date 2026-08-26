@@ -73,7 +73,7 @@ _CONSECUTIVE_FAILURES = 0
 
 # --- 프록시 노드 -------------------------------------------------------
 
-def _ensureProxyGroup():
+def ensureProxyGroup():
     """프록시 전용 그룹을 보장하고 그 전체 경로를 돌려준다.
 
     `cmds.group()`이 아니라 `cmds.createNode(..., skipSelect=True)`를 쓴다.
@@ -94,11 +94,11 @@ def _ensureProxyLocator():
     """프록시 로케이터(트랜스폼 + locator 셰이프)를 보장한다.
 
     `cmds.spaceLocator()`가 만드는 것과 같은 구조를, 선택을 건드리지 않고
-    (위 _ensureProxyGroup 주석 참고) 부모까지 한 번에 만든다 -- 만든 뒤
+    (위 ensureProxyGroup 주석 참고) 부모까지 한 번에 만든다 -- 만든 뒤
     `cmds.parent()`로 옮기면 그 사이에 로케이터가 잠시 씬 최상위에 놓여
     좌측 격리 갱신이 그것을 집어갈 수 있다.
     """
-    _ensureProxyGroup()
+    ensureProxyGroup()
     if not cmds.objExists(_PROXY_LOCATOR_PATH):
         transform = cmds.createNode(
             "transform", name=PROXY_LOCATOR, parent=_PROXY_GROUP_PATH, skipSelect=True)
@@ -170,7 +170,7 @@ def _refreshMayaIsolation():
     # (재)생성됐을 때만 다시 넣는다 -- 그 경우에만 격리 목록의 항목이
     # 노드와 함께 사라진 상태이므로.
     groupExistedBeforeThisTick = cmds.objExists(_PROXY_GROUP_PATH)
-    _ensureProxyGroup()
+    ensureProxyGroup()
     if not groupExistedBeforeThisTick:
         cmds.isolateSelect(_ROS_PANEL, addDagObject=PROXY_GROUP)
 
@@ -331,7 +331,7 @@ def start(mayaPanelName, rosPanelName):
     # 다음 틱이 전체를 다시 넣게 한다(_refreshMayaIsolation 주석 참고).
     _LAST_ASSEMBLIES = None
 
-    _ensureProxyGroup()
+    ensureProxyGroup()
     cmds.isolateSelect(_ROS_PANEL, state=True)
     cmds.isolateSelect(_ROS_PANEL, addDagObject=PROXY_GROUP)
     cmds.isolateSelect(_MAYA_PANEL, state=True)

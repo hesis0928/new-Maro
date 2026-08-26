@@ -44,6 +44,7 @@ import maya.cmds as cmds
 import maya.mel as mel
 
 MENU_ITEM_LABEL = "Maro node editor"
+LIDAR_MENU_ITEM_LABEL = "Maro LiDAR"
 
 # 원본 dagMenuProc를 보존할 이름. 우리 래퍼가 가장 먼저 부른다.
 _BACKUP_PROC_NAME = "maroDagMenuProcOriginal"
@@ -360,9 +361,14 @@ def _addMenuItem():
             return
         cmds.menuItem(parent=parentMenu, label=MENU_ITEM_LABEL,
                       command=lambda *_args: _onMenuItemClicked(object_))
+        # "Maro LiDAR"는 오브젝트 종류와 무관하게 항상 노출된다(설계 스펙
+        # §5.1) -- 메쉬가 없어도 클릭 시점에 조건을 자동으로 맞춘다
+        # (_onLidarMenuItemClicked/_createPlaceholderTargetMesh 참고).
+        cmds.menuItem(parent=parentMenu, label=LIDAR_MENU_ITEM_LABEL,
+                      command=lambda *_args: _onLidarMenuItemClicked(object_))
     except Exception as exc:  # pragma: no cover - UI 경로
-        cmds.warning("Maro: failed to add the '{}' menu item: {}"
-                     .format(MENU_ITEM_LABEL, exc))
+        cmds.warning("Maro: failed to add the '{}'/'{}' menu items: {}"
+                     .format(MENU_ITEM_LABEL, LIDAR_MENU_ITEM_LABEL, exc))
 
 
 def _resolveObject():
@@ -546,3 +552,149 @@ def _onMenuItemClicked(object_):
         cmds.warning("Maro: could not refresh the object node editor: {}".format(exc))
 
     maroSingleObjectNodeEditor.openSingleObjectNodeEditor(axis)
+
+
+def _findLidarForMesh(object_):
+    """object_가 이미 어떤 maroLidar의 targetMeshes[]에 연결돼 있으면 그 풀
+    DAG 경로, 없으면 None.
+
+    _findBoundAxis()와 같은 이유로 shapes=True가 필요하다: maroLidar도
+    로케이터형 DAG 셰이프 노드라서, 기본값(shapes=False)이면 셰이프 자신이
+    아니라 부모 트랜스폼 이름이 돌아온다.
+    """
+    connections = cmds.listConnections(
+        object_, type="maroLidar", plugs=False, shapes=True) or []
+    if not connections:
+        return None
+    return cmds.ls(connections[0], long=True)[0]
+
+
+def _hasMeshShape(object_):
+    """object_ 자신이 메쉬 셰이프를 가진 트랜스폼이거나 메쉬 셰이프 그
+    자체인가. maroLidar.targetMeshes는 관례상 메쉬 **트랜스폼**의 .message에
+    연결한다(MaroLidarScan.cpp의 extractMeshBuffers와 같은 관례 --
+    MFnMesh가 셰이프까지 스스로 내려간다)."""
+    if cmds.listRelatives(object_, shapes=True, fullPath=True, type="mesh"):
+        return True
+    return cmds.objectType(object_) == "mesh"
+
+
+def _createPlaceholderTargetMesh(object_):
+    """object_에 메쉬 셰이프가 없을 때 자동으로 만드는 대체 스캔 타겟
+    (설계 스펙 §5.2).
+
+    작은 구를 object_의 자식으로, object_의 월드 바운딩박스 상단(ymax)
+    중앙에 놓는다. 바운딩박스가 점에 가까운 조인트/로케이터는 거의 원점에
+    생긴다 -- 계산 자체는 오브젝트 종류와 무관하게 일관되게 적용되므로 이는
+    받아들여지는 동작이다. 생성 직후 이 구를 선택 상태로 만들어 사용자가
+    바로 크기/위치를 다듬을 수 있게 한다.
+    """
+    shortName = object_.split("|")[-1]
+    sphereTransform, _makeNode = cmds.polySphere(name=shortName + "_maroLidarTarget", radius=1.0)
+    cmds.parent(sphereTransform, object_)
+    sphereFullPath = cmds.ls(sphereTransform, long=True)[0]
+
+    bbox = cmds.exactWorldBoundingBox(object_)
+    topCenter = ((bbox[0] + bbox[3]) / 2.0, bbox[4], (bbox[2] + bbox[5]) / 2.0)
+    cmds.xform(sphereFullPath, worldSpace=True, translation=topCenter)
+
+    cmds.select(sphereFullPath, replace=True)
+    return sphereFullPath
+
+
+def _onLidarMenuItemClicked(object_):
+    """"Maro LiDAR" 마킹메뉴 항목의 핸들러. _onMenuItemClicked()와 달리
+    promptDialog/colorEditor 같은 모달 다이얼로그를 전혀 쓰지 않는다 --
+    LiDAR는 ONE/GSON 그루핑에 참여하지 않아 이름/색 입력이 필요 없다
+    (설계 스펙 §5.3). 그래서 이 함수는 mayapy 배치에서도 안전하게 직접 호출할
+    수 있다(tests/maya/test_lidar_menu.py)."""
+    import maroLidarPanel
+    import maroRosProxy
+
+    existingLidar = _findLidarForMesh(object_)
+    if existingLidar is not None:
+        maroLidarPanel.openLidarPanel(existingLidar)
+        return
+
+    cmds.undoInfo(openChunk=True)
+    lidar = None
+    lidarAutoTransform = None
+    pointCloud = None
+    pointCloudAutoTransform = None
+    try:
+        lidar = cmds.createNode("maroLidar")
+        lidar = cmds.ls(lidar, long=True)[0]
+        # createNode("maroLidar")는 로케이터형 DAG 셰이프라 Maya가 새
+        # 트랜스폼을 자동으로 만든다(_onMenuItemClicked의 축 생성과 같은
+        # 관례). 축과 달리 여기서는 이 셰이프를 클릭한 오브젝트의 실제
+        # DAG 자식으로 옮긴다 -- LiDAR는 탑재된 오브젝트의 월드 트랜스폼을
+        # 그대로 상속받아야 하기 때문이다(축의 메시지 커넥션 바인딩과
+        # 다른 이유).
+        #
+        # [빌드 검증 중 실측으로 발견] 자동 생성된 트랜스폼을 통째로
+        # `object_` 밑으로 옮기면(`cmds.parent(transform, object_)`)
+        # 셰이프와 `object_` 사이에 항등(identity) 트랜스폼이 하나 더
+        # 끼는 중간 계층이 생긴다 -- 셰이프의 직속 부모가 `object_`가 아니라
+        # 그 중간 트랜스폼이 된다. 이 태스크의 계약(및 그것을 고정하는
+        # tests/maya/test_lidar_menu.py)은 "LiDAR 셰이프의 부모가 곧
+        # 클릭한 오브젝트 자신"이라는 더 강한 형태를 요구한다. 그래서
+        # `-shape -relative`로 **셰이프만** `object_` 밑으로 옮긴다(다른
+        # 셰이프에 흔히 쓰는 "인스턴스 셰이프 추가" 관용구와 같다) --
+        # 그러면 원래 자동 생성된 트랜스폼은 셰이프를 잃고 빈 채로 남으므로
+        # 곧바로 지워서 씬에 쓸모없는 트랜스폼이 남지 않게 한다.
+        #
+        # 그리고 `cmds.parent()`가 노드를 옮기고 나면 옮기기 **전의** 풀 DAG
+        # 경로는 더 이상 유효하지 않다. 옮기기 전에 구해 둔 풀 경로를 그대로
+        # 다시 `cmds.ls(..., long=True)`에 넣으면 그 경로는 이미 존재하지
+        # 않는 노드를 가리키므로 빈 리스트가 돌아와 `[0]`에서 IndexError가
+        # 난다(실측 확인). `cmds.parent()`가 돌려주는 짧은 이름과, 옮긴
+        # 곳의 부모가 이미 확정돼 있다는 사실(=`object_`)을 조합해 모호하지
+        # 않은 새 풀 경로를 직접 구성한다.
+        lidarParents = cmds.listRelatives(lidar, parent=True, fullPath=True) or []
+        if lidarParents:
+            lidarAutoTransform = lidarParents[0]
+            newShortName = cmds.parent(lidar, object_, relative=True, shape=True)[0]
+            lidar = object_ + "|" + newShortName
+            if cmds.objExists(lidarAutoTransform):
+                cmds.delete(lidarAutoTransform)
+            lidarAutoTransform = None
+
+        pointCloud = cmds.createNode("maroPointCloud")
+        pointCloud = cmds.ls(pointCloud, long=True)[0]
+        pointCloudParents = cmds.listRelatives(pointCloud, parent=True, fullPath=True) or []
+        if pointCloudParents:
+            pointCloudAutoTransform = pointCloudParents[0]
+            proxyGroup = maroRosProxy.ensureProxyGroup()
+            newShortName = cmds.parent(pointCloud, proxyGroup, relative=True, shape=True)[0]
+            pointCloud = proxyGroup + "|" + newShortName
+            if cmds.objExists(pointCloudAutoTransform):
+                cmds.delete(pointCloudAutoTransform)
+            pointCloudAutoTransform = None
+        cmds.connectAttr(lidar + ".message", pointCloud + ".sourceLidar")
+
+        targetMesh = object_ if _hasMeshShape(object_) else _createPlaceholderTargetMesh(object_)
+        cmds.connectAttr(targetMesh + ".message", lidar + ".targetMeshes[0]")
+    except Exception as exc:  # noqa: BLE001 -- 마킹 메뉴 콜백 경계
+        cmds.warning("Maro: failed to create a LiDAR on '{}': {}".format(object_, exc))
+        # 항상 "이 함수가 만든 셰이프/트랜스폼 자체"만 지운다 -- 실패 시점에
+        # lidar/pointCloud가 이미 object_/프록시 그룹 밑으로 옮겨져 있을 수
+        # 있으므로, "지금 lidar의 부모가 누구인지"를 다시 물어서 그 부모를
+        # 지우면 object_(사용자가 우클릭한 오브젝트)나 공유 프록시 그룹까지
+        # 지워 버리는 사고가 난다. 셰이프 자신을 지우는 것과, 아직 셰이프를
+        # 옮기기 전 단계에서 실패했을 때를 위해 자동 생성 트랜스폼을 따로
+        # 지우는 것은 서로 배타적이지 않다(성공적으로 옮긴 뒤에는
+        # lidarAutoTransform/pointCloudAutoTransform을 이미 None으로
+        # 되돌려 뒀으므로 이중 삭제 시도가 없다).
+        if lidar and cmds.objExists(lidar):
+            cmds.delete(lidar)
+        if lidarAutoTransform and cmds.objExists(lidarAutoTransform):
+            cmds.delete(lidarAutoTransform)
+        if pointCloud and cmds.objExists(pointCloud):
+            cmds.delete(pointCloud)
+        if pointCloudAutoTransform and cmds.objExists(pointCloudAutoTransform):
+            cmds.delete(pointCloudAutoTransform)
+        return
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+    maroLidarPanel.openLidarPanel(lidar)
