@@ -8,6 +8,7 @@ set(SOURCE_FILES
     MaroAxisNode.cpp
     MaroCapabilityNodes.cpp
     MaroLidarNode.cpp
+    MaroPointCloudNode.cpp
     MaroCommands.cpp
     MaroDeleteWatcher.cpp
     MaroRosRuntime.cpp

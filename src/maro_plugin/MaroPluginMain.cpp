@@ -14,6 +14,7 @@
 #include "MaroMainWindowCommand.h"
 #include "MaroMenuCommands.h"
 #include "MaroPanelCommands.h"
+#include "MaroPointCloudNode.h"
 #include "MaroPythonBridge.h"
 #include "MaroRemedyCommands.h"
 #include "MaroRosProxyCommands.h"
@@ -127,6 +128,25 @@ MStatus initializePlugin(MObject obj) {
                                   &maro::MaroLidarNode::initialize, MPxNode::kLocatorNode);
     if (!status) {
         status.perror("Maro: failed to register maroLidar node");
+        return status;
+    }
+
+    // maroPointCloud는 Viewport 2.0 드로우 오버라이드를 가진 첫 노드다.
+    // registerNode()에 넘기는 classification 문자열과 아래
+    // registerPointCloudDrawOverride()가 등록에 쓰는 문자열이 같은 정적 멤버
+    // (MaroPointCloudNode::kDrawDbClassification)여야 둘이 서로 연결된다.
+    status = plugin.registerNode(
+        "maroPointCloud", maro::MaroPointCloudNode::id, &maro::MaroPointCloudNode::creator,
+        &maro::MaroPointCloudNode::initialize, MPxNode::kLocatorNode,
+        &maro::MaroPointCloudNode::kDrawDbClassification);
+    if (!status) {
+        status.perror("Maro: failed to register maroPointCloud node");
+        return status;
+    }
+
+    status = maro::registerPointCloudDrawOverride();
+    if (!status) {
+        status.perror("Maro: failed to register maroPointCloud draw override");
         return status;
     }
 
@@ -653,6 +673,21 @@ MStatus uninitializePlugin(MObject obj) {
         // maroDiagRequestRemedy 선례와 같은 논리)을 따르면 maroLidar dereg는
         // maroAxis dereg "바로 앞"에 와야 한다(가장 나중에 등록된 것부터
         // 먼저 해제). 여기서도 그 규율을 우선했다.
+
+        // maroPointCloud는 maroLidar "다음"에 등록되므로 등록 역순 규율에 따라
+        // 그 앞에서 해제한다. 그리고 그 안에서도 **드로우 오버라이드 해제가
+        // 노드 해제보다 먼저**여야 한다(전역 제약) -- 반대로 하면 Maya가 아직
+        // 살아 있는 드로우 오버라이드 인스턴스를 통해 이미 사라진 노드 타입을
+        // 건드릴 수 있어 언로드 시 크래시 위험이 있다.
+        MStatus pointCloudDrawStatus = maro::deregisterPointCloudDrawOverride();
+        if (!pointCloudDrawStatus) {
+            pointCloudDrawStatus.perror("Maro: failed to deregister maroPointCloud draw override");
+        }
+        MStatus pointCloudStatus = plugin.deregisterNode(maro::MaroPointCloudNode::id);
+        if (!pointCloudStatus) {
+            pointCloudStatus.perror("Maro: failed to deregister maroPointCloud node");
+        }
+
         MStatus status = plugin.deregisterNode(maro::MaroLidarNode::id);
         if (!status) status.perror("Maro: failed to deregister maroLidar node");
 
