@@ -582,6 +582,43 @@ Tasks 1-4에서 구현한 Tech Diag 기술 진단 기능(양쪽 뷰포트 옆의
 버린다. 9번은 **각도 단위를 degrees로 되돌린 뒤**(테스트가 아니라 사용자
 세션의 기본값이 바로 이것이다) 확인해야 의미가 있다.
 
+## 6. LiDAR 설정 + 시각화 (Phase 5) — **[필수 · go/no-go]**
+
+### 6-1. `maroPointCloud` 드로우 오버라이드 (Task 1)
+
+이 절이 확인하는 것은 배치 테스트(`tests/maya/test_point_cloud_node.py`)가
+원리적으로 확인할 수 없는 것 -- 실제 GPU 컨텍스트에서 점이 그려지는지, 그리고
+그 지오메트리가 보이는 상태로 플러그인을 언로드해도 Maya가 살아남는지 -- 뿐이다.
+어트리뷰트 계약(기본값, `points` 왕복, `setStorable(false)`, `boundingBox()`)은
+배치 테스트가 이미 고정해 두었으므로 여기서 다시 보지 않는다.
+
+1. 플러그인을 로드하고 빈 씬에서 스크립트 에디터(Python)로:
+   ```python
+   import maya.cmds as cmds
+   node = cmds.createNode("maroPointCloud")
+   cmds.setAttr(node + ".points", 5,
+                (0,0,0,1), (2,0,0,1), (0,2,0,1), (0,0,2,1), (1,1,1,1),
+                type="pointArray")
+   ```
+2. **[필수]** 뷰포트에 점 5개가 실제로 보이는가(작은 원/사각형 형태로,
+   `pointSize` 기본값 2.0 크기, 기본 색 하늘색 `(0.2, 0.8, 1.0)`).
+3. `cmds.setAttr(node + ".pointSize", 8.0)` — **[필수]** 점이 즉시(다음
+   리드로우에) 커지는가. `preEvaluation()`의 dirty 신호가 실제로 동작한다는
+   증거다.
+4. 뷰를 회전/줌해서 점들이 프러스텀 밖으로 나갔다 들어왔다 해도 컬링되지
+   않고 계속 보이는가(`boundingBox()`가 실제 점 범위를 반영한다는 증거).
+5. `cmds.setAttr(node + ".enabled", False)` — 점이 사라지고, 다시 `True`로
+   되돌리면 다시 보이는가.
+6. **[필수 · 이 태스크의 진짜 기준]** 점이 보이는 상태로(뷰포트에서 보이게
+   놔둔 채) `cmds.unloadPlugin("maro")`를 실행한다. Maya가 죽지 않고,
+   스크립트 에디터에 새 크래시 관련 에러가 없는가.
+
+> 5번의 `enabled`, 그리고 2번의 기본 색은 브리프의 원래 절에는 없던 항목이다.
+> `addUIDrawables()`가 `enabled`/`color`를 실제로 `prepareForDraw()`가 캐시해 둔
+> 값에서 읽는지는 배치에서 볼 방법이 전혀 없어서(뷰포트 2.0은 실제 GPU 컨텍스트를
+> 요구한다) 여기서 함께 본다 -- 그러지 않으면 그 두 어트리뷰트는 이 태스크에서
+> 어떤 방식으로도 검증되지 않은 채 남는다.
+
 ---
 
 ## 결과 기록
@@ -636,6 +673,10 @@ Phase 2, Phase 3 판정을 함께 담고 있다(§1-1이 Phase 2, §1-2가 Phase
 | 1-4. 씬↔GSON 양방향 선택 동기화 | 5 | 필수 | | | |
 | 1-4. 언로드 go/no-go (메뉴 항목 제거, SONE/Coupling 픽커가 뜬 채여도 무크래시) | 5 | 필수 | | | |
 | 1-4. Phase 2/3 회귀 재확인 | 5 | 필수 | | | 레이아웃 변경 회귀 확인 |
+| 6-1. `maroPointCloud` 점이 뷰포트에 보인다 (기본 크기/색) | 5(LiDAR) | 필수 | | | Task 1. 배치 테스트가 원리적으로 못 보는 부분 |
+| 6-1. `pointSize` 변경이 즉시 반영된다 | 5(LiDAR) | 필수 | | | `preEvaluation()`의 `setGeometryDrawDirty` 신호가 동작한다는 증거 |
+| 6-1. `enabled` 토글이 반영된다 | 5(LiDAR) | 관찰 | | | `addUIDrawables()`가 캐시된 값을 실제로 쓰는지 |
+| 6-1. **점이 보이는 상태로 언로드 — 무크래시** | 5(LiDAR) | 필수 | | | Task 1의 진짜 go/no-go |
 
 ### 종합 판정 (2026-08-25)
 
