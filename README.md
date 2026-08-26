@@ -1,216 +1,212 @@
-# Maro — Maya / ROS 2 Axis Node Plugin
+# Maro — Maya / ROS 2 축 노드 플러그인
 
-Maro robotizes objects modeled in Maya using Maya's own rigging and Dependency
-Graph, and drives them live from ROS 2. Unlike external simulators (Gazebo,
-CARLA), the robot lives entirely inside a Maya scene.
+Maro는 Maya에서 모델링한 오브젝트를 Maya 자신의 리깅과 Dependency Graph를
+이용해 로보틱스화하고, ROS 2로 실시간 구동한다. 외부 시뮬레이터(Gazebo,
+CARLA)와 달리 로봇은 전적으로 Maya 씬 안에서 산다.
 
-Two building blocks compose a robot:
+로봇은 두 개의 조립 단위로 구성된다:
 
-- **Axis** (`maroAxis`) — binds to exactly one Maya object and drives its
-  motion. Axes can be chained (`maroConnectAxis`) to form a hierarchy.
-- **Capability nodes** — stack onto an axis's `capabilityIn` array. What the
-  axis *becomes* (a plain rotating joint, a linear slider, a limited joint, a
-  gear-coupled joint, a sensor, a moving sensor, ...) emerges from which
-  capabilities are stacked, not from a type chosen up front. Seven types
-  exist today: `maroRotation`, `maroTranslation`, `maroLimit`,
-  `maroTranslationLimit`, `maroCoupling` (gear ratio / non-linear curve to
-  another axis), `maroSensorDirection`, `maroSensorRange`. An axis carries at
-  most one *primary drive* capability (rotation/translation/coupling —
-  physically, one degree of freedom can't have two drivers at once);
-  everything else layers on top of that.
+- **Axis** (`maroAxis`) — 정확히 하나의 Maya 오브젝트에 바인딩되어 그 움직임을
+  구동한다. 축은 체인으로 연결(`maroConnectAxis`)되어 계층 구조를 이룰 수 있다.
+- **Capability 노드** — 축의 `capabilityIn` 배열에 스택으로 쌓인다. 그 축이
+  *무엇이 되는지*(단순 회전 조인트, 리니어 슬라이더, 제한된 조인트, 기어로
+  커플링된 조인트, 센서, 움직이는 센서, ...)는 어떤 capability가 쌓였는지에서
+  나오는 것이지, 미리 고른 타입에서 나오지 않는다. 현재 일곱 가지 타입이
+  존재한다: `maroRotation`, `maroTranslation`, `maroLimit`,
+  `maroTranslationLimit`, `maroCoupling`(다른 축과의 기어비/비선형 커브),
+  `maroSensorDirection`, `maroSensorRange`. 축 하나는 최대 하나의 *주 구동*
+  capability(rotation/translation/coupling — 물리적으로 자유도 하나는 동시에
+  두 개의 구동원을 가질 수 없다)만 가질 수 있으며, 나머지는 전부 그 위에
+  얹힌다.
 
-Each axis has a `controlMode`: **Manual** (the user's own rigging/keyframes
-drive the axis) or **ROS** (incoming ROS 2 commands drive it instead). A
-background bridge (`maroStartBridge`) publishes `/joint_states` and `/tf` from
-the live scene and applies inbound `/<robot>/joint_commands` to axes in ROS
-mode. A LiDAR node (`maroLidar`) can additionally raycast a mesh (Embree) and
-publish `sensor_msgs/PointCloud2`.
+축마다 `controlMode`가 있다: **Manual**(사용자 자신의 리깅/키프레임이 축을
+구동)과 **ROS**(들어오는 ROS 2 명령이 대신 구동). 백그라운드 브리지
+(`maroStartBridge`)가 살아있는 씬으로부터 `/joint_states`와 `/tf`를 발행하고,
+ROS 모드인 축에는 들어오는 `/<robot>/joint_commands`를 적용한다. LiDAR 노드
+(`maroLidar`)는 여기에 더해 메쉬를 레이캐스팅(Embree)하고
+`sensor_msgs/PointCloud2`를 발행할 수 있다.
 
-## MaroUI — the interactive editor
+## MaroUI — 대화형 에디터
 
-`maroMainWindow` opens a dockable window with two live 3D viewports side by
-side (Maya's own coordinate space on the left, the same scene reprojected
-into ROS coordinates on the right via `maroRosProxy`), so you can visually
-confirm both spaces move identically once a rig is wired up.
+`maroMainWindow`는 나란히 배치된 두 개의 실시간 3D 뷰포트를 가진 도킹 가능한
+창을 연다(왼쪽은 Maya 고유 좌표 공간, 오른쪽은 `maroRosProxy`를 통해 같은
+씬을 ROS 좌표로 재투영한 것) — 그래서 리그를 연결한 뒤 두 공간이 동일하게
+움직이는지 시각적으로 확인할 수 있다.
 
-Axis/capability editing itself doesn't happen inside that window — it's
-reached the way you'd expect in Maya: **right-click any object in the
-viewport**, and Maya's native marking menu gains a `Maro node editor` entry
-(installed by chaining the engine's own `dagMenuProc`, restored on unload).
-Picking it the first time on an object prompts for a display name and color,
-creates a `maroAxis` bound to that object, and opens a small popup — the
-**single object node editor (SONE)** — where the same
-right-click-hold-drag-release marking-menu gesture applies a capability type
-to the axis, Delete peels the most-recently-added one back off, and a
-double-click expands a dropdown once two or more are stacked. Every axis
-that's been given an editor shows up as a small grouped tile in MaroUI's
-**object node editor (ONE)** panel, letting you reopen its SONE, rename/
-recolor it, or delete it, without going back to the viewport.
+축/capability 편집 자체는 그 창 안에서 이뤄지지 않는다 — Maya에서 기대할
+법한 방식 그대로 접근한다: **뷰포트의 아무 오브젝트나 우클릭**하면, Maya의
+네이티브 마킹 메뉴에 `Maro node editor` 항목이 추가돼 있다(엔진 자신의
+`dagMenuProc`을 체이닝해 설치하며, 언로드 시 복원된다). 어떤 오브젝트에서
+처음 이 항목을 고르면 표시 이름과 색상을 물은 뒤 그 오브젝트에 바인딩된
+`maroAxis`를 만들고 작은 팝업 — **싱글 오브젝트 노드 에디터(SONE)** — 를
+연다. 이 팝업에서는 같은 우클릭-홀드-드래그-릴리즈 마킹 메뉴 제스처로 축에
+capability 타입을 부여하고, Delete는 가장 최근에 추가한 것을 하나씩 벗겨내며,
+두 개 이상 쌓이면 더블클릭으로 드롭다운이 펼쳐진다. 에디터가 한 번이라도
+열린 축은 모두 MaroUI의 **오브젝트 노드 에디터(ONE)** 패널에 작게 그루핑된
+타일로 나타나서, 뷰포트로 돌아가지 않고도 그 축의 SONE을 다시 열거나
+이름/색상을 바꾸거나 삭제할 수 있다.
 
-Two more panels flank the dual viewport — MaroUI's **Tech Diag** terminals.
-Pressing "검사 실행" on the Maya side re-scans the current scene for axes
-sitting near their configured limit and target meshes whose bounding boxes
-overlap; the ROS side re-scans for `/joint_states` publish problems (empty or
-duplicate joint names, an enabled axis with no primary driver). Fixable
-findings get an apply button (an undoable `setAttr`); the rest are
-explanation-only, since there's no general fix for "this value is close to
-its limit." Nothing runs in the background — every scan is triggered by the
-button and reflects only that instant.
+듀얼 뷰포트 양옆에는 패널 두 개가 더 붙어 있다 — MaroUI의 **Tech Diag**
+검사 터미널이다. Maya 쪽에서 "검사 실행"을 누르면 현재 씬을 다시 스캔해
+설정된 한계에 가까이 있는 축과, 바운딩 박스가 겹치는 타겟 메쉬들을 찾아낸다.
+ROS 쪽은 `/joint_states` 발행 문제(빈 이름/중복된 조인트 이름, 주 구동이
+없는 활성화된 축)를 다시 스캔한다. 고칠 수 있는 발견 사항에는 적용 버튼
+(undoable한 `setAttr`)이 붙고, 나머지는 설명만 제공한다 — "이 값이 한계에
+가깝다" 같은 문제엔 일반적인 해법이 없기 때문이다. 백그라운드에서 도는 것은
+아무것도 없다 — 모든 스캔은 버튼으로 트리거되고 그 순간만을 반영한다.
 
-This is a separate concern from the plugin's crash/error-debugging
-`maroDiagPanel` (below) — Tech Diag validates the *robot*, not the plugin.
+이것은 플러그인 자체의 충돌/오류 디버깅용 `maroDiagPanel`(아래)과는 별개의
+관심사다 — Tech Diag는 *플러그인*이 아니라 *로봇*을 검증한다.
 
-## Prerequisites
+## 사전 준비물
 
-- Windows, Visual Studio 2022 (MSVC), CMake >= 3.22
+- Windows, Visual Studio 2022(MSVC), CMake >= 3.22
 - Maya 2026 devkit
-- ROS 2 Jazzy, built/installed for the same MSVC toolset
-- vcpkg — see `vcpkg.json`. Two packages come from it:
-  - **GoogleTest**, used by the transform/lidar unit tests.
-  - **Embree 4**, a *runtime* dependency of the Maya plugin (the LiDAR
-    raycaster links it, so `embree4.dll` is loaded into the Maya process).
-    It **must** be installed without vcpkg's default `tasking-tbb` feature —
-    an Embree that imports `tbb12.dll` cannot load inside Maya, because Maya
-    already has its own `tbb12.dll` in the process and the Windows loader
-    reuses a module by base name. The symptom is `loadPlugin` failing with a
-    bare `ERROR_PROC_NOT_FOUND` and no hint at the cause. The configure step
-    now checks the resolved DLL's import table and fails loudly instead
-    (`src/maro_lidar/CMakeLists.txt`).
+- ROS 2 Jazzy, 같은 MSVC 툴셋으로 빌드/설치된 것
+- vcpkg — `vcpkg.json` 참고. 여기서 오는 패키지는 두 개다:
+  - **GoogleTest** — transform/lidar 단위 테스트가 사용.
+  - **Embree 4** — Maya 플러그인의 *런타임* 의존성(LiDAR 레이캐스터가
+    링크하므로 `embree4.dll`이 Maya 프로세스에 로드된다). vcpkg의 기본
+    `tasking-tbb` 기능 **없이** 설치해야 한다 — `tbb12.dll`을 임포트하는
+    Embree는 Maya 안에서 로드될 수 없다. Maya가 이미 자신의 `tbb12.dll`을
+    프로세스에 갖고 있고, Windows 로더가 같은 베이스 이름의 모듈을
+    재사용하기 때문이다. 증상은 원인을 전혀 알려주지 않는 맨
+    `ERROR_PROC_NOT_FOUND`로 실패하는 `loadPlugin`이다. 지금은 configure
+    단계가 해석된 DLL의 임포트 테이블을 확인해 조용히 넘어가지 않고 크게
+    실패하도록 되어 있다(`src/maro_lidar/CMakeLists.txt`).
 
-> **vcpkg resolution trap:** `vcpkg.json` in this repo pins the feature set
-> but does **not** drive resolution for the usual `out/build` tree — that
-> tree is configured without `CMAKE_TOOLCHAIN_FILE`, so `find_package(embree)`
-> resolves against the **global classic-mode** install tree
-> (`C:/src/vcpkg/installed/x64-windows`). Packages must be installed there by
-> hand, e.g.:
+> **vcpkg 해석 함정:** 이 저장소의 `vcpkg.json`은 기능 집합을 고정할 뿐
+> 일반적인 `out/build` 트리의 해석에는 관여하지 **않는다** — 그 트리는
+> `CMAKE_TOOLCHAIN_FILE` 없이 구성되므로, `find_package(embree)`는 **전역
+> classic-mode** 설치 트리(`C:/src/vcpkg/installed/x64-windows`)를 대상으로
+> 해석된다. 패키지는 그곳에 직접 설치해야 한다. 예:
 >
 > ```powershell
 > vcpkg install "embree[core,filter-function,geometry-curve,geometry-grid,geometry-instance,geometry-point,geometry-quad,geometry-subdivision,geometry-triangle,geometry-user,ray-packets]:x64-windows"
 > ```
 >
-> (that is `vcpkg.json`'s `embree` feature list, with `tasking-tbb` absent —
-> keep the two in sync)
+> (이것이 `vcpkg.json`의 `embree` 기능 목록에서 `tasking-tbb`만 뺀 것이다 —
+> 둘을 서로 맞춰 둔다)
 >
-> Editing `vcpkg.json` alone changes nothing about what the build links.
+> `vcpkg.json`만 고쳐서는 실제로 빌드가 링크하는 내용이 바뀌지 않는다.
 
-## Configuring the build
+## 빌드 설정
 
-The build needs two absolute paths, exposed as CMake cache variables. They
-currently default to one developer's machine — **override both** for any
-other environment:
+빌드에는 절대 경로 두 개가 필요하며, CMake 캐시 변수로 노출된다. 지금은
+개발자 한 명의 머신을 기본값으로 두고 있으므로 — 다른 환경에서는 **둘 다
+override**해야 한다:
 
-| Cache variable | Purpose | Default |
+| 캐시 변수 | 용도 | 기본값 |
 |---|---|---|
-| `DEVKIT_LOCATION` | Root of the Maya devkit (provides `cmake/pluginEntry.cmake`, Maya headers/libs) | `C:/Users/ckd30/Projects/devkitBase` |
-| `ROS2_INSTALL` | ROS 2 install prefix (headers, `Lib/`, `bin/`, and the vendor `opt/*/bin` dirs) | `C:/dev/ros2_jazzy/install` |
+| `DEVKIT_LOCATION` | Maya devkit의 루트(`cmake/pluginEntry.cmake`, Maya 헤더/라이브러리 제공) | `C:/Users/ckd30/Projects/devkitBase` |
+| `ROS2_INSTALL` | ROS 2 설치 prefix(헤더, `Lib/`, `bin/`, 그리고 벤더 `opt/*/bin` 디렉터리) | `C:/dev/ros2_jazzy/install` |
 
-Other useful options:
+그 외 유용한 옵션:
 
-- `MARO_BUILD_PLUGIN` (default `ON`) — build the Maya plugin; needs devkit + ROS 2.
-- `MARO_BUILD_TESTS` (default `ON`) — build and register the test suite.
+- `MARO_BUILD_PLUGIN`(기본 `ON`) — Maya 플러그인을 빌드; devkit + ROS 2 필요.
+- `MARO_BUILD_TESTS`(기본 `ON`) — 테스트 스위트를 빌드하고 등록.
 
-Example configure + build from a Visual Studio "x64 Native Tools" (or
-`VsDevCmd.bat`-initialized) shell:
+Visual Studio "x64 Native Tools"(또는 `VsDevCmd.bat`으로 초기화한) 셸에서
+구성 + 빌드하는 예:
 
 ```powershell
 cmake -S . -B out/build -DDEVKIT_LOCATION=C:/path/to/devkit -DROS2_INSTALL=C:/path/to/ros2_jazzy/install
 cmake --build out/build
 ```
 
-## The PATH requirement (read this before your first `loadPlugin`)
+## PATH 요구 사항 (첫 `loadPlugin` 전에 꼭 읽을 것)
 
-The build stages every ROS 2 runtime DLL (the `libyaml`/`spdlog`/
-`console_bridge` vendor DLLs, and `embree4.dll`) next to the built plugin
-(`maro.mll`). That is not sufficient by itself: Maya's plugin loader does not open `.mll` files
-with `LOAD_WITH_ALTERED_SEARCH_PATH`, so Windows will not automatically search
-the plugin's own directory for those dependencies.
+빌드는 ROS 2 런타임 DLL 전부(`libyaml`/`spdlog`/`console_bridge` 벤더 DLL,
+그리고 `embree4.dll`)를 빌드된 플러그인(`maro.mll`) 옆에 스테이징한다. 그것만으로는
+충분하지 않다 — Maya의 플러그인 로더는 `.mll` 파일을 `LOAD_WITH_ALTERED_SEARCH_PATH`로
+열지 않으므로, Windows가 그 의존성들을 찾으려고 플러그인 자신의 디렉터리를
+자동으로 뒤지지 않는다.
 
-**The plugin's output directory must already be on `PATH` before Maya (or
-`mayapy`) starts.** If it isn't, `loadPlugin("maro")` fails with a generic
-"cannot find dependent DLL" error that gives no hint that this is the actual
-cause.
+**Maya(또는 `mayapy`)가 시작하기 전에 플러그인의 출력 디렉터리가 이미
+`PATH`에 있어야 한다.** 그렇지 않으면 `loadPlugin("maro")`이 원인을 전혀
+알려주지 않는 일반적인 "종속 DLL을 찾을 수 없음" 오류로 실패한다.
 
-Add the build output directory (e.g. `out/build/src/maro_plugin/Debug`) to
-`PATH` in the environment you launch Maya from, then start Maya.
+빌드 출력 디렉터리(예: `out/build/src/maro_plugin/Debug`)를 Maya를 실행하는
+환경의 `PATH`에 추가한 뒤 Maya를 시작한다.
 
-## Running the tests
+## 테스트 실행
 
-Tests are registered with CTest — the C++ transform unit tests (GoogleTest)
-plus a set of `mayapy`-driven scenario scripts under `tests/maya/`. The
-`mayapy`-based tests set their own `PATH`/`MARO_PLUGIN_PATH` via CTest test
-properties, so you don't need to do that manually for `ctest` runs.
+테스트는 CTest에 등록되어 있다 — C++ transform 단위 테스트(GoogleTest)와
+`tests/maya/` 아래의 `mayapy` 기반 시나리오 스크립트 묶음. `mayapy` 기반
+테스트는 CTest 테스트 속성으로 자기 자신의 `PATH`/`MARO_PLUGIN_PATH`를
+설정하므로, `ctest` 실행을 위해 수동으로 그럴 필요가 없다.
 
 ```powershell
 ctest --test-dir out/build --output-on-failure
 ```
 
-Some tests start a live ROS 2 bridge and talk to a peer process
-(`maro_test_peer`); those are marked `RUN_SERIAL` because they share a DDS
-domain and would otherwise interfere with each other.
+일부 테스트는 실제 ROS 2 브리지를 띄우고 별도 프로세스(`maro_test_peer`)와
+통신한다 — 이런 테스트는 같은 DDS 도메인을 공유해 서로 간섭할 수 있으므로
+`RUN_SERIAL`로 표시되어 있다.
 
-## Registered `maro*` commands
+## 등록된 `maro*` 커맨드
 
-Axis / capability (query-only commands are undo-free; the rest are undoable):
+축 / capability(조회 전용 커맨드는 undo 없음; 나머지는 undoable):
 
-| Command | Purpose |
+| 커맨드 | 용도 |
 |---|---|
-| `maroBindAxis(axis, targetObject)` / `maroUnbindAxis(axis)` | Bind/unbind a `maroAxis` node to the Maya object it drives. |
-| `maroConnectAxis(child, parent)` | Wire one axis as the child of another, building the axis hierarchy. |
-| `maroSetControlMode(axis, 0\|1)` | Switch an axis between Manual (0) and ROS (1) control. |
-| `maroListAxisNodes([-capabilities axis])` | Query every axis, or one axis's capability stack, as a flat string array (consumed by MaroUI's Python side). |
-| `maroAddCapability(-type <name>, axis)` | Create a new capability node and connect it into the axis's next free slot. |
-| `maroConnectCapability(capNode, axis, [-index i])` / `maroDisconnectCapability(axis, -index i)` | Connect/disconnect an existing capability node. |
+| `maroBindAxis(axis, targetObject)` / `maroUnbindAxis(axis)` | `maroAxis` 노드를 그것이 구동할 Maya 오브젝트에 바인딩/해제. |
+| `maroConnectAxis(child, parent)` | 한 축을 다른 축의 자식으로 연결해 축 계층을 구성. |
+| `maroSetControlMode(axis, 0\|1)` | 축을 Manual(0)과 ROS(1) 제어 사이에서 전환. |
+| `maroListAxisNodes([-capabilities axis])` | 모든 축, 또는 한 축의 capability 스택을 평탄한 문자열 배열로 조회(MaroUI의 Python 쪽이 소비). |
+| `maroAddCapability(-type <name>, axis)` | 새 capability 노드를 만들어 축의 다음 빈 슬롯에 연결. |
+| `maroConnectCapability(capNode, axis, [-index i])` / `maroDisconnectCapability(axis, -index i)` | 기존 capability 노드를 연결/연결 해제. |
 
-ROS 2 bridge and coordinate proxy:
+ROS 2 브리지와 좌표 프록시:
 
-| Command | Purpose |
+| 커맨드 | 용도 |
 |---|---|
-| `maroStartBridge(robotName)` / `maroStopBridge()` | Start/stop the ROS 2 bridge: publishes `/<robotName>/joint_states`, `/tf`, and optionally LiDAR scans; subscribes to `/<robotName>/joint_commands`. |
-| `maroBridgeStats()` | Diagnostic counters: `[collected, drained, applied, threadTicks, publishErrors, drainedLidarScans]`. |
-| `maroMayaToRos(...)` | Pure coordinate-convention conversion (Maya → ROS), used by the dual-viewport proxy and testable without a bridge. |
-| `maroSetRosProxyTarget(object)` / `-clear` | Point MaroUI's right-hand viewport's isolation at a specific object. |
+| `maroStartBridge(robotName)` / `maroStopBridge()` | ROS 2 브리지 시작/정지: `/<robotName>/joint_states`, `/tf`, 그리고 선택적으로 LiDAR 스캔을 발행하고, `/<robotName>/joint_commands`를 구독. |
+| `maroBridgeStats()` | 진단 카운터: `[collected, drained, applied, threadTicks, publishErrors, drainedLidarScans]`. |
+| `maroMayaToRos(...)` | 순수 좌표 변환 규약(Maya → ROS). 듀얼 뷰포트 프록시가 사용하며 브리지 없이도 테스트 가능. |
+| `maroSetRosProxyTarget(object)` / `-clear` | MaroUI 오른쪽 뷰포트의 격리 대상을 특정 오브젝트로 지정. |
 
-UI entry points:
+UI 진입점:
 
-| Command | Purpose |
+| 커맨드 | 용도 |
 |---|---|
-| `maroMainWindow` | Open MaroUI (dual viewport + ONE + Tech Diag panels). Idempotent — restores if already open. |
-| `maroBuildMenu` | Build the top-level "Maro" Maya menu. |
-| `maroDiagPanel` | Open the plugin's own crash/error-debugging panel (unrelated to Tech Diag — see MaroUI section above). |
+| `maroMainWindow` | MaroUI를 연다(듀얼 뷰포트 + ONE + Tech Diag 패널). 이미 열려 있으면 복원하는 멱등 동작. |
+| `maroBuildMenu` | 최상위 "Maro" Maya 메뉴를 구성. |
+| `maroDiagPanel` | 플러그인 자체의 충돌/오류 디버깅 패널을 연다(Tech Diag와는 무관 — 위 MaroUI 절 참고). |
 
-Debugging Diag (`boad`/`book`) — for plugin/Maya errors, independent of the axis system:
+디버깅 Diag(`boad`/`book`) — 축 시스템과 독립적인, 플러그인/Maya 오류용:
 
-| Command | Purpose |
+| 커맨드 | 용도 |
 |---|---|
-| `maroDiagPanelRows` / `maroDiagPanelDetail` | Query the diagnostic record stream for the panel. |
-| `maroDiagRegisterRemedy` / `maroDiagRequestRemedy` / `maroApplyRemedy` | Register a fix for a known error hash, queue it, then apply it (undoable). |
+| `maroDiagPanelRows` / `maroDiagPanelDetail` | 패널을 위한 진단 레코드 스트림을 조회. |
+| `maroDiagRegisterRemedy` / `maroDiagRequestRemedy` / `maroApplyRemedy` | 알려진 오류 해시에 대한 해법을 등록하고, 큐에 넣은 뒤, 적용(undoable). |
 
-A full flag-by-flag reference (including test-only utilities) isn't
-maintained in this README — read the relevant command's `.cpp`/`newSyntax()`
-in `src/maro_plugin/`, or the per-feature specs under `docs/superpowers/`.
+플래그 하나하나까지 다루는 전체 레퍼런스(테스트 전용 유틸리티 포함)는 이
+README에서 관리하지 않는다 — 해당 커맨드의 `.cpp`/`newSyntax()`
+(`src/maro_plugin/` 안)나, 기능별 스펙(`docs/superpowers/` 아래)을 읽는다.
 
-## Layout
+## 레이아웃
 
-- `src/maro_plugin/` — the Maya plugin: nodes (axis, capability, LiDAR,
-  device), commands, the ROS 2 bridge runtime, `dagMenuProc` chaining, and
-  the always-on main-thread pump that moves data between Maya and ROS 2.
-- `src/maro_transform/` — coordinate/unit conversion library shared by the
-  plugin and its unit tests.
-- `src/maro_lidar/` — Embree-backed raycasting engine used by `maroLidar`.
-- `src/maro_diag/` — Maya-independent presenter/model logic for the
-  debugging Diag panel (`boad`/`book`), covered by its own GoogleTest binary.
-- `src/maro_ipc/` — the named-pipe/job-object protocol between the plugin
-  and the sentinel watchdog.
-- `src/maro_sentinel/` — `maro_sentinel.exe`, a separate watchdog process
-  that detects whether a Maya session crashed vs. exited cleanly.
-- `python/` — everything Qt-facing (MaroUI's window, the SONE/ONE editors,
-  `dagMenuProc`'s Python-side handler, Tech Diag, the diagnostic panel, the
-  ROS coordinate proxy) — staged next to the built plugin at build time.
-- `tests/` — GoogleTest unit tests and `mayapy` scenario tests, wired into
-  CTest.
-- `docs/superpowers/` — design specs, implementation plans, and task-by-task
-  history for every feature slice built through this project's
-  subagent-driven-development workflow.
-- `docs/maro-main-ui-manual-checklist.md` — the interactive-Maya-only
-  verification checklist for everything automated tests can't reach (real
-  mouse gestures, real window rendering, unload-while-open safety).
+- `src/maro_plugin/` — Maya 플러그인: 노드(axis, capability, LiDAR, device),
+  커맨드, ROS 2 브리지 런타임, `dagMenuProc` 체이닝, 그리고 Maya와 ROS 2
+  사이에서 데이터를 옮기는 항상 켜져 있는 메인 스레드 펌프.
+- `src/maro_transform/` — 플러그인과 그 단위 테스트가 공유하는 좌표/단위
+  변환 라이브러리.
+- `src/maro_lidar/` — `maroLidar`가 쓰는 Embree 기반 레이캐스팅 엔진.
+- `src/maro_diag/` — 디버깅 Diag 패널(`boad`/`book`)을 위한, Maya에
+  독립적인 프레젠터/모델 로직. 자체 GoogleTest 바이너리로 커버됨.
+- `src/maro_ipc/` — 플러그인과 센티널 워치독 사이의 네임드 파이프/잡
+  오브젝트 프로토콜.
+- `src/maro_sentinel/` — `maro_sentinel.exe`, Maya 세션이 크래시했는지
+  정상 종료했는지를 감지하는 별도의 워치독 프로세스.
+- `python/` — Qt와 맞닿은 모든 것(MaroUI의 창, SONE/ONE 에디터,
+  `dagMenuProc`의 Python 쪽 핸들러, Tech Diag, 진단 패널, ROS 좌표
+  프록시) — 빌드 시점에 빌드된 플러그인 옆에 스테이징된다.
+- `tests/` — GoogleTest 단위 테스트와 `mayapy` 시나리오 테스트, CTest에
+  연결됨.
+- `docs/superpowers/` — 이 프로젝트의 subagent-driven-development
+  워크플로로 만들어진 기능 슬라이스마다의 설계 스펙, 구현 계획, 태스크별
+  이력.
+- `docs/maro-main-ui-manual-checklist.md` — 자동화된 테스트가 닿을 수 없는
+  모든 것(실제 마우스 제스처, 실제 창 렌더링, 열린 채 언로드 안전성)을 위한
+  대화형 Maya 전용 검증 체크리스트.
