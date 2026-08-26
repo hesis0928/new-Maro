@@ -284,6 +284,10 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
                 else:
                     cmds.connectAttr(sourceAxis + ".position",
                                      couplingNodeName + ".sourceValue", force=True)
+            except RuntimeError as error:
+                print("Maro: coupling source connection failed -- {}".format(error))
+                picker.close()
+                return
             finally:
                 cmds.undoInfo(closeChunk=True)
             picker.close()
