@@ -25,15 +25,75 @@
 #include <maya/MUserData.h>
 #include <maya/MViewport2Renderer.h>
 
+#include "MaroDiag.h"
+
 namespace {
 
 // 뷰포트 콜백 경계에서 예외를 삼킬 때 쓰는 한 번만 찍는 로거. 이 경로들은
 // 프레임마다 불리므로 그냥 로그하면 스크립트 에디터가 초당 수십 줄로 넘친다.
-void reportOnce(bool& reported, const char* what) {
+// 리뷰 Finding I1: 예전에는 여기서 MGlobal::displayWarning을 직접 불렀는데,
+// 이 파일 가족의 다른 노드들(MaroAxisNode.cpp, MaroCapabilityNodes.cpp,
+// MaroCommandDeviceNode.cpp)은 전부 maro::BoadMaro::error를 거친다. 그
+// 관례를 깨면 두 가지가 깨진다: (1) BoadMaro::warn/error가 MGlobal::display*
+// 에코를 isMainThread() 뒤로 가두는 가드(MaroDiag.h 참고 -- Evaluation
+// Manager 워커 스레드는 MGlobal::display*를 직접 부르면 안 된다)를 이
+// 콜백들만 우회하게 되고, (2) 실패가 진단 저널/Tech Diag 패널에 전혀 남지
+// 않아 나중에 찾을 수 없다. 그래서 이 헬퍼는 BoadMaro::error로 위임만 하고,
+// 세션당 1회 dedup만 스스로 담당한다.
+void reportOnce(bool& reported, const std::string& siteTag, const MString& message,
+                const maro::DgContext& context) {
     if (reported) return;
     reported = true;
-    MGlobal::displayWarning(MString("Maro: maroPointCloud ") + what +
-                            " swallowed an exception (reported once per session).");
+    maro::BoadMaro::error(siteTag, message, context);
+}
+
+// MaroPointCloudNode 자신의 콜백(boundingBox/preEvaluation)용 DgContext
+// 조립기. Viewport 2.0이 이 콜백들을 부르는 스레드는 compute()와 같은 처지다
+// -- MaroAxisNode.cpp의 computeContext()와 정확히 같은 정책을 따른다: 노드
+// "이름"은 MFnDependencyNode 조회가 필요한 진짜 Maya API 호출이므로
+// isMainThread()가 안전을 보장할 때만 채우고, 워커면 빈 문자열로 둔다.
+maro::DgContext pointCloudNodeContext(const MPxNode& node) {
+    maro::DgContext ctx;
+    ctx.nodeType = "maroPointCloud";
+    ctx.activeCommand = maro::onfix::activeCommand();
+    if (maro::isMainThread()) {
+        // catch 블록 안에서(이미 예외가 한 번 난 상태에서) 부르므로, 이
+        // 조회 자체가 또 실패해도 Maya 콜백 경계를 못 넘게 한 번 더 감싼다.
+        try {
+            MFnDependencyNode fn(node.thisMObject());
+            ctx.axisOrTarget = fn.name().asChar();
+        } catch (...) {
+            ctx.nameUnavailable = true;
+        }
+    } else {
+        ctx.nameUnavailable = true;
+    }
+    return ctx;
+}
+
+// MaroPointCloudDrawOverride::prepareForDraw()용 DgContext 조립기. 이쪽은
+// MPxNode가 아니라 MDagPath만 갖고 있어 pointCloudNodeContext와 조회 경로가
+// 다르다 -- 정책은 동일하다(isMainThread()가 안전을 보장할 때만 이름을 채움).
+maro::DgContext pointCloudDrawContext(const MDagPath& objPath) {
+    maro::DgContext ctx;
+    ctx.nodeType = "maroPointCloud";
+    ctx.activeCommand = maro::onfix::activeCommand();
+    if (maro::isMainThread()) {
+        try {
+            MStatus status;
+            MFnDependencyNode fn(objPath.node(&status));
+            if (status) {
+                ctx.axisOrTarget = fn.name().asChar();
+            } else {
+                ctx.nameUnavailable = true;
+            }
+        } catch (...) {
+            ctx.nameUnavailable = true;
+        }
+    } else {
+        ctx.nameUnavailable = true;
+    }
+    return ctx;
 }
 
 }  // namespace
@@ -128,7 +188,9 @@ MBoundingBox MaroPointCloudNode::boundingBox() const {
         return MBoundingBox(minP, maxP);
     } catch (...) {
         static bool reported = false;
-        reportOnce(reported, "boundingBox()");
+        reportOnce(reported, "MaroPointCloudNode.boundingBox.UnknownException",
+                  "Maro: maroPointCloud boundingBox() swallowed an exception (reported once per session).",
+                  pointCloudNodeContext(*this));
         return MBoundingBox(MPoint(-1, -1, -1), MPoint(1, 1, 1));
     }
 }
@@ -144,7 +206,9 @@ MStatus MaroPointCloudNode::preEvaluation(const MDGContext& context,
         }
     } catch (...) {
         static bool reported = false;
-        reportOnce(reported, "preEvaluation()");
+        reportOnce(reported, "MaroPointCloudNode.preEvaluation.UnknownException",
+                  "Maro: maroPointCloud preEvaluation() swallowed an exception (reported once per session).",
+                  pointCloudNodeContext(*this));
     }
     return MS::kSuccess;
 }
@@ -227,7 +291,9 @@ public:
             data->color = MColor(r, g, b, 1.0f);
         } catch (...) {
             static bool reported = false;
-            reportOnce(reported, "prepareForDraw()");
+            reportOnce(reported, "MaroPointCloudDrawOverride.prepareForDraw.UnknownException",
+                      "Maro: maroPointCloud prepareForDraw() swallowed an exception (reported once per session).",
+                      pointCloudDrawContext(objPath));
         }
 
         return data;
@@ -251,8 +317,14 @@ public:
             drawManager.mesh(MHWRender::MUIDrawManager::kPoints, pointCloudData->points);
             drawManager.endDrawable();
         } catch (...) {
+            // objPath는 일부러 쓰지 않는다 -- 이 함수는 절대 DG를 건드리지
+            // 않는다는 위 규칙이 예외 경로에서도 그대로 적용된다. 그래서
+            // 노드 이름은 채우지 못한다("못 채움"이 아니라 "여기서는 원래
+            // 안 채운다"에 가깝다); nodeType만 컴파일타임 상수로 채운다.
             static bool reported = false;
-            reportOnce(reported, "addUIDrawables()");
+            reportOnce(reported, "MaroPointCloudDrawOverride.addUIDrawables.UnknownException",
+                      "Maro: maroPointCloud addUIDrawables() swallowed an exception (reported once per session).",
+                      maro::onfix::capture("maroPointCloud", "", ""));
         }
     }
 

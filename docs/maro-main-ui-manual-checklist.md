@@ -603,15 +603,61 @@ Tasks 1-4에서 구현한 Tech Diag 기술 진단 기능(양쪽 뷰포트 옆의
 2. **[필수]** 뷰포트에 점 5개가 실제로 보이는가(작은 원/사각형 형태로,
    `pointSize` 기본값 2.0 크기, 기본 색 하늘색 `(0.2, 0.8, 1.0)`).
 3. `cmds.setAttr(node + ".pointSize", 8.0)` — **[필수]** 점이 즉시(다음
-   리드로우에) 커지는가. `preEvaluation()`의 dirty 신호가 실제로 동작한다는
-   증거다.
+   리드로우에) 커지는가. **주의**: 이것은 `preEvaluation()`의 dirty 신호가
+   동작한다는 증거가 **아니다** -- `MaroPointCloudNode::preEvaluation()`은
+   `evaluationNode.dirtyPlugExists(aPoints, ...)`만 검사하므로 `pointSize`가
+   dirty해져도 이 콜백은 아무 것도 하지 않는다. 그런데도 점이 즉시 커진다면
+   그것은 통상적인 DG dirty 전파가 `prepareForDraw()`를 다시 부르게 만드는
+   별개의 경로가 동작한다는 증거일 뿐이다(어느 경로인지는 이 절의 범위 밖).
+   `preEvaluation()`의 dirty 신호 자체를 증명하는 것은 아래 6번이다.
 4. 뷰를 회전/줌해서 점들이 프러스텀 밖으로 나갔다 들어왔다 해도 컬링되지
    않고 계속 보이는가(`boundingBox()`가 실제 점 범위를 반영한다는 증거).
 5. `cmds.setAttr(node + ".enabled", False)` — 점이 사라지고, 다시 `True`로
    되돌리면 다시 보이는가.
-6. **[필수 · 이 태스크의 진짜 기준]** 점이 보이는 상태로(뷰포트에서 보이게
-   놔둔 채) `cmds.unloadPlugin("maro")`를 실행한다. Maya가 죽지 않고,
-   스크립트 에디터에 새 크래시 관련 에러가 없는가.
+6. **[필수 · `preEvaluation()`이 실제로 지켜보는 유일한 어트리뷰트]** 점이
+   보이는 상태에서 `.points`를 서로 다른 배열로 다시 설정한다:
+   ```python
+   cmds.setAttr(node + ".points", 2,
+                (5, 0, 0, 1), (5, 5, 0, 1),
+                type="pointArray")
+   ```
+   뷰포트가 다시 그려지고, 그려진 점이 실제로 원래 5개(십자 모양 배치)에서
+   새 점 2개로 바뀌는가. `MaroPointCloudNode::preEvaluation()`은
+   `points`가 dirty해질 때만 `MHWRender::MRenderer::setGeometryDrawDirty()`를
+   부른다 -- `pointSize`/`color`/`enabled`는 지켜보지 않는다. 이 태스크의
+   배치 테스트도, 위 3번도 이 경로를 실제로 증명하지 못한다 -- `.points`를
+   이미 그려진 노드 위에서 바꿔 보는 이 단계만이 `preEvaluation()`의
+   존재 이유를 실제로 검증한다.
+7. **[필수 · 이 태스크의 진짜 기준]** 점이 보이는 상태로(뷰포트에서 보이게
+   놔둔 채) 언로드를 시도한다. Maya는 씬에 커스텀 노드 인스턴스가 남아
+   있으면 강제 옵션 없는 `unloadPlugin`을 거부한다(다른 배치
+   테스트들이 언로드 전에 `cmds.file(new=True, force=True)`로 씬을 비우는
+   이유가 이것이다 -- `tests/maya/test_axis_node.py`,
+   `tests/maya/test_binding.py`, `tests/maya/test_point_cloud_node.py` 참고).
+   이 단계의 목적은 지오메트리가 보이는 채로 언로드해도 Maya가 죽지 않는지를
+   보는 것이므로, 씬을 먼저 비우면(=배치 테스트가 하는 것과 같은 절차)
+   검증하려는 조건 자체가 사라진다. 그래서 두 단계로 나눠서 본다:
+   1. 먼저 강제 옵션 없이 실행해 **거부되는 것을 확인한다** (이 거부
+      자체는 실패가 아니라 Maya의 정상 동작이다 -- 결과표에 실패로
+      기록하지 않는다):
+      ```python
+      cmds.unloadPlugin("maro")
+      ```
+      `RuntimeError`(또는 유사한 "아직 사용 중" 메시지)가 나야 정상이다.
+   2. 이어서 강제 언로드로 실제 목표를 검증한다:
+      ```python
+      cmds.unloadPlugin("maro", force=True)
+      ```
+      **[필수]** Maya가 크래시하지 않는다. 스크립트 에디터에 크래시로
+      이어질 만한 새 에러/트레이스백이 없는가(§3의 "알려진 예외"와 같은
+      기준 -- 유휴 큐의 `maroBuildMenu` 관련 에러 하나만 나타났다면 실패로
+      보지 않는다).
+
+> **참고 (검증 상태):** 위 7번의 `force=True` 시퀀스는 이 수정을 작성한
+> 환경에 대화형 GUI Maya가 없어 직접 재현해 확인하지 못했다. Maya의
+> `unloadPlugin -force` 문서화된 동작(플러그인이 등록한 노드 타입의 씬
+> 인스턴스를 먼저 제거한 뒤 언로드한다)에 근거해 절차를 고쳤다 -- 이 절을
+> 처음 수행하는 사람이 위 절차가 실제로 이렇게 동작하는지 확인해 달라.
 
 > 5번의 `enabled`, 그리고 2번의 기본 색은 브리프의 원래 절에는 없던 항목이다.
 > `addUIDrawables()`가 `enabled`/`color`를 실제로 `prepareForDraw()`가 캐시해 둔
@@ -674,9 +720,10 @@ Phase 2, Phase 3 판정을 함께 담고 있다(§1-1이 Phase 2, §1-2가 Phase
 | 1-4. 언로드 go/no-go (메뉴 항목 제거, SONE/Coupling 픽커가 뜬 채여도 무크래시) | 5 | 필수 | | | |
 | 1-4. Phase 2/3 회귀 재확인 | 5 | 필수 | | | 레이아웃 변경 회귀 확인 |
 | 6-1. `maroPointCloud` 점이 뷰포트에 보인다 (기본 크기/색) | 5(LiDAR) | 필수 | | | Task 1. 배치 테스트가 원리적으로 못 보는 부분 |
-| 6-1. `pointSize` 변경이 즉시 반영된다 | 5(LiDAR) | 필수 | | | `preEvaluation()`의 `setGeometryDrawDirty` 신호가 동작한다는 증거 |
+| 6-1. `pointSize` 변경이 즉시 반영된다 | 5(LiDAR) | 필수 | | | 통상적인 DG dirty 전파가 재드로우를 유발한다는 증거일 뿐 — `preEvaluation()`은 `points`만 지켜보므로 이 항목이 그 신호의 증거는 **아니다**(리뷰 Finding I3) |
 | 6-1. `enabled` 토글이 반영된다 | 5(LiDAR) | 관찰 | | | `addUIDrawables()`가 캐시된 값을 실제로 쓰는지 |
-| 6-1. **점이 보이는 상태로 언로드 — 무크래시** | 5(LiDAR) | 필수 | | | Task 1의 진짜 go/no-go |
+| 6-1. **`.points`를 다른 배열로 재설정 — 그려진 점이 실제로 바뀐다** | 5(LiDAR) | 필수 | | | `preEvaluation()`이 `dirtyPlugExists(aPoints, ...)`로 지켜보는 유일한 경로의 실제 증거(리뷰 Finding I3) |
+| 6-1. **점이 보이는 상태로 언로드 — 무크래시** | 5(LiDAR) | 필수 | | | Task 1의 진짜 go/no-go. `unloadPlugin("maro", force=True)`로 검증(리뷰 Finding I2 — 강제 옵션 없이는 Maya가 노드 인스턴스가 남아 있는 한 언로드 자체를 거부한다) |
 
 ### 종합 판정 (2026-08-25)
 
