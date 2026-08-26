@@ -13,6 +13,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 # 함께 고쳐야 한다.
 CAPABILITY_FIELDS = 5
 
+# C++ 쪽 계약. 바뀌면 MaroAxisEditorCommands.cpp의 listAxes()도 함께 고쳐야
+# 한다. maroObjectNodeEditor.py에 같은 값의 AXIS_FIELDS가 하나 더 있고,
+# 여기서 그것을 import하지 않는 것은 의도다 -- 그쪽이 이 모듈을 import하므로
+# 되받아 import하면 순환 참조가 된다. 두 상수는 같은 C++ 계약을 가리키는
+# 독립 선언이고, 계약이 바뀌면 셋(C++/여기/ONE)을 함께 고친다.
+AXIS_FIELDS = 10
+
 
 def sliceCapabilityRows(flat):
     """maroListAxisNodes(capabilities=axis)의 평탄한 배열을 capability 행
@@ -86,6 +93,8 @@ _ITEM_HALF_WIDTH = 55.0
 _ITEM_HALF_HEIGHT = 16.0
 _MENU_RADIUS = 90.0
 _DRAG_THRESHOLD_PX = 6.0
+# 펼친 드롭다운에서 "고른 행"을 구분하는 테두리 굵기(px).
+_SELECTION_PEN_WIDTH = 2.5
 
 _OPEN_EDITORS = {}  # axisFullPath -> MaroSingleObjectNodeEditor
 
@@ -109,6 +118,31 @@ def openSingleObjectNodeEditor(axis):
     return editor
 
 
+def stop():
+    """플러그인 언로드/창 닫힘 시 열려 있는 SONE를 전부 닫는다.
+
+    [최종 리뷰 C-1] SONE는 MaroUI와 무관한 독립 최상위 팝업이라(설계 스펙
+    §5) workspaceControl을 닫는 것으로는 함께 닫히지 않는다. 열린 채로
+    플러그인이 언로드되면 paintEvent/keyPressEvent가 리페인트/키 입력마다
+    이미 deregister된 maroListAxisNodes 등을 계속 불러 스크립트 에디터가
+    같은 트레이스백으로 도배된다(그리고 창 자체도 끝까지 남는다).
+    maroMainWindow.teardown()이 다른 서브시스템 stop()들과 같은 자리에서
+    이것을 부른다 -- 그 시점은 MaroPluginMain.cpp의 uninitializePlugin이
+    커맨드를 하나라도 deregister하기 **전**이다.
+
+    maroObjectNodeEditor.stop()과 같은 규율으로 한 창의 실패가 나머지 창의
+    정리를 막지 않게 한다(창마다 개별 try).
+    """
+    for editor in list(_OPEN_EDITORS.values()):
+        try:
+            editor.close()
+            editor.deleteLater()
+        except Exception:  # noqa: BLE001 -- 언로드 정리 경계
+            import traceback
+            traceback.print_exc()
+    _OPEN_EDITORS.clear()
+
+
 class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
     """축 하나의 capability 스택을 방사형 마킹 메뉴로 편집하는 독립
     팝업(모덜리스). setStyleSheet()를 부르지 않는다 -- maroMainWindow.py와
@@ -120,6 +154,12 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
         self._axis = axis
         self._menuStack = []          # [(centerX, centerY, [(label, payload), ...]), ...]
         self._expanded = False        # 능력 2개 이상일 때 드롭다운 펼침 여부
+        # [최종 리뷰 I-1(d)] 펼친 드롭다운에서 클릭으로 고른 행의
+        # logicalIndex. None이면 "고른 행 없음"이고, 그때 Delete는 기존대로
+        # 가장 나중에 추가된 능력을 벗겨 낸다(설계 스펙 §5.3의 두 동작).
+        # 접을 때마다 비운다 -- 안 보이는 행이 선택된 채로 남아 있으면
+        # Delete가 화면에 없는 것을 지운다.
+        self._selectedCapabilityIndex = None
         self.setMinimumSize(320, 240)
         self.setMouseTracking(True)
         # QWidget의 기본 focusPolicy는 Qt.NoFocus다 -- 계획 초안에는 이
@@ -131,15 +171,22 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
         self._refreshTitle()
 
     def closeEvent(self, event):
-        if _OPEN_EDITORS.get(self._axis) is self:
-            del _OPEN_EDITORS[self._axis]
+        # 이 핸들러는 stop()(언로드 정리)에서도 불린다 -- 여기서 예외가
+        # 새면 나머지 창의 정리까지 함께 끊긴다. 다른 이벤트 핸들러와 같은
+        # 규율로 삼킨다.
+        try:
+            if _OPEN_EDITORS.get(self._axis) is self:
+                del _OPEN_EDITORS[self._axis]
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
         super().closeEvent(event)
 
     def _refreshTitle(self):
         rows = cmds.maroListAxisNodes()
         displayName = self._axis
-        for i in range(len(rows) // 10):
-            f = rows[i * 10:(i + 1) * 10]
+        for i in range(len(rows) // AXIS_FIELDS):
+            f = rows[i * AXIS_FIELDS:(i + 1) * AXIS_FIELDS]
             if f[0] == self._axis and f[8]:
                 displayName = f[8]
                 break
@@ -158,41 +205,88 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
             return connected[0]["capabilityNodeType"].replace("maro", ""), False
         return connected[-1]["capabilityNodeType"].replace("maro", "") + " ▾", True
 
-    def paintEvent(self, event):
-        painter = QtGui.QPainter(self)
-        rows = self._capabilityRows()
-        label, hasDropdown = self._nodeLabel(rows)
+    def _nodeRect(self):
         cx, cy = self.width() / 2.0, self.height() / 2.0
-        nodeRect = QtCore.QRectF(cx - 60, cy - 18, 120, 36)
-        pen = QtGui.QPen(QtCore.Qt.DashLine if label == "undefined" else QtCore.Qt.SolidLine)
-        painter.setPen(pen)
-        painter.drawRoundedRect(nodeRect, 6, 6)
-        painter.drawText(nodeRect, QtCore.Qt.AlignCenter, label)
+        return QtCore.QRectF(cx - 60, cy - 18, 120, 36)
 
-        if self._expanded and len(rows) > 0:
-            connected = sorted([r for r in rows if r["connected"]], key=lambda r: r["logicalIndex"])
-            y = nodeRect.bottom() + 8
-            for row in connected:
-                itemRect = QtCore.QRectF(cx - 70, y, 140, 22)
+    def _expandedRowRects(self, rows):
+        """펼친 드롭다운의 각 행에 대한 (logicalIndex, QRectF) 목록.
+
+        paintEvent(그리기)와 mousePressEvent(행 선택 히트테스트)가 **같은**
+        기하를 봐야 하므로 한 곳에서만 계산한다 -- 두 곳에 같은 수식을
+        복사해 두면 한쪽만 고쳐졌을 때 "보이는 행과 눌리는 행이 다른"
+        종류의 버그가 조용히 생긴다.
+        """
+        if not self._expanded:
+            return []
+        nodeRect = self._nodeRect()
+        cx = self.width() / 2.0
+        connected = sorted([r for r in rows if r["connected"]],
+                           key=lambda r: r["logicalIndex"])
+        rects = []
+        y = nodeRect.bottom() + 8
+        for row in connected:
+            rects.append((row["logicalIndex"], QtCore.QRectF(cx - 70, y, 140, 22)))
+            y += 24
+        return rects
+
+    def paintEvent(self, event):
+        # paintEvent는 리페인트마다 Maya 커맨드를 부른다(_capabilityRows()).
+        # 노드가 리페인트 도중에 사라지거나 속성 값이 예상 밖이면 여기서
+        # 예외가 나는데, 그걸 밖으로 내보내면 Qt가 다시 그릴 때마다 같은
+        # 트레이스백이 무한히 반복된다 -- 이 코드베이스의 Maya 콜백 경계
+        # 규율(maroRosProxy._onIdle, maroDagMenu._addMenuItem)을 Qt 이벤트
+        # 핸들러에도 그대로 적용한다.
+        try:
+            painter = QtGui.QPainter(self)
+            rows = self._capabilityRows()
+            label, hasDropdown = self._nodeLabel(rows)
+            nodeRect = self._nodeRect()
+            pen = QtGui.QPen(QtCore.Qt.DashLine if label == "undefined" else QtCore.Qt.SolidLine)
+            # 굵은 테두리에 쓸 색을 **루프 밖에서** 한 번만 잡는다.
+            # painter.pen()을 루프 안에서 읽으면 직전 반복이 세워 둔 굵은 펜의
+            # 색을 다시 읽게 되어 상태가 반복마다 흘러간다.
+            selectionPen = QtGui.QPen(pen.color(), _SELECTION_PEN_WIDTH)
+            painter.setPen(pen)
+            painter.drawRoundedRect(nodeRect, 6, 6)
+            painter.drawText(nodeRect, QtCore.Qt.AlignCenter, label)
+
+            for logicalIndex, itemRect in self._expandedRowRects(rows):
+                if logicalIndex == self._selectedCapabilityIndex:
+                    # 고른 행은 굵은 테두리로 구분한다(설계 스펙 §5.3의
+                    # "펼친 상태에서 개별 항목 선택"). 색은 지정하지 않는다 --
+                    # setStyleSheet를 안 쓰는 것과 같은 이유로 팔레트를
+                    # 그대로 쓴다.
+                    painter.setPen(selectionPen)
+                else:
+                    painter.setPen(pen)
                 painter.drawRect(itemRect)
+                capType = ""
+                for row in rows:
+                    if row["logicalIndex"] == logicalIndex:
+                        capType = row["capabilityNodeType"]
+                        break
                 painter.drawText(itemRect, QtCore.Qt.AlignCenter,
-                                 "{}. {}".format(row["logicalIndex"], row["capabilityNodeType"]))
-                y += 24
+                                 "{}. {}".format(logicalIndex, capType))
+            painter.setPen(pen)
 
-        for level, (mcx, mcy, items) in enumerate(self._menuStack):
-            opacity = 0.35 if level < len(self._menuStack) - 1 else 1.0
-            painter.setOpacity(opacity)
-            positions = computeRadialLayout(mcx, mcy, len(items), _MENU_RADIUS)
-            for (labelText, _payload), (ix, iy) in zip(items, positions):
-                itemRect = QtCore.QRectF(ix - _ITEM_HALF_WIDTH, iy - _ITEM_HALF_HEIGHT,
-                                         _ITEM_HALF_WIDTH * 2, _ITEM_HALF_HEIGHT * 2)
-                painter.drawRoundedRect(itemRect, 6, 6)
-                painter.drawText(itemRect, QtCore.Qt.AlignCenter, labelText)
-            painter.setOpacity(1.0)
-            if level > 0:
-                backRect = QtCore.QRectF(self.width() - 90, mcy - 12, 80, 24)
-                painter.drawRoundedRect(backRect, 4, 4)
-                painter.drawText(backRect, QtCore.Qt.AlignCenter, "◀ 상위로")
+            for level, (mcx, mcy, items) in enumerate(self._menuStack):
+                opacity = 0.35 if level < len(self._menuStack) - 1 else 1.0
+                painter.setOpacity(opacity)
+                positions = computeRadialLayout(mcx, mcy, len(items), _MENU_RADIUS)
+                for (labelText, _payload), (ix, iy) in zip(items, positions):
+                    itemRect = QtCore.QRectF(ix - _ITEM_HALF_WIDTH, iy - _ITEM_HALF_HEIGHT,
+                                             _ITEM_HALF_WIDTH * 2, _ITEM_HALF_HEIGHT * 2)
+                    painter.drawRoundedRect(itemRect, 6, 6)
+                    painter.drawText(itemRect, QtCore.Qt.AlignCenter, labelText)
+                painter.setOpacity(1.0)
+                if level > 0:
+                    backRect = QtCore.QRectF(self.width() - 90, mcy - 12, 80, 24)
+                    painter.drawRoundedRect(backRect, 4, 4)
+                    painter.drawText(backRect, QtCore.Qt.AlignCenter, "◀ 상위로")
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계, 위 주석 참고
+            import traceback
+            traceback.print_exc()
 
     def _leafItems(self):
         return [(label, ("leaf", flagName)) for flagName, label in CAPABILITY_TYPES]
@@ -206,40 +300,69 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
     # 대체됨). README가 명시하는 지원 대상이 Maya 2026 devkit 하나뿐이므로
     # 가드를 남겨 둘 이유가 없다.
     def mousePressEvent(self, event):
-        if event.button() != QtCore.Qt.RightButton:
-            return
-        self._pressPos = event.position()
-        self._menuStack = [(self._pressPos.x(), self._pressPos.y(), self._leafItems())]
-        self.update()
+        # Qt 이벤트 핸들러 경계 -- paintEvent의 주석 참고. 여기는 Maya
+        # 커맨드(_capabilityRows)도 부르므로 같은 이유가 그대로 적용된다.
+        try:
+            if event.button() == QtCore.Qt.LeftButton:
+                # [최종 리뷰 I-1(d)] 펼친 드롭다운 안을 좌클릭하면 그 행을
+                # 고른다(설계 스펙 §5.3). 행 밖을 누르면 선택을 푼다 --
+                # 그러면 Delete가 다시 "가장 나중 능력 벗기기"로 돌아간다.
+                if self._expanded:
+                    pos = event.position()
+                    self._selectedCapabilityIndex = None
+                    for logicalIndex, itemRect in self._expandedRowRects(
+                            self._capabilityRows()):
+                        if itemRect.contains(pos):
+                            self._selectedCapabilityIndex = logicalIndex
+                            break
+                    self.update()
+                return
+            if event.button() != QtCore.Qt.RightButton:
+                return
+            self._pressPos = event.position()
+            self._menuStack = [(self._pressPos.x(), self._pressPos.y(), self._leafItems())]
+            self.update()
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
 
     def mouseMoveEvent(self, event):
-        if not self._menuStack:
-            return
-        pos = event.position()
-        moved = math.hypot(pos.x() - self._pressPos.x(), pos.y() - self._pressPos.y())
-        if moved < _DRAG_THRESHOLD_PX:
-            return
-        self.update()
+        try:
+            if not self._menuStack:
+                return
+            pos = event.position()
+            moved = math.hypot(pos.x() - self._pressPos.x(), pos.y() - self._pressPos.y())
+            if moved < _DRAG_THRESHOLD_PX:
+                return
+            self.update()
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
 
     def mouseReleaseEvent(self, event):
-        if event.button() != QtCore.Qt.RightButton or not self._menuStack:
-            return
-        pos = event.position()
-        moved = math.hypot(pos.x() - self._pressPos.x(), pos.y() - self._pressPos.y())
-        if moved < _DRAG_THRESHOLD_PX:
-            self._menuStack = []
-            self.update()
-            return
+        try:
+            if event.button() != QtCore.Qt.RightButton or not self._menuStack:
+                return
+            pos = event.position()
+            moved = math.hypot(pos.x() - self._pressPos.x(), pos.y() - self._pressPos.y())
+            if moved < _DRAG_THRESHOLD_PX:
+                self._menuStack = []
+                self.update()
+                return
 
-        mcx, mcy, items = self._menuStack[-1]
-        positions = computeRadialLayout(mcx, mcy, len(items), _MENU_RADIUS)
-        index = hitTestRadialItem(pos.x(), pos.y(), positions, _ITEM_HALF_WIDTH, _ITEM_HALF_HEIGHT)
-        self._menuStack = []
-        if index is not None:
-            _label, (kind, flagName) = items[index]
-            if kind == "leaf":
-                self._applyCapability(flagName)
-        self.update()
+            mcx, mcy, items = self._menuStack[-1]
+            positions = computeRadialLayout(mcx, mcy, len(items), _MENU_RADIUS)
+            index = hitTestRadialItem(pos.x(), pos.y(), positions,
+                                      _ITEM_HALF_WIDTH, _ITEM_HALF_HEIGHT)
+            self._menuStack = []
+            if index is not None:
+                _label, (kind, flagName) = items[index]
+                if kind == "leaf":
+                    self._applyCapability(flagName)
+            self.update()
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
 
     def _applyCapability(self, flagName):
         try:
@@ -260,8 +383,8 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(picker)
         combo = QtWidgets.QComboBox()
         rows = cmds.maroListAxisNodes()
-        for i in range(len(rows) // 10):
-            f = rows[i * 10:(i + 1) * 10]
+        for i in range(len(rows) // AXIS_FIELDS):
+            f = rows[i * AXIS_FIELDS:(i + 1) * AXIS_FIELDS]
             if f[0] == self._axis:
                 continue  # 자기 자신은 소스로 고를 수 없다
             combo.addItem(f[8] if f[8] else f[0], f[0])
@@ -298,22 +421,52 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
         picker.show()
 
     def mouseDoubleClickEvent(self, event):
-        rows = self._capabilityRows()
-        connected = [r for r in rows if r["connected"]]
-        if len(connected) >= 2:
-            self._expanded = not self._expanded
-            self.update()
+        try:
+            rows = self._capabilityRows()
+            connected = [r for r in rows if r["connected"]]
+            if len(connected) >= 2:
+                self._expanded = not self._expanded
+                if not self._expanded:
+                    # 접으면 선택도 함께 푼다 -- 안 보이는 행이 선택된 채로
+                    # 남으면 Delete가 화면에 없는 것을 지운다.
+                    self._selectedCapabilityIndex = None
+                self.update()
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
 
     def keyPressEvent(self, event):
-        if event.key() != QtCore.Qt.Key_Delete:
-            return
-        rows = self._capabilityRows()
-        target = indexOfCapabilityToPeel(rows)
-        if target is None:
-            return
         try:
-            cmds.maroDisconnectCapability(self._axis, index=target)
-        except RuntimeError as error:
-            print("Maro: maroDisconnectCapability failed -- {}".format(error))
-            return
-        self.update()
+            if event.key() != QtCore.Qt.Key_Delete:
+                return
+            rows = self._capabilityRows()
+            # [최종 리뷰 I-1(d)] 설계 스펙 §5.3은 Delete에 두 동작을 준다:
+            #  - 접힌 상태(또는 고른 행이 없을 때) -> 가장 나중에 추가된
+            #    능력 하나만 벗긴다.
+            #  - 펼친 상태에서 개별 항목을 고른 뒤 -> 그 항목만 지운다.
+            # 선택 인덱스가 아직 실제로 연결돼 있는지 다시 확인한다 --
+            # 고른 뒤 다른 경로(다른 SONE, 스크립트)로 그 슬롯이 끊겼을 수
+            # 있고, 그때는 조용히 "가장 나중" 경로로 되돌아가는 편이
+            # 없는 인덱스에 대고 커맨드를 부르는 것보다 낫다.
+            target = None
+            if self._expanded and self._selectedCapabilityIndex is not None:
+                for row in rows:
+                    if (row["logicalIndex"] == self._selectedCapabilityIndex
+                            and row["connected"]):
+                        target = self._selectedCapabilityIndex
+                        break
+            if target is None:
+                target = indexOfCapabilityToPeel(rows)
+            if target is None:
+                return
+            try:
+                cmds.maroDisconnectCapability(self._axis, index=target)
+            except RuntimeError as error:
+                print("Maro: maroDisconnectCapability failed -- {}".format(error))
+                return
+            if self._selectedCapabilityIndex == target:
+                self._selectedCapabilityIndex = None
+            self.update()
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()

@@ -195,26 +195,26 @@ def buildUI():
     # maroRosProxy import와 같은 이유 -- 이 모듈의 import 시점과
     # maroObjectNodeEditor가 필요한 시점을 떼어 놓는다).
     import maroObjectNodeEditor
-    axisPanelWidget = maroObjectNodeEditor.buildWidget()
+    objectNodeEditorWidget = maroObjectNodeEditor.buildWidget()
 
     editorHostLayoutPtr = omui.MQtUtil.findLayout(
         cmds.control(editorHost, query=True, fullPathName=True))
     if editorHostLayoutPtr is None:
         raise RuntimeError(
             "maroMainWindow: MQtUtil.findLayout() could not resolve editorHost "
-            "{!r} -- cannot embed the axis panel widget.".format(editorHost))
-    axisPanelName = omui.MQtUtil.addWidgetToMayaLayout(
-        int(shiboken6.getCppPointer(axisPanelWidget)[0]), int(editorHostLayoutPtr))
-    if not axisPanelName:
+            "{!r} -- cannot embed the object node editor (ONE) widget.".format(editorHost))
+    objectNodeEditorName = omui.MQtUtil.addWidgetToMayaLayout(
+        int(shiboken6.getCppPointer(objectNodeEditorWidget)[0]), int(editorHostLayoutPtr))
+    if not objectNodeEditorName:
         raise RuntimeError(
             "maroMainWindow: MQtUtil.addWidgetToMayaLayout() returned no UI name "
-            "for the axis panel.")
-    _EMBEDDED[EDITOR_HOST_NAME] = axisPanelWidget
+            "for the object node editor (ONE).")
+    _EMBEDDED[EDITOR_HOST_NAME] = objectNodeEditorWidget
     cmds.formLayout(
         editorHost, edit=True,
         attachForm=[
-            (axisPanelName, "top", 0), (axisPanelName, "left", 0),
-            (axisPanelName, "right", 0), (axisPanelName, "bottom", 0),
+            (objectNodeEditorName, "top", 0), (objectNodeEditorName, "left", 0),
+            (objectNodeEditorName, "right", 0), (objectNodeEditorName, "bottom", 0),
         ])
 
     # 버튼은 위쪽 좁은 띠, 뷰포트가 나머지 전부. 정확한 비율은 스파이크
@@ -288,6 +288,21 @@ def teardown():
     try:
         import maroObjectNodeEditor
         maroObjectNodeEditor.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
+        import traceback
+        traceback.print_exc()
+
+    # [최종 리뷰 C-1] SONE 팝업은 MaroUI와 무관한 독립 최상위 창이라
+    # workspaceControl을 닫아도, MaroPluginMain.cpp의 언로드 정리가
+    # maroMainWindowControl을 닫아도 함께 닫히지 않는다. 열린 채로 언로드되면
+    # paintEvent/keyPressEvent가 이미 deregister된 커맨드를 리페인트/키
+    # 입력마다 계속 부른다. **이 호출은 커맨드 deregister보다 먼저 일어나야
+    # 한다** -- MaroPluginMain.cpp의 uninitializePlugin에서 이 teardown()
+    # 호출(runPluginPythonModule)이 모든 deregisterCommand보다 위에 있다는
+    # 것을 확인했다.
+    try:
+        import maroSingleObjectNodeEditor
+        maroSingleObjectNodeEditor.stop()
     except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
         import traceback
         traceback.print_exc()

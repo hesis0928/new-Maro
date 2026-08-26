@@ -510,6 +510,18 @@ MStatus uninitializePlugin(MObject obj) {
         maro::shutdownBridge();
         maro::MaroDeleteWatcher::uninstall();
 
+        // dagMenuProc를 Maya 원본 정의로 되돌린다. initializePlugin의
+        // install()과 짝이며, 둘 다 멱등이라 install이 실패해서 아무것도
+        // 바꾸지 않았어도 여기서 하는 일이 없다.
+        //
+        // **이 복원을 빠뜨리면 언로드 뒤에도 세션 전체의 오브젝트 우클릭
+        // 메뉴가 사라진 플러그인의 파이썬 코드를 계속 부른다** -- 이 파일의
+        // 다른 어떤 정리보다 파급이 넓은 항목이라 언로드 정리의 맨 앞에 둔다.
+        //
+        // 실패해도 언로드를 막지 않는다 -- runPluginPythonModule은 예외를
+        // 삼키고 MStatus로만 알린다(그리고 이 블록 전체가 try/catch 안이다).
+        maro::runPluginPythonModule("maroDagMenu", "maroDagMenu.uninstall()");
+
         // 모든 서브시스템(ROS 프록시의 idle scriptJob 등)을 뗀다. 창의
         // closeCommand가 이미 maroMainWindow.teardown()을 부르지만, 그것만
         // 으로는 세 경로 중 하나만 덮인다:
@@ -534,15 +546,12 @@ MStatus uninitializePlugin(MObject obj) {
         //
         // 실패해도 언로드를 막지 않는다 -- runPluginPythonModule은 예외를
         // 삼키고 MStatus로만 알린다(그리고 이 블록 전체가 try/catch 안이다).
-        // dagMenuProc를 Maya 원본 정의로 되돌린다. initializePlugin의
-        // install()과 짝이며, 둘 다 멱등이라 install이 실패해서 아무것도
-        // 바꾸지 않았어도 여기서 하는 일이 없다.
         //
-        // **이 복원을 빠뜨리면 언로드 뒤에도 세션 전체의 오브젝트 우클릭
-        // 메뉴가 사라진 플러그인의 파이썬 코드를 계속 부른다** -- 이 파일의
-        // 다른 어떤 정리보다 파급이 넓은 항목이라 언로드 정리의 맨 앞에 둔다.
-        maro::runPluginPythonModule("maroDagMenu", "maroDagMenu.uninstall()");
-
+        // [최종 리뷰 C-1] teardown()은 이제 SONE 팝업(독립 최상위 창이라
+        // 아래 workspaceControl -e -close로는 닫히지 않는다)도 함께 닫는다.
+        // 그 창들의 paintEvent/keyPressEvent가 부르는 커맨드들
+        // (maroListAxisNodes 등)의 deregister는 전부 이 줄 **아래**에 있다 --
+        // 순서가 뒤집히면 닫히는 도중의 리페인트가 사라진 커맨드를 찾는다.
         maro::runPluginPythonModule("maroMainWindow", "maroMainWindow.teardown()");
 
         // 패널이 열린 채 언로드되면 Maya가 사라진 코드의 UI를 계속 붙든다.
