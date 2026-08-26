@@ -399,6 +399,7 @@ def _onMenuItemClicked(object_):
     r, g, b = float(values[0]), float(values[1]), float(values[2])
 
     cmds.undoInfo(openChunk=True)
+    bindFailed = False
     try:
         axis = cmds.createNode("maroAxis")
         # 풀 경로로 정규화 -- 위 _findBoundAxis()의 docstring과 같은 이유.
@@ -406,10 +407,26 @@ def _onMenuItemClicked(object_):
         # 짧은 이름의 노드가 다른 계층에 생겨도 이 축의 SONE 키는 처음
         # 만들어질 때의 형태에 머물러 있지 않게 항상 여기서 확정한다.
         axis = cmds.ls(axis, long=True)[0]
-        cmds.maroBindAxis(axis, object_)
-        cmds.setAttr(axis + ".displayName", displayName, type="string")
-        cmds.setAttr(axis + ".displayColor", r, g, b, type="double3")
+        try:
+            cmds.maroBindAxis(axis, object_)
+            cmds.setAttr(axis + ".displayName", displayName, type="string")
+            cmds.setAttr(axis + ".displayColor", r, g, b, type="double3")
+        except Exception as exc:
+            # maroBindAxis는 대상이 transform이 아니거나 이미 축이 바인딩돼
+            # 있으면(위 _findBoundAxis 검사와의 TOCTOU 경합 포함) 예외를
+            # 던질 수 있다. 이 시점에 axis 노드는 이미 만들어져 있으므로
+            # 그대로 두면 바인딩도 안 되고 이름/색도 없는 고아 노드가
+            # 씬에 남는다 -- 지운다. 예외는 _addMenuItem과 같은 규율로
+            # cmds.warning으로만 알리고 밖으로 내보내지 않는다.
+            bindFailed = True
+            if cmds.objExists(axis):
+                cmds.delete(axis)
+            cmds.warning("Maro: failed to bind the new axis to '{}': {}"
+                         .format(object_, exc))
     finally:
         cmds.undoInfo(closeChunk=True)
+
+    if bindFailed:
+        return
 
     maroSingleObjectNodeEditor.openSingleObjectNodeEditor(axis)
