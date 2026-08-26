@@ -393,28 +393,32 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
         layout.addWidget(applyButton)
 
         def _onApply():
-            sourceAxis = combo.currentData()
-            if not sourceAxis:
-                picker.close()
-                return
-            isLinear = cmds.getAttr(sourceAxis + ".driveIsLinear")
-            cmds.undoInfo(openChunk=True)
             try:
-                cmds.setAttr(couplingNodeName + ".sourceIsLinear", isLinear)
-                if isLinear:
-                    cmds.connectAttr(sourceAxis + ".positionLinear",
-                                     couplingNodeName + ".sourceValueLinear", force=True)
-                else:
-                    cmds.connectAttr(sourceAxis + ".position",
-                                     couplingNodeName + ".sourceValue", force=True)
-            except RuntimeError as error:
-                print("Maro: coupling source connection failed -- {}".format(error))
+                sourceAxis = combo.currentData()
+                if not sourceAxis:
+                    picker.close()
+                    return
+                isLinear = cmds.getAttr(sourceAxis + ".driveIsLinear")
+                cmds.undoInfo(openChunk=True)
+                try:
+                    cmds.setAttr(couplingNodeName + ".sourceIsLinear", isLinear)
+                    if isLinear:
+                        cmds.connectAttr(sourceAxis + ".positionLinear",
+                                         couplingNodeName + ".sourceValueLinear", force=True)
+                    else:
+                        cmds.connectAttr(sourceAxis + ".position",
+                                         couplingNodeName + ".sourceValue", force=True)
+                except RuntimeError as error:
+                    print("Maro: coupling source connection failed -- {}".format(error))
+                    picker.close()
+                    return
+                finally:
+                    cmds.undoInfo(closeChunk=True)
                 picker.close()
-                return
-            finally:
-                cmds.undoInfo(closeChunk=True)
-            picker.close()
-            self.update()
+                self.update()
+            except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+                import traceback
+                traceback.print_exc()
 
         applyButton.clicked.connect(_onApply)
         picker.move(self.mapToGlobal(QtCore.QPoint(int(self.width() / 2), int(self.height() / 2))))

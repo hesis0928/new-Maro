@@ -516,15 +516,16 @@ cmds.file(new=True, force=True)
 | 5 | SONE 안에서 우클릭+홀드+드래그 -> 7개 항목이 방사형으로 펼쳐지고, 하나에서 릴리즈하면 그 능력이 적용됨 | |
 | 6 | 능력이 부여된 SONE 노드를 선택하고 Delete -> 노드는 남고 `undefined`로 복귀 | |
 | 7 | 능력을 2개 이상 쌓은 뒤 노드를 더블클릭 -> 쌓인 목록이 펼쳐짐, 다시 더블클릭하면 접힘 | |
-| 8 | `Coupling` 추가 시 소스 축 드롭다운 팝업이 뜨고, 자기 자신은 목록에 없고 다른 축이 표시 이름(없으면 노드 이름)으로 나열됨 | |
-| 9 | 드롭다운에서 다른 축을 골라 Connect 클릭 -> 팝업이 닫히고, `cmds.listConnections`로 그 coupling 노드의 `sourceValue`(각) 또는 `sourceValueLinear`(선형, 소스 축의 `driveIsLinear`에 따라 갈림)가 소스 축의 `position`/`positionLinear`로부터 연결돼 있음이 확인됨 | |
-| 10 | MaroUI를 열고 하단 패널에서 만들어진 축마다 GSON이 그리드로 보임, 지정한 이름/색이 그대로 반영됨 | |
-| 11 | GSON 더블클릭 -> 해당 SONE가 뜨거나(닫혀 있었으면) 앞으로 옴(열려 있었으면) | |
-| 12 | GSON 우클릭 -> Rename/Recolor/Delete 각각 정상 동작, Delete는 축과 그 capability 노드까지 완전히 제거 | |
-| 13 | 씬에서 오브젝트 선택 -> GSON 쪽이 갱신됨(반대 방향은 GSON 클릭 시 씬 선택이 바뀜) | |
-| 14 | `maroUnloadPlugin` 후 아무 오브젝트나 우클릭 -> `Maro node editor` 항목이 사라지고 나머지 메뉴는 로드 전과 동일 | |
-| 15 | MaroUI를 연 채로 플러그인 언로드 -> 크래시 없음, SONE 팝업(및 Coupling 소스 픽커)이 떠 있는 상태로 언로드해도 크래시 없음 | |
-| 16 | Phase 2/3의 듀얼 뷰포트(§1-1/§1-2) 재확인 -- 이번 레이아웃 변경으로 회귀 없음 | |
+| 8 | 펼쳐진 capability 목록 안에서 특정 행을 클릭해 선택한 뒤 Delete -> 선택한 그 capability **하나만** 제거됨(가장 최근에 추가한 것이 아니라). 펼쳐진 목록에서 아무것도 선택하지 않은 채 Delete -> 기존과 동일하게 가장 최근에 추가한 capability가 제거됨 | |
+| 9 | `Coupling` 추가 시 소스 축 드롭다운 팝업이 뜨고, 자기 자신은 목록에 없고 다른 축이 표시 이름(없으면 노드 이름)으로 나열됨 | |
+| 10 | 드롭다운에서 다른 축을 골라 Connect 클릭 -> 팝업이 닫히고, `cmds.listConnections`로 그 coupling 노드의 `sourceValue`(각) 또는 `sourceValueLinear`(선형, 소스 축의 `driveIsLinear`에 따라 갈림)가 소스 축의 `position`/`positionLinear`로부터 연결돼 있음이 확인됨 | |
+| 11 | MaroUI를 열고 하단 패널에서 만들어진 축마다 GSON이 그리드로 보임, 지정한 이름/색이 그대로 반영됨 | |
+| 12 | GSON 더블클릭 -> 해당 SONE가 뜨거나(닫혀 있었으면) 앞으로 옴(열려 있었으면) | |
+| 13 | GSON 우클릭 -> Rename/Recolor/Delete 각각 정상 동작, Delete는 축과 그 capability 노드까지 완전히 제거. 메뉴에 `Unbind` 항목도 있음 -- **바인딩된 축에서만** 보이고, 이미 언바인드된 축의 GSON에서는 안 보임. `Unbind` 클릭 -> 축과 대상 오브젝트의 연결이 끊기고, 이후 그 GSON을 다시 우클릭하면 재바인딩 전까지는 `Unbind` 항목이 더 이상 나타나지 않음 | |
+| 14 | 씬에서 오브젝트 선택 -> 해당 GSON에 **눈에 보이는 강조 테두리**가 표시됨(반대 방향은 GSON 클릭 시 씬 선택이 바뀜). 씬 선택을 해제하면(빈 곳 클릭 등) GSON의 강조 테두리도 사라짐 | |
+| 15 | `maroUnloadPlugin` 후 아무 오브젝트나 우클릭 -> `Maro node editor` 항목이 사라지고 나머지 메뉴는 로드 전과 동일 | |
+| 16 | MaroUI를 연 채로 플러그인 언로드 -> 크래시 없음, SONE 팝업(및 Coupling 소스 픽커)이 떠 있는 상태로 언로드해도 크래시 없음 | |
+| 17 | Phase 2/3의 듀얼 뷰포트(§1-1/§1-2) 재확인 -- 이번 레이아웃 변경으로 회귀 없음 | |
 
 ## 4. `workspaceControl` 통합이 `maroDiagPanel`과 동등한가
 

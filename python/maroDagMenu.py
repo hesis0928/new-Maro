@@ -270,6 +270,9 @@ def uninstall():
             _BACKUP_TEMP_FILE = None
         _INSTALLED = False
         _INSTALLED_WHATIS = None
+        # 흔적을 지운다 -- 이 경로는 복원하지 않고 돌아가지만, 다른 모든
+        # 종료 경로와 같은 정리 규율(설치 흔적을 남기지 않는다)을 지킨다.
+        mel.eval('global string ${0}; ${0} = "";'.format(_MEL_SENTINEL_VAR))
         return
 
     restored = False

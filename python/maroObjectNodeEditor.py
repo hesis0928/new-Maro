@@ -263,11 +263,20 @@ class ObjectNodeEditor(QtWidgets.QWidget):
                 print("Maro: could not list capabilities of {} -- {}".format(axis, error))
 
             parents = cmds.listRelatives(axis, parent=True, fullPath=True) or []
+            # [최종 리뷰 재검토] 자동 생성된 부모 트랜스폼(위 도크스트링의
+            # 경우 1)은 축 하나만 자식으로 가진다는 것이 전제다. 사용자가
+            # 축을 수동으로 다른(형제가 있는) 트랜스폼 밑으로 재부모시킨
+            # 드문 경우까지 지우면 그 형제와 무관한 노드를 함께 날리게
+            # 되므로, 축을 지우기 전에 "그 부모의 유일한 자식이 이 축인가"
+            # 를 먼저 확인해 둔다.
+            soleChildParents = [
+                parent for parent in parents
+                if cmds.listRelatives(parent, children=True, fullPath=True) == [axis]]
             try:
                 if capabilityNodes:
                     cmds.delete(capabilityNodes)
                 cmds.delete(axis)
-                for parent in parents:
+                for parent in soleChildParents:
                     if cmds.objExists(parent):
                         cmds.delete(parent)
             except RuntimeError as error:
