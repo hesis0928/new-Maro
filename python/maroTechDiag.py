@@ -8,6 +8,8 @@ DG 어트리뷰트 없이 기존 maroListAxisNodes 조회 + cmds.getAttr만으�
 없이 계약을 검증한다.
 """
 
+import itertools
+
 LIMIT_PROXIMITY_THRESHOLD = 0.9
 
 # C++ 쪽 계약. maroObjectNodeEditor.py/maroSingleObjectNodeEditor.py도 각자
@@ -130,6 +132,31 @@ def checkJointStatesIntegrity(axisRows):
                 "severity": "warning",
                 "summary": "{}: enabled and bound but has no capability driving it".format(axis),
                 "axis": axis,
+                "remedy": None,
+            })
+    return findings
+
+
+def _boxesOverlap(a, b):
+    """두 AABB(xmin,ymin,zmin,xmax,ymax,zmax)가 실제로 겹치는지(맞닿기만
+    하는 건 제외-- 부등호를 엄격하게 잡는다)."""
+    return (a[0] < b[3] and b[0] < a[3] and
+            a[1] < b[4] and b[1] < a[4] and
+            a[2] < b[5] and b[2] < a[5])
+
+
+def checkMeshCollisions(boundingBoxesByMesh):
+    """모든 메쉬 쌍에 대해 월드 바운딩박스(AABB) 겹침을 검사한다."""
+    findings = []
+    meshes = sorted(boundingBoxesByMesh.keys())
+    for meshA, meshB in itertools.combinations(meshes, 2):
+        if _boxesOverlap(boundingBoxesByMesh[meshA], boundingBoxesByMesh[meshB]):
+            findings.append({
+                "category": "meshCollision",
+                "severity": "warning",
+                "summary": "{} and {} bounding boxes overlap".format(meshA, meshB),
+                "axis": None,
+                "meshes": (meshA, meshB),
                 "remedy": None,
             })
     return findings

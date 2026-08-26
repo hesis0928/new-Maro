@@ -93,3 +93,27 @@ rowsUnbound = [{"axisFullPath": "|a1", "jointName": "", "boundTargetPath": "",
 assert diag.checkJointStatesIntegrity(rowsUnbound) == [], "unbound axes are never flagged"
 
 print("checkJointStatesIntegrity OK")
+
+# --- checkMeshCollisions ---
+boxes = {
+    "|cubeA": (0.0, 0.0, 0.0, 2.0, 2.0, 2.0),
+    "|cubeB": (1.0, 1.0, 1.0, 3.0, 3.0, 3.0),   # overlaps cubeA
+    "|cubeC": (10.0, 10.0, 10.0, 12.0, 12.0, 12.0),  # far away, no overlap
+}
+findings = diag.checkMeshCollisions(boxes)
+assert len(findings) == 1, findings
+assert findings[0]["category"] == "meshCollision"
+assert findings[0]["axis"] is None
+assert set(findings[0]["meshes"]) == {"|cubeA", "|cubeB"}
+assert findings[0]["remedy"] is None
+
+# Touching-but-not-overlapping boxes (shared face) must NOT be flagged.
+touchingBoxes = {
+    "|cubeD": (0.0, 0.0, 0.0, 1.0, 1.0, 1.0),
+    "|cubeE": (1.0, 0.0, 0.0, 2.0, 1.0, 1.0),
+}
+assert diag.checkMeshCollisions(touchingBoxes) == [], "exactly-touching boxes should not count as a collision"
+
+assert diag.checkMeshCollisions({}) == []
+assert diag.checkMeshCollisions({"|onlyOne": (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)}) == []
+print("checkMeshCollisions OK")
