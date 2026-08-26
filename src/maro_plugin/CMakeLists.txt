@@ -9,6 +9,7 @@ set(SOURCE_FILES
     MaroCapabilityNodes.cpp
     MaroLidarNode.cpp
     MaroPointCloudNode.cpp
+    MaroLidarScan.cpp
     MaroCommands.cpp
     MaroDeleteWatcher.cpp
     MaroRosRuntime.cpp
