@@ -48,7 +48,7 @@ def sliceAxisTechRows(flat):
             "jointName": f[1],
             "boundTargetPath": f[2],
             # f[3]은 부모 축 노드의 full DAG path(없으면 ""). 메쉬 충돌
-            # 검사에서 "인접(부모-자식) 링크 쌍"을 걸러내는 데 쓴다.
+            # 검사에서 조상/자손 관계인 링크 쌍 전체를 걸러내는 데 쓴다.
             "parentAxisPath": f[3],
             "enabled": f[5] == "1",
             "conventionAxis": int(f[6]),
@@ -250,7 +250,7 @@ def adjacentMeshPairs(axisRows):
 
 
 def filterAdjacentMeshCollisions(findings, pairs):
-    """`checkMeshCollisions()` 결과에서 인접(부모-자식) 메쉬 쌍의 항목을 뺀다.
+    """`checkMeshCollisions()` 결과에서 조상/자손 관계인 메쉬 쌍의 항목을 뺀다.
 
     필터링을 `checkMeshCollisions()` 안이 아니라 여기에 두는 이유: 그
     함수의 계약("박스들을 주면 겹치는 것을 찾아준다")은 그 자체로 여전히
