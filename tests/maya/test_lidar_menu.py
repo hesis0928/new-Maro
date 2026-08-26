@@ -71,7 +71,13 @@ print("re-click reopens the existing panel instead of duplicating OK")
 # --- 메쉬가 없는 오브젝트: placeholder 구 자동 생성 -----------------------
 jointObject = cmds.createNode("joint", name="lidarTestJoint")
 jointObject = cmds.ls(jointObject, long=True)[0]
-cmds.xform(jointObject, worldSpace=True, translation=(10, 3, 0))
+# [Fix round 2] 예전 좌표 (10, 3, 0)은 X축 오염 버그를 우연히 Y만은 맞게
+# 만들어 숨겨 줬다(반지름 1짜리 구가 원점에 있으면 bbox의 Y 상단이 마침
+# 1.0이 되는데, 이 조인트의 참값도 우연히 비슷한 자리라 어긋남이 드러나지
+# 않았다). X/Y/Z 어느 하나도 0이거나 우연히 맞아떨어지지 않는 좌표로 옮겨서,
+# X 오염이든 가상의 Y/Z 오염이든 회귀하면 반드시 0이 아닌 큰 오차로
+# 드러나게 한다.
+cmds.xform(jointObject, worldSpace=True, translation=(10, -5, 3))
 openedPanels.clear()
 
 # [I-3] `_createPlaceholderTargetMesh()`가 실제로 부르는 **순간**(placeholder
@@ -128,16 +134,30 @@ print("placeholder auto-selected OK")
 
 # [I-3] preSphereBbox는 구가 존재하기 전에 잡은 값이므로 구 자신의 기여를
 # 전혀 포함하지 않는다 -- `_createPlaceholderTargetMesh()`는 구의 중심을
-# 그 bbox의 상단(ymax)에 그대로 놓으므로(반지름을 빼지 않는다, 소스의
-# `topCenter = (..., bbox[4], ...)` 참고), 기대값은 `preSphereBbox[4]`
-# 자체다. 배치 로직이 깨져서 엉뚱한 좌표에 구를 놓으면 이 비교가 실제로
-# 실패한다(예전의 자기참조 비교와 달리).
+# 그 bbox의 상단(ymax) 중앙에 그대로 놓으므로(반지름을 빼지 않는다, 소스의
+# `topCenter = ((bbox[0]+bbox[3])/2, bbox[4], (bbox[2]+bbox[5])/2)` 참고),
+# 기대값은 X/Z는 그 bbox의 수평/깊이 중심, Y는 `preSphereBbox[4]` 그대로다.
+# 배치 로직이 깨져서 엉뚱한 좌표에 구를 놓으면 이 비교가 실제로 실패한다
+# (예전의 자기참조 비교와 달리).
+#
+# [Fix round 2] X/Z 검사는 새로 추가한 것이다 -- 예전에는 Y만 확인했는데,
+# 그 상태로는 "구가 이미 object_ 밑에 parent된 뒤에 bbox를 다시 재서
+# X 중심이 원점 쪽으로 오염되는" 버그를 전혀 잡지 못했다(Y는 우연히 맞고
+# X만 틀리는 형태의 버그였다). 아래 두 assert가 바로 그 회귀를 잡는다.
 placeholderPos = cmds.xform(placeholder[0], query=True, worldSpace=True, translation=True)
+expectedX = (preSphereBbox[0] + preSphereBbox[3]) / 2.0
 expectedY = preSphereBbox[4]
+expectedZ = (preSphereBbox[2] + preSphereBbox[5]) / 2.0
+assert abs(placeholderPos[0] - expectedX) < 1e-6, (
+    f"expected the placeholder centered at the pre-existing (pre-sphere) bbox "
+    f"horizontal center x={expectedX}, got x={placeholderPos[0]}")
 assert abs(placeholderPos[1] - expectedY) < 1e-6, (
     f"expected the placeholder centered at the pre-existing (pre-sphere) bbox top "
     f"y={expectedY}, got y={placeholderPos[1]}")
-print("placeholder positioned at bounding-box top OK")
+assert abs(placeholderPos[2] - expectedZ) < 1e-6, (
+    f"expected the placeholder centered at the pre-existing (pre-sphere) bbox "
+    f"depth center z={expectedZ}, got z={placeholderPos[2]}")
+print("placeholder positioned at bounding-box top-center (x/y/z) OK")
 
 jointLidars = [l for l in cmds.ls(type="maroLidar", long=True) if l != lidar]
 assert len(jointLidars) == 1
@@ -179,3 +199,48 @@ assert openedPanels == [jointLidar], (
     f"expected re-click to reopen the existing LiDAR's panel, got {openedPanels}")
 print("re-click on a non-mesh (placeholder-mounted) object reopens the existing "
       "panel instead of duplicating OK")
+
+# --- I-2b 회귀 방지: _createPlaceholderTargetMesh() 자신의 몸통(parent/
+# xform/select) 중 하나가 실패해도 고아 구가 남으면 안 된다 -----------------
+# [Fix round 2] 예전에는 _onLidarMenuItemClicked()의 실패 정리 로직이
+# placeholderSphere 변수를 _createPlaceholderTargetMesh()가 **정상적으로
+# 반환한 뒤에야** 채웠다. polySphere가 이미 구를 만든 뒤, 그 함수가
+# 반환하기 전(parent/xform/select 중 하나)에 예외가 나면 호출부는 그 구가
+# 생겼다는 사실 자체를 몰라 정리하지 못했다. cmds.select를 일시적으로
+# 실패하게 만들어(placeholder 배치 순서상 select가 함수의 마지막 문장이라
+# parent/xform은 이미 끝난 뒤의 실패를 재현한다) 이 경로를 직접 재현한다.
+inducedFailureJoint = cmds.createNode("joint", name="lidarTestJointInducedFailure")
+inducedFailureJoint = cmds.ls(inducedFailureJoint, long=True)[0]
+cmds.xform(inducedFailureJoint, worldSpace=True, translation=(4, 4, 4))
+openedPanels.clear()
+
+lidarCountBeforeInducedFailure = len(cmds.ls(type="maroLidar", long=True))
+pointCloudCountBeforeInducedFailure = len(cmds.ls(type="maroPointCloud", long=True))
+
+_originalSelect = cmds.select
+
+
+def _failingSelect(*args, **kwargs):
+    raise RuntimeError("induced failure for I-2b regression test")
+
+
+cmds.select = _failingSelect
+try:
+    maroDagMenu._onLidarMenuItemClicked(inducedFailureJoint)
+finally:
+    cmds.select = _originalSelect
+
+assert len(cmds.ls(type="maroLidar", long=True)) == lidarCountBeforeInducedFailure, (
+    "an induced failure inside _createPlaceholderTargetMesh() must not leave an "
+    "orphan maroLidar behind")
+assert len(cmds.ls(type="maroPointCloud", long=True)) == pointCloudCountBeforeInducedFailure, (
+    "an induced failure inside _createPlaceholderTargetMesh() must not leave an "
+    "orphan maroPointCloud behind")
+orphanSpheres = cmds.ls(
+    "lidarTestJointInducedFailure_maroLidarTarget*", long=True, type="transform")
+assert orphanSpheres == [], (
+    "an induced failure inside _createPlaceholderTargetMesh() (after polySphere "
+    f"already created the sphere, before the function returns) must not leave an "
+    f"orphan placeholder sphere in the scene, got {orphanSpheres}")
+print("induced failure inside _createPlaceholderTargetMesh() cleans up its own "
+      "sphere instead of leaking it (I-2b) OK")

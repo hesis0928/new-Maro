@@ -611,26 +611,57 @@ def _createPlaceholderTargetMesh(object_):
     받아들여지는 동작이다. 생성 직후 이 구를 선택 상태로 만들어 사용자가
     바로 크기/위치를 다듬을 수 있게 한다.
     """
-    shortName = object_.split("|")[-1]
-    sphereTransform, _makeNode = cmds.polySphere(name=shortName + "_maroLidarTarget", radius=1.0)
-    # [C-1] cmds.parent()가 옮긴 뒤에는 옮기기 전의 이름(sphereTransform)이
-    # 더 이상 유효하지 않을 수 있다 -- 씬에 같은 짧은 이름의 노드가 이미
-    # 존재하면(예: 같은 오브젝트에 두 번째로 우클릭해서 placeholder를 다시
-    # 만들려는 경우) polySphere가 "|shortName" 같은 경로-한정 이름을 돌려주고,
-    # cmds.parent() 뒤에는 그 경로가 더는 아무것도 가리키지 않아
-    # cmds.ls(sphereTransform, long=True)가 빈 리스트를 주어 [0]에서
-    # IndexError가 난다(실측 확인). _onLidarMenuItemClicked이 lidar 셰이프에
-    # 대해 이미 쓰는 것과 같은 방식으로, cmds.parent()가 돌려주는 새 이름과
-    # 이미 알고 있는 새 부모(object_)를 조합해 모호하지 않은 새 풀 경로를
-    # 직접 구성한다.
-    newShortName = cmds.parent(sphereTransform, object_)[0].split("|")[-1]
-    sphereFullPath = object_ + "|" + newShortName
-
+    # [Fix round 2] object_의 바운딩박스는 반드시 구를 만들고 그 밑에
+    # 매달기 **전에** 측정해야 한다. cmds.exactWorldBoundingBox()는 모든 DAG
+    # 자손을 포함하므로, 구를 먼저 parent()해 버리면(새 구는 항상 월드 원점
+    # (0,0,0)에서 시작하고, cmds.parent()의 기본 동작은 월드 위치를
+    # 보존한다) 그 시점의 bbox 측정값이 "아직 배치되지 않은 구 자신의 원점
+    # 위치"에 오염된다 -- object_가 원점에서 먼 곳에 있을수록 측정된 중심이
+    # 원점 쪽으로 끌려간다. 실측: 조인트가 월드 (10, 3, 0)에 있을 때 스펙상
+    # 정답은 (10.0, 4.0, 0.0)인데, 구를 먼저 옮기고 나서 bbox를 재던 예전
+    # 코드는 (5.0, 4.0, 0.0)을 냈다(X가 원점 쪽으로 오염됨; 이 케이스는
+    # 우연히 Y만 맞았을 뿐, 조인트가 (10, -5, 0)이면 정답 -4.0 대신 구 자신의
+    # 반지름인 1.0이 나와 Y도 틀린다). 그래서 bbox와 topCenter는 구를 만들기
+    # 전, object_가 아직 그대로인 상태에서 먼저 계산한다.
     bbox = cmds.exactWorldBoundingBox(object_)
     topCenter = ((bbox[0] + bbox[3]) / 2.0, bbox[4], (bbox[2] + bbox[5]) / 2.0)
-    cmds.xform(sphereFullPath, worldSpace=True, translation=topCenter)
 
-    cmds.select(sphereFullPath, replace=True)
+    shortName = object_.split("|")[-1]
+    sphereTransform, _makeNode = cmds.polySphere(name=shortName + "_maroLidarTarget", radius=1.0)
+    # [I-2b] polySphere가 이미 씬에 노드를 만든 뒤이므로, 아래에서 무엇이든
+    # 실패하면(parent/xform/select) 이 함수 자신이 만든 것을 지우고 나서
+    # 다시 던진다. 호출부(_onLidarMenuItemClicked)의 실패 정리 로직은 이
+    # 함수가 값을 **정상적으로 반환한 뒤에야** 생성된 구를 알게 되므로, 반환
+    # 전에 예외가 나면 그쪽은 이 구의 존재 자체를 모른다 -- 정리 책임을
+    # 여기서 스스로 지는 것이 가장 간단하고 확실하다.
+    sphereFullPath = None
+    try:
+        # [C-1] cmds.parent()가 옮긴 뒤에는 옮기기 전의 이름(sphereTransform)이
+        # 더 이상 유효하지 않을 수 있다 -- 씬에 같은 짧은 이름의 노드가 이미
+        # 존재하면(예: 같은 오브젝트에 두 번째로 우클릭해서 placeholder를 다시
+        # 만들려는 경우) polySphere가 "|shortName" 같은 경로-한정 이름을 돌려주고,
+        # cmds.parent() 뒤에는 그 경로가 더는 아무것도 가리키지 않아
+        # cmds.ls(sphereTransform, long=True)가 빈 리스트를 주어 [0]에서
+        # IndexError가 난다(실측 확인). _onLidarMenuItemClicked이 lidar 셰이프에
+        # 대해 이미 쓰는 것과 같은 방식으로, cmds.parent()가 돌려주는 새 이름과
+        # 이미 알고 있는 새 부모(object_)를 조합해 모호하지 않은 새 풀 경로를
+        # 직접 구성한다.
+        newShortName = cmds.parent(sphereTransform, object_)[0].split("|")[-1]
+        sphereFullPath = object_ + "|" + newShortName
+
+        cmds.xform(sphereFullPath, worldSpace=True, translation=topCenter)
+        cmds.select(sphereFullPath, replace=True)
+    except Exception:
+        # parent()가 성공한 뒤라면 sphereFullPath가 살아 있는 이름이고
+        # sphereTransform 쪽은 [C-1] 사유로 이미 죽은 이름일 수 있다. parent()
+        # 자체가 실패했다면 반대로 sphereFullPath는 아직 None이고
+        # sphereTransform이 여전히 유효하다. 그래서 sphereFullPath를 먼저
+        # 확인하고, 없으면 sphereTransform으로 대체한다.
+        orphan = sphereFullPath if sphereFullPath and cmds.objExists(sphereFullPath) else sphereTransform
+        if orphan and cmds.objExists(orphan):
+            cmds.delete(orphan)
+        raise
+
     return sphereFullPath
 
 
