@@ -488,6 +488,44 @@ cmds.maroMainWindow()
       못한다 — 위처럼 메뉴가 존재하는 채로 직접 호출해야 한다.)
 - [ ] `unloadPlugin` 후 "Maro" 메뉴가 메뉴바에서 사라진다.
 
+## 1-4. 노드 캔버스 + 마킹 메뉴 (SONE/ONE, Task 3-9) — **[필수 · go/no-go, 이 플랜 전체의 마지막 판정]**
+
+이 절은 `python/maroDagMenu.py`(오브젝트 우클릭 메뉴 통합), SONE 팝업
+(`python/maroSingleObjectNodeEditor.py`)의 방사형 마킹 메뉴, ONE 오버뷰
+그리드(`python/maroObjectNodeEditor.py`)를 통틀어 검증한다. 지금까지 나온
+모든 절과 마찬가지로 배치 `mayapy`에는 `QApplication`이 없어 실제 마우스
+제스처/다이얼로그/마킹 메뉴 렌더링은 원리적으로 자동 검증이 불가능하다
+(§0의 설명과 동일한 이유) — 이번 태스크가 헤드리스 `mayapy` standalone으로
+실제 빌드된 플러그인에 대고 확인한 것은 `cmds.maroAddCapability(...)[0]`의
+반환 형태, Coupling 드롭다운이 읽는 `maroListAxisNodes()`의 필드 배치(표시
+이름 폴백 포함), 그리고 `sourceValue`/`sourceValueLinear`/`sourceIsLinear`
+연결 로직(각·선형 두 갈래 모두)뿐이다 — 아래 항목은 전부 사람이 대화형
+Maya에서 직접 확인해야 한다.
+
+```python
+cmds.loadPlugin(r"C:\Users\ckd30\Projects\Maya_Ros_Sim\out\build\src\maro_plugin\Release\maro.mll")
+cmds.file(new=True, force=True)
+```
+
+| # | 확인 항목 | 결과 |
+|---|---|---|
+| 1 | `maroLoadPlugin` 후 아무 오브젝트나 우클릭 -> 기존 Maya 기본 항목(Vertex/Edge/Face/...) 전부 그대로 있고 그 안에 `Maro node editor` 항목 추가로 보임 | |
+| 2 | 바인딩 안 된 오브젝트에서 `Maro node editor` 클릭 -> 이름 프롬프트 -> 색상 선택 -> SONE 팝업이 뜨고 새 `maroAxis`가 그 오브젝트에 바인딩됨 | |
+| 3 | 두 다이얼로그 중 아무 데서나 취소 -> 아무 노드도 생성되지 않음 | |
+| 4 | 이미 바인딩된 오브젝트에서 `Maro node editor` 클릭 -> 다이얼로그 없이 바로 그 축의 SONE가 뜸 | |
+| 5 | SONE 안에서 우클릭+홀드+드래그 -> 7개 항목이 방사형으로 펼쳐지고, 하나에서 릴리즈하면 그 능력이 적용됨 | |
+| 6 | 능력이 부여된 SONE 노드를 선택하고 Delete -> 노드는 남고 `undefined`로 복귀 | |
+| 7 | 능력을 2개 이상 쌓은 뒤 노드를 더블클릭 -> 쌓인 목록이 펼쳐짐, 다시 더블클릭하면 접힘 | |
+| 8 | `Coupling` 추가 시 소스 축 드롭다운 팝업이 뜨고, 자기 자신은 목록에 없고 다른 축이 표시 이름(없으면 노드 이름)으로 나열됨 | |
+| 9 | 드롭다운에서 다른 축을 골라 Connect 클릭 -> 팝업이 닫히고, `cmds.listConnections`로 그 coupling 노드의 `sourceValue`(각) 또는 `sourceValueLinear`(선형, 소스 축의 `driveIsLinear`에 따라 갈림)가 소스 축의 `position`/`positionLinear`로부터 연결돼 있음이 확인됨 | |
+| 10 | MaroUI를 열고 하단 패널에서 만들어진 축마다 GSON이 그리드로 보임, 지정한 이름/색이 그대로 반영됨 | |
+| 11 | GSON 더블클릭 -> 해당 SONE가 뜨거나(닫혀 있었으면) 앞으로 옴(열려 있었으면) | |
+| 12 | GSON 우클릭 -> Rename/Recolor/Delete 각각 정상 동작, Delete는 축과 그 capability 노드까지 완전히 제거 | |
+| 13 | 씬에서 오브젝트 선택 -> GSON 쪽이 갱신됨(반대 방향은 GSON 클릭 시 씬 선택이 바뀜) | |
+| 14 | `maroUnloadPlugin` 후 아무 오브젝트나 우클릭 -> `Maro node editor` 항목이 사라지고 나머지 메뉴는 로드 전과 동일 | |
+| 15 | MaroUI를 연 채로 플러그인 언로드 -> 크래시 없음, SONE 팝업(및 Coupling 소스 픽커)이 떠 있는 상태로 언로드해도 크래시 없음 | |
+| 16 | Phase 2/3의 듀얼 뷰포트(§1-1/§1-2) 재확인 -- 이번 레이아웃 변경으로 회귀 없음 | |
+
 ## 4. `workspaceControl` 통합이 `maroDiagPanel`과 동등한가
 
 - [ ] **[필수]** **도킹** — 창을 Maya 창 가장자리로 끌어 도킹되는지, 다시
@@ -563,6 +601,14 @@ Phase 2, Phase 3 판정을 함께 담고 있다(§1-1이 Phase 2, §1-2가 Phase
 | 1-3. Unbind + undo | 4 | 필수 | | | |
 | 1-3. 레이아웃 재구성 후 Phase 2 §1-1/§3 재확인 | 4 | 필수 | | | 회귀 확인 |
 | 1-3. 언로드 go/no-go (패널 + 축 존재 상태) | 4 | 필수 | | | |
+| 1-4. 우클릭 메뉴 통합 (`Maro node editor` 항목, 있음/취소/이미 바인딩) | 5 | 필수 | | | 1-3의 목록형 `AxisPanel`을 대체 — `dagMenuProc` 체이닝 |
+| 1-4. SONE 방사형 마킹 메뉴 (적용/Delete/더블클릭 펼침·접힘) | 5 | 필수 | | | |
+| 1-4. Coupling 소스 축 드롭다운 + 연결 | 5 | 필수 | | | Task 9. 헤드리스 `mayapy`로 반환 형태(`maroAddCapability(...)[0]`)와 `sourceValue`/`sourceValueLinear`/`sourceIsLinear` 연결 로직 자체는 실제 빌드된 플러그인에 대고 사전 확인됨 — 드롭다운 팝업 UI만 사람이 확인 |
+| 1-4. ONE/GSON 그리드 표시 + 이름/색 반영 | 5 | 필수 | | | |
+| 1-4. GSON 더블클릭/우클릭(Rename/Recolor/Delete) | 5 | 필수 | | | |
+| 1-4. 씬↔GSON 양방향 선택 동기화 | 5 | 필수 | | | |
+| 1-4. 언로드 go/no-go (메뉴 항목 제거, SONE/Coupling 픽커가 뜬 채여도 무크래시) | 5 | 필수 | | | |
+| 1-4. Phase 2/3 회귀 재확인 | 5 | 필수 | | | 레이아웃 변경 회귀 확인 |
 
 ### 종합 판정 (2026-08-25)
 

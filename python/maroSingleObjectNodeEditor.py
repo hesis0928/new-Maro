@@ -243,11 +243,55 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
 
     def _applyCapability(self, flagName):
         try:
-            cmds.maroAddCapability(self._axis, type=flagName)
+            newNode = cmds.maroAddCapability(self._axis, type=flagName)[0]
         except RuntimeError as error:
             print("Maro: maroAddCapability failed -- {}".format(error))
             return
+        if flagName == "coupling":
+            self._showCouplingSourcePicker(newNode)
         self.update()
+
+    def _showCouplingSourcePicker(self, couplingNodeName):
+        """Coupling capability는 다른 축의 출력값을 소스로 물려야 동작한다
+        (ratio * source + offset). 방금 추가한 coupling 노드 이름을 받아
+        다른 축들의 목록을 보여주고 고른 축의 position(Linear)을
+        sourceValue(Linear)에 연결한다."""
+        picker = QtWidgets.QWidget(self, QtCore.Qt.Popup)
+        layout = QtWidgets.QVBoxLayout(picker)
+        combo = QtWidgets.QComboBox()
+        rows = cmds.maroListAxisNodes()
+        for i in range(len(rows) // 10):
+            f = rows[i * 10:(i + 1) * 10]
+            if f[0] == self._axis:
+                continue  # 자기 자신은 소스로 고를 수 없다
+            combo.addItem(f[8] if f[8] else f[0], f[0])
+        layout.addWidget(combo)
+        applyButton = QtWidgets.QPushButton("Connect")
+        layout.addWidget(applyButton)
+
+        def _onApply():
+            sourceAxis = combo.currentData()
+            if not sourceAxis:
+                picker.close()
+                return
+            isLinear = cmds.getAttr(sourceAxis + ".driveIsLinear")
+            cmds.undoInfo(openChunk=True)
+            try:
+                cmds.setAttr(couplingNodeName + ".sourceIsLinear", isLinear)
+                if isLinear:
+                    cmds.connectAttr(sourceAxis + ".positionLinear",
+                                     couplingNodeName + ".sourceValueLinear", force=True)
+                else:
+                    cmds.connectAttr(sourceAxis + ".position",
+                                     couplingNodeName + ".sourceValue", force=True)
+            finally:
+                cmds.undoInfo(closeChunk=True)
+            picker.close()
+            self.update()
+
+        applyButton.clicked.connect(_onApply)
+        picker.move(self.mapToGlobal(QtCore.QPoint(int(self.width() / 2), int(self.height() / 2))))
+        picker.show()
 
     def mouseDoubleClickEvent(self, event):
         rows = self._capabilityRows()
