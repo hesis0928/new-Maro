@@ -34,6 +34,12 @@ expected = [
     "targetMeshes",
     "enabled",
     "visualize",
+    "offsetTranslateX",
+    "offsetTranslateY",
+    "offsetTranslateZ",
+    "offsetRotateX",
+    "offsetRotateY",
+    "offsetRotateZ",
 ]
 for attr in expected:
     assert cmds.attributeQuery(attr, node=lidar, exists=True), f"missing attr: {attr}"

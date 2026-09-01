@@ -6,6 +6,7 @@
 #include <maya/MAngle.h>
 #include <maya/MDagPath.h>
 #include <maya/MDistance.h>
+#include <maya/MEulerRotation.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnMesh.h>
@@ -15,6 +16,7 @@
 #include <maya/MPlugArray.h>
 #include <maya/MPoint.h>
 #include <maya/MPointArray.h>
+#include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
 #include "maro_lidar/RayPattern.h"
@@ -186,17 +188,51 @@ LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine&
     if (MDagPath::getAPathTo(lidarNode, lidarPath) != MS::kSuccess) {
         return LidarScanResult::kInvalidConfig;
     }
+    // 마운트 지점(이 노드가 얹힌 트랜스폼)의 있는 그대로의 월드 행렬. 이
+    // 노드는 전용 트랜스폼 없이 대상 오브젝트 트랜스폼에 직접 얹히므로
+    // (이전 태스크의 검증된 설계 결정, 범위 밖), 실제 센서 원점이 이
+    // 마운트 지점과 정확히 겹치는 경우는 현실에서 사실상 없다. 그 간극을
+    // offsetTranslate/offsetRotate로 메운다: 로컬 오프셋 행렬을 먼저 만들고
+    // (로컬 공간에서 오프셋 적용), 그 다음 마운트의 월드 행렬로 옮긴다
+    // (오프셋된 행렬 * 마운트 월드 행렬). raw worldMatrix 자체는 그대로
+    // 남겨 둔다 -- 원점/방향 계산에는 effectiveWorldMatrix만 쓴다.
     const MMatrix worldMatrix = lidarPath.inclusiveMatrix();
-    const MVector worldOrigin(MPoint(0, 0, 0) * worldMatrix);
+
+    const double offsetTranslateXMeters =
+        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateX, false).asDouble();
+    const double offsetTranslateYMeters =
+        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateY, false).asDouble();
+    const double offsetTranslateZMeters =
+        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateZ, false).asDouble();
+    const double offsetRotateX =
+        lidarFn.findPlug(MaroLidarNode::aOffsetRotateX, false).asMAngle().asRadians();
+    const double offsetRotateY =
+        lidarFn.findPlug(MaroLidarNode::aOffsetRotateY, false).asMAngle().asRadians();
+    const double offsetRotateZ =
+        lidarFn.findPlug(MaroLidarNode::aOffsetRotateZ, false).asMAngle().asRadians();
+
+    // offsetTranslate*는 미터다 (rangeMin/rangeMax와 같은 규칙, 위 주석
+    // 참고) -- 같은 mayaPerMeter로 Maya 단위로 바꿔야 아래 행렬 합성이
+    // 같은 단위계 안에서 이뤄진다.
+    MTransformationMatrix offsetXform;
+    offsetXform.setTranslation(
+        MVector(offsetTranslateXMeters * mayaPerMeter, offsetTranslateYMeters * mayaPerMeter,
+                offsetTranslateZMeters * mayaPerMeter),
+        MSpace::kTransform);
+    offsetXform.rotateTo(MEulerRotation(offsetRotateX, offsetRotateY, offsetRotateZ));
+    const MMatrix offsetMatrix = offsetXform.asMatrix();
+    const MMatrix effectiveWorldMatrix = offsetMatrix * worldMatrix;
+
+    const MVector worldOrigin(MPoint(0, 0, 0) * effectiveWorldMatrix);
     const Vec3 origin{worldOrigin.x, worldOrigin.y, worldOrigin.z};
     if (!isFinite(origin)) return LidarScanResult::kInvalidConfig;
 
     // 방향 벡터에서 평행이동 성분을 제거하기 위해 함께 뺄 기준점.
-    const MVector directionBias = MVector(0, 0, 0) * worldMatrix;
+    const MVector directionBias = MVector(0, 0, 0) * effectiveWorldMatrix;
 
     for (const Vec3& localDir : localDirections) {
         const MVector localVec(localDir.x, localDir.y, localDir.z);
-        const MVector worldDir = (localVec * worldMatrix - directionBias).normal();
+        const MVector worldDir = (localVec * effectiveWorldMatrix - directionBias).normal();
         const maro::lidar::RayHit hit =
             engine.castRay(origin, Vec3{worldDir.x, worldDir.y, worldDir.z}, rangeMinMaya, rangeMaxMaya);
         if (hit.hit && isFinite(hit.position)) outPoints.push_back(hit.position);

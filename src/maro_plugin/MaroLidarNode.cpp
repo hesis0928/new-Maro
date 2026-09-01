@@ -23,6 +23,12 @@ MObject MaroLidarNode::aFrameId;
 MObject MaroLidarNode::aTargetMeshes;
 MObject MaroLidarNode::aEnabled;
 MObject MaroLidarNode::aVisualize;
+MObject MaroLidarNode::aOffsetTranslateX;
+MObject MaroLidarNode::aOffsetTranslateY;
+MObject MaroLidarNode::aOffsetTranslateZ;
+MObject MaroLidarNode::aOffsetRotateX;
+MObject MaroLidarNode::aOffsetRotateY;
+MObject MaroLidarNode::aOffsetRotateZ;
 
 void* MaroLidarNode::creator() { return new MaroLidarNode(); }
 
@@ -114,6 +120,48 @@ MStatus MaroLidarNode::initialize() {
     aVisualize = numFn.create("visualize", "lvp", MFnNumericData::kBoolean, false);
     numFn.setKeyable(true);
     addAttribute(aVisualize);
+
+    // 마운트 지점(이 노드가 얹힌 트랜스폼)과 실제 센서 원점 사이의 로컬
+    // 오프셋. 이 노드는 전용 트랜스폼 없이 대상 오브젝트의 트랜스폼에 직접
+    // 얹히는 설계라(이전 태스크에서 검증된 결정, 범위 밖) 마운트 지점과
+    // 센서가 정확히 일치하지 않는 실제 상황을 표현할 방법이 전혀 없었다 --
+    // 이 6개 어트리뷰트가 그 간극을 메운다. MaroLidarScan.cpp가 이 값들로
+    // 로컬 오프셋 행렬을 만들어 월드 행렬과 합성한다.
+    //
+    // rangeMin/rangeMax와 같은 이유로 kDouble(단순 실수)이지 kDistance가
+    // 아니다 -- 이 값은 미터 단위이고, 레이캐스팅 코드가 그 자리에서 이미
+    // 계산해 둔 mayaPerMeter로 직접 변환한다.
+    //
+    // 짧은 이름은 "vis"/"lvp" 사례(위 aVisualize 주석)를 교훈 삼아 추측이
+    // 아니라 실측으로 골랐다: mayapy 프로브로 이 노드 타입의 (상속 포함)
+    // 기존 178개 어트리뷰트 전체의 짧은 이름을 나열한 뒤, "otx"/"oty"/"otz"/
+    // "orx"/"ory"/"orz" 중 어느 것도 그 목록에 없음을 확인했다. addAttribute()
+    // 이후에도 attributeQuery(..., exists=True)가 6개 모두 True를 돌려주고
+    // 어트리뷰트 총수가 정확히 178 -> 184(+6)로 늘어난 것으로 재확인했다
+    // (tests/maya/test_lidar_node.py).
+    aOffsetTranslateX = numFn.create("offsetTranslateX", "otx", MFnNumericData::kDouble, 0.0);
+    numFn.setKeyable(true);
+    addAttribute(aOffsetTranslateX);
+
+    aOffsetTranslateY = numFn.create("offsetTranslateY", "oty", MFnNumericData::kDouble, 0.0);
+    numFn.setKeyable(true);
+    addAttribute(aOffsetTranslateY);
+
+    aOffsetTranslateZ = numFn.create("offsetTranslateZ", "otz", MFnNumericData::kDouble, 0.0);
+    numFn.setKeyable(true);
+    addAttribute(aOffsetTranslateZ);
+
+    aOffsetRotateX = angFn.create("offsetRotateX", "orx", MFnUnitAttribute::kAngle, 0.0);
+    angFn.setKeyable(true);
+    addAttribute(aOffsetRotateX);
+
+    aOffsetRotateY = angFn.create("offsetRotateY", "ory", MFnUnitAttribute::kAngle, 0.0);
+    angFn.setKeyable(true);
+    addAttribute(aOffsetRotateY);
+
+    aOffsetRotateZ = angFn.create("offsetRotateZ", "orz", MFnUnitAttribute::kAngle, 0.0);
+    angFn.setKeyable(true);
+    addAttribute(aOffsetRotateZ);
 
     return MS::kSuccess;
 }

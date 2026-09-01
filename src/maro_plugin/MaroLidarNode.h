@@ -32,6 +32,12 @@ public:
     static MObject aTargetMeshes;
     static MObject aEnabled;
     static MObject aVisualize;
+    static MObject aOffsetTranslateX;
+    static MObject aOffsetTranslateY;
+    static MObject aOffsetTranslateZ;
+    static MObject aOffsetRotateX;
+    static MObject aOffsetRotateY;
+    static MObject aOffsetRotateZ;
 };
 
 }  // namespace maro
