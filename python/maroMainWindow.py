@@ -378,6 +378,19 @@ def teardown():
         import traceback
         traceback.print_exc()
 
+    # Skeleton Upload(Phase 6) 다이얼로그도 SONE/LiDAR 팝업과 같은 이유로
+    # MaroUI와 무관한 독립 최상위 창이다. 열린 채로 언로드되면 등록된
+    # kAfterImport 콜백이 이미 사라진 파이썬 모듈을 계속 가리키게 되므로,
+    # 이 stop() 호출은 커맨드 deregister보다 먼저 일어나야 한다(위 SONE
+    # 주석과 같은 순서 보장 -- MaroPluginMain.cpp의 uninitializePlugin에서
+    # 확인됨).
+    try:
+        import maroSkeletonUpload
+        maroSkeletonUpload.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
+        import traceback
+        traceback.print_exc()
+
 
 def show():
     """maroMainWindow 커맨드가 부른다."""
