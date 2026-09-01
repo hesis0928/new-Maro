@@ -87,6 +87,39 @@ secondResult = maroSkeletonUpload.extractSkeleton(plainMesh)
 assert secondResult[0] != newJoint, "Maya must uniquify the duplicate joint name"
 print("re-running on the same mesh creates a second, uniquely-named joint OK")
 
+# --- extractSkeleton: 씬 전체에서(형제가 아니라 완전히 무관한 부모 밑에)
+# 생성될 루트 조인트와 같은 짧은 이름을 가진 노드가 이미 있는 경우 --------
+# 위 "재클릭" 케이스와는 다른 버그다 -- 거기서는 이름이 겹치는 노드가 같은
+# mesh의 이전 자식(형제)이었지만, 여기서는 전혀 무관한 그룹 밑에 있는 별개의
+# decoy 노드다. 이 경우에만 cmds.parent()가 짧은 이름이 아니라 부분 경로
+# ("<decoy의 부모>|<짧은 이름>")를 돌려준다 -- .split("|")[-1] 없이 그 값을
+# 그대로 "meshFullPath + '|' + ..."에 이어붙이면 존재하지 않는 경로가 되어
+# 뒤이은 cmds.xform()이 예외를 던진다.
+decoyGroup = cmds.group(empty=True, name="decoyGroup")
+decoyMesh, _ = cmds.polyCube(name="decoyTargetCube")
+cmds.setAttr(decoyMesh + ".translate", 5, 0, 0, type="double3")
+decoyJoint = cmds.createNode("joint", name="decoyTargetCube_root", parent=decoyGroup)
+
+collisionResult = maroSkeletonUpload.extractSkeleton(decoyMesh)
+assert collisionResult is not None and len(collisionResult) == 1
+collisionJoint = collisionResult[0]
+assert cmds.objExists(collisionJoint), (
+    f"the generated root joint must exist at a valid path, got {collisionJoint}")
+assert collisionJoint != decoyJoint
+collisionParents = cmds.listRelatives(collisionJoint, parent=True, fullPath=True) or []
+assert collisionParents and collisionParents[0] == cmds.ls(decoyMesh, long=True)[0], (
+    "the generated root joint must be parented under decoyMesh (not decoyGroup, "
+    f"the decoy's unrelated parent), got parents={collisionParents}")
+decoyBbox = cmds.exactWorldBoundingBox(decoyMesh)
+expectedDecoyCenter = ((decoyBbox[0] + decoyBbox[3]) / 2.0, (decoyBbox[1] + decoyBbox[4]) / 2.0,
+                        (decoyBbox[2] + decoyBbox[5]) / 2.0)
+actualDecoyPos = cmds.xform(collisionJoint, query=True, worldSpace=True, translation=True)
+for actual, expected in zip(actualDecoyPos, expectedDecoyCenter):
+    assert abs(actual - expected) < 1e-6, (
+        f"root joint position {actualDecoyPos} does not match bbox center {expectedDecoyCenter}")
+print("scene-wide short-name collision with an unrelated node: still resolves to a valid, "
+      "correctly-parented root joint OK")
+
 # --- _isSingleMeshSelected -------------------------------------------------
 assert maroSkeletonUpload._isSingleMeshSelected([cmds.ls(plainMesh, long=True)[0]]) is True
 assert maroSkeletonUpload._isSingleMeshSelected([]) is False

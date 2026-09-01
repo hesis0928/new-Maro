@@ -73,7 +73,16 @@ def extractSkeleton(mesh):
     # 여러 곳(_createPlaceholderTargetMesh 등)이 같은 이유로 쓰는 것과 같은
     # 관용구로, cmds.parent()가 돌려주는 새 이름과 이미 알고 있는 새 부모를
     # 조합해 모호하지 않은 새 풀 경로를 직접 구성한다.
-    newShortName = cmds.parent(rootJoint, mesh)[0]
+    # [Fix round 1] cmds.parent()가 돌려주는 값은 항상 "짧은 이름"이 아니다
+    # -- 새로 옮겨진 조인트와 같은 짧은 이름을 가진 노드가 씬 어디에든(새
+    # 부모의 형제가 아니어도) 존재하면, Maya는 그 이름이 씬 전체에서
+    # 모호해졌다고 보고 대신 부분 경로("<다른부모>|<짧은이름>")를 돌려준다
+    # (mayapy로 재현 확인). 그걸 그대로 "|"로 이어 붙이면
+    # "<mesh풀경로>|<다른부모>|<짧은이름>" 같은 존재하지 않는 경로가 만들어진다.
+    # maroDagMenu.py._createPlaceholderTargetMesh가 이미 쓰는 것과 같은
+    # 관용구로, 뒤에 .split("|")[-1]을 붙여 반환값이 짧은 이름이든 부분
+    # 경로든 상관없이 항상 마지막 짧은-이름 성분만 뽑아낸다.
+    newShortName = cmds.parent(rootJoint, mesh)[0].split("|")[-1]
     meshFullPath = cmds.ls(mesh, long=True)[0]
     rootJointFullPath = meshFullPath + "|" + newShortName
     cmds.xform(rootJointFullPath, worldSpace=True, translation=center)
