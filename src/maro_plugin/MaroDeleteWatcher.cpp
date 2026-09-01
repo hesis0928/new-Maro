@@ -14,6 +14,8 @@
 #include "MaroAxisNode.h"
 #include "MaroCapabilityNodes.h"
 #include "MaroDiag.h"
+#include "MaroLidarNode.h"
+#include "MaroPointCloudNode.h"
 
 namespace maro {
 
@@ -104,6 +106,12 @@ void MaroDeleteWatcher::onNodeAdded(MObject& node, void* /*clientData*/) {
         if (fn.typeId() == MaroAxisNode::id) {
             s_callbacks.append(MNodeMessage::addNodeAboutToDeleteCallback(
                 node, onAxisAboutToDelete, nullptr, &status));
+        } else if (fn.typeId() == MaroLidarNode::id) {
+            // [최종 리뷰 I-4] maroLidar도 축과 같은 로케이터형 셰이프라
+            // 같은 자리, 같은 방식으로 건다. maroPointCloud에는 일부러 걸지
+            // 않는다 -- 헤더의 비대칭 설명 참고.
+            s_callbacks.append(MNodeMessage::addNodeAboutToDeleteCallback(
+                node, onLidarAboutToDelete, nullptr, &status));
         } else if (node.hasFn(MFn::kTransform)) {
             s_callbacks.append(MNodeMessage::addNodeAboutToDeleteCallback(
                 node, onObjectAboutToDelete, nullptr, &status));
@@ -231,6 +239,57 @@ void MaroDeleteWatcher::onAxisAboutToDelete(MObject& node, MDGModifier& modifier
     } catch (...) {
         maro::BoadMaro::error("MaroDeleteWatcher.onAxisAboutToDelete.UnknownException",
                               "Maro: orphan handling failed.",
+                              captureFromNode(node));
+    }
+}
+
+// [최종 리뷰 I-4] maroLidar가 지워질 때 짝인 maroPointCloud도 함께 지운다.
+//
+// 짝을 찾는 경로는 Task 4/5의 파이썬 코드(python/maroDagMenu.py의
+// `connectAttr(lidar + ".message", pointCloud + ".sourceLidar")`,
+// python/maroLidarPanel.py의 역방향 조회)와 **정확히 같은 연결**을 C++에서
+// 따라간 것이다: 라이다의 `message` 플러그에서 나가는 목적지 중 어트리뷰트가
+// `MaroPointCloudNode::aSourceLidar`인 것. 이 파일의 onObjectAboutToDelete가
+// 축을 찾는 방식(`message`의 destination을 훑어 타입으로 거른다)과도 같은
+// 관용구다 -- 병렬 메커니즘을 새로 만들지 않았다.
+//
+// 포인트클라우드의 **부모 트랜스폼은 일부러 건드리지 않는다.** 축 쪽
+// (onObjectAboutToDelete)은 "자식이 하나뿐이면 부모도 지운다"를 하지만,
+// 여기서는 그 규칙이 위험하다: 마킹 메뉴가 만드는 배치에서 maroPointCloud의
+// 부모는 그 노드 전용 트랜스폼이 아니라 **여러 노드가 공유하는**
+// maroRosProxy_grp다(python/maroRosProxy.ensureProxyGroup). 마침 그 그룹의
+// 자식이 하나뿐인 순간에 라이다를 지우면 공유 그룹 자체가 사라진다 --
+// ROS 프록시 로케이터의 집이자 우측 뷰포트 격리의 기준인 그룹이다. 셰이프만
+// 지우는 쪽이 명백히 안전하고, 실제 생성 경로는 전용 트랜스폼을 애초에
+// 남기지 않는다(_onLidarMenuItemClicked이 자동 생성 트랜스폼을 곧바로
+// 지운다).
+void MaroDeleteWatcher::onLidarAboutToDelete(MObject& node, MDGModifier& modifier,
+                                             void* /*clientData*/) {
+    try {
+        MFnDependencyNode lidarFn(node);
+        MPlug message = lidarFn.findPlug("message", false);
+
+        MPlugArray destinations;
+        message.connectedTo(destinations, false, true);
+
+        for (unsigned int i = 0; i < destinations.length(); ++i) {
+            if (destinations[i].attribute() != MaroPointCloudNode::aSourceLidar) continue;
+
+            MObject other = destinations[i].node();
+            MFnDependencyNode otherFn(other);
+            if (otherFn.typeId() != MaroPointCloudNode::id) continue;
+
+            // 이 modifier에 실으면 삭제와 undo/redo가 사용자의 삭제와 한
+            // 청크로 묶인다(축 캐스케이드와 같다).
+            modifier.deleteNode(other);
+
+            maro::BoadMaro::info(
+                MString("Maro: deleting point cloud '") + otherFn.name() +
+                "' because its source lidar was deleted.");
+        }
+    } catch (...) {
+        maro::BoadMaro::error("MaroDeleteWatcher.onLidarAboutToDelete.UnknownException",
+                              "Maro: lidar/point-cloud cascade delete failed.",
                               captureFromNode(node));
     }
 }

@@ -6,6 +6,7 @@
 #include <maya/MAngle.h>
 #include <maya/MDagPath.h>
 #include <maya/MDistance.h>
+#include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnMesh.h>
 #include <maya/MIntArray.h>
@@ -32,17 +33,58 @@ SceneUnit currentSceneUnit() {
 namespace {
 
 // meshNode는 targetMeshes에 연결된 노드다. 사용자는 보통 트랜스폼의
-// .message를 잇는다 -- MFnMesh는 트랜스폼을 받지 않으므로 여기서 셰이프까지
-// 내려간다. MObject가 아니라 MDagPath로 함수 세트를 만드는 것이 중요하다:
-// MSpace::kWorld는 경로 컨텍스트가 있어야 조상 체인을 포함한 진짜 월드
-// 좌표를 준다.
+// .message를 잇는다(tests/maya/test_lidar_node.py와 python/maroDagMenu.py가
+// 이미 그 관례로 바인딩한다) -- MFnMesh는 트랜스폼을 받지 않으므로 여기서
+// 셰이프까지 내려간다.
+//
+// [최종 리뷰 Minor-7] MObject가 아니라 MDagPath로 함수 세트를 만드는 것이
+// 중요하다: MSpace::kWorld는 경로 컨텍스트가 있어야 조상 체인을 포함한 진짜
+// 월드 좌표를 준다. **이 프로젝트가 이미 여러 번 걸린 함정이다** --
+// MaroCommands.cpp의 MaroBindAxisCommand::doIt, MaroDeleteWatcher.cpp,
+// MaroPump::collectSamples가 전부 같은 이유로 MDagPath::getAPathTo를 먼저
+// 부른다. 맨 MObject로 만든 함수 세트는 에러를 내지 않고 **조용히 틀린 값**을
+// 준다는 것이 이 함정의 성질이다.
 bool extractMeshBuffers(const MObject& meshNode, std::vector<float>& vertices,
                         std::vector<std::uint32_t>& indices) {
     MDagPath meshPath;
     if (MDagPath::getAPathTo(meshNode, meshPath) != MS::kSuccess) return false;
     if (!meshPath.hasFn(MFn::kMesh)) {
-        if (meshPath.extendToShape() != MS::kSuccess) return false;
-        if (!meshPath.hasFn(MFn::kMesh)) return false;
+        // [최종 리뷰 C-1 검증 중 실측으로 발견] 예전에는 여기서
+        // `meshPath.extendToShape()`만 불렀다. 그 API는 **셰이프가 정확히
+        // 하나일 때만** 성공한다 -- 트랜스폼 밑에 셰이프가 둘 이상이면
+        // 실패를 돌려준다.
+        //
+        // 그리고 이 플러그인의 주력 생성 경로가 정확히 그 상황을 만든다:
+        // python/maroDagMenu.py의 `_onLidarMenuItemClicked()`은 클릭한 메쉬
+        // **트랜스폼 자신**을 targetMeshes[0]로 잇고, 동시에 maroLidar
+        // 로케이터 셰이프를 `cmds.parent(..., shape=True)`로 그 **같은
+        // 트랜스폼** 밑에 얹는다. 그 순간 그 트랜스폼의 셰이프는 둘(mesh +
+        // maroLidar)이 되고, extendToShape()는 실패하며, 스캔은 매번
+        // kMeshExtractFailed로 끝난다 -- 즉 마킹 메뉴로 만든 LiDAR는 자기가
+        // 올라탄 메쉬를 **원리적으로 한 번도 못 읽었다**. (C-1의 rangeMin
+        // 수정만으로는 이 경로가 여전히 0점이었고, 그 검증 테스트가 이
+        // 두 번째 결함을 드러냈다.)
+        //
+        // 그래서 직속 셰이프들을 직접 훑어 첫 번째 진짜 메쉬를 고른다.
+        // intermediate object(디포머 히스토리의 원본 셰이프)는 건너뛴다 --
+        // 그것은 화면에 그려지지 않는 셰이프라 레이캐스트 대상이 아니고,
+        // 디포머가 걸린 메쉬에서는 그것까지 세어 셰이프가 둘이 되므로 예전
+        // extendToShape() 경로가 조용히 실패하던 또 다른 흔한 경우이기도 하다.
+        unsigned int shapeCount = 0;
+        meshPath.numberOfShapesDirectlyBelow(shapeCount);
+        bool foundMesh = false;
+        for (unsigned int i = 0; i < shapeCount; ++i) {
+            MDagPath candidate = meshPath;
+            if (candidate.extendToShapeDirectlyBelow(i) != MS::kSuccess) continue;
+            if (!candidate.hasFn(MFn::kMesh)) continue;
+            MStatus dagStatus;
+            MFnDagNode candidateFn(candidate, &dagStatus);
+            if (dagStatus && candidateFn.isIntermediateObject()) continue;
+            meshPath = candidate;
+            foundMesh = true;
+            break;
+        }
+        if (!foundMesh) return false;
     }
 
     MStatus status;

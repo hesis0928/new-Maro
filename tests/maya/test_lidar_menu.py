@@ -60,6 +60,32 @@ print("sourceLidar back-reference OK")
 assert openedPanels == [lidar], f"expected openLidarPanel to be called with {lidar!r}, got {openedPanels}"
 print("settings panel opened on creation OK")
 
+
+# --- [최종 리뷰 C-1] 갓 만든 LiDAR가 실제로 히트를 낸다 -------------------
+# 이 헬퍼가 이 파일의 다른 검사들과 다른 점: 노드 **그래프의 모양**이 아니라
+# "기본 설정 그대로 스캔하면 점이 나오는가"라는 **기능**을 본다.
+#
+# 회귀 전에는 두 경로 모두 0점이었다. maroLidar의 rangeMin 기본값 0.1 m는
+# 기본 센티미터 씬에서 tnear = 10 Maya 단위가 되는데, 이 마킹메뉴 경로가
+# 만드는 배치(메쉬 자신의 피벗에 탑재 / bbox 상단에 반지름 1 구)는 센서-타겟
+# 거리가 항상 그보다 훨씬 짧기 때문이다. `_onLidarMenuItemClicked()`이
+# rangeMin = 0.0을 세우는 것이 그 수정이고, 아래가 그 회귀 가드다.
+def assertScanFindsHits(lidarPath, label):
+    scratchCloud = cmds.ls(cmds.createNode("maroPointCloud"), long=True)[0]
+    cmds.maroSnapshotLidarScan(lidarPath, scratchCloud)
+    points = cmds.getAttr(scratchCloud + ".points")
+    # cmds.getAttr는 0개짜리 pointArray에 None을 준다(test_lidar_commands.py
+    # 참고) -- 회귀 시 정확히 이 형태로 나타난다.
+    assert points is not None and len(points) > 0, (
+        "a freshly created LiDAR ({}) must produce at least one hit with "
+        "otherwise-default settings; got {!r} -- rangeMin's near clip is "
+        "probably excluding the target again (final review C-1)".format(label, points))
+    print("freshly-created LiDAR produces {} hits ({}) OK".format(len(points), label))
+    cmds.delete(scratchCloud)
+
+
+assertScanFindsHits(lidar, "mesh-mounted")
+
 # --- 재클릭: 재생성이 아니라 재오픈이어야 한다 ---------------------------
 openedPanels.clear()
 maroDagMenu._onLidarMenuItemClicked(cmds.ls(meshTransform, long=True)[0])
@@ -165,6 +191,9 @@ jointLidar = jointLidars[0]
 targets2 = cmds.listConnections(jointLidar + ".targetMeshes", source=True, destination=False) or []
 assert placeholder[0] in [cmds.ls(t, long=True)[0] for t in targets2]
 print("placeholder used as the new lidar's initial target OK")
+
+# [최종 리뷰 C-1] placeholder 경로도 마찬가지로 실제 히트를 내야 한다.
+assertScanFindsHits(jointLidar, "placeholder-mounted")
 
 # --- 재클릭 (비-메쉬 오브젝트): I-1 -- placeholder로 탑재된 LiDAR도 재클릭
 # 시 재사용해야지, 중복 생성하면 안 된다 ------------------------------------

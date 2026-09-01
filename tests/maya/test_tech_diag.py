@@ -189,6 +189,25 @@ underCapRows = [{"lidarFullPath": "|lidar1", "enabled": True, "verticalSamples":
 assert diag.checkLidarRayCount(underCapRows) == []
 print("checkLidarRayCount passes a default-scale configuration OK")
 
+# [최종 리뷰 Minor-11] 경계값 그 자체 -- 곱이 정확히 상한과 같은 설정.
+# checkLidarRayCount()는 `>`를 쓰고(`>=`가 아니라), MaroLidarScan.cpp의
+# scanLidarNode()도 `if (rayCount > kMaxRaysPerScan) return kRayCountExceeded;`
+# 로 같은 부등호를 쓴다. 즉 "정확히 상한"은 **실제로 스캔이 돌아가는**
+# 설정이므로 진단이 경고를 띄우면 안 된다. 둘 중 한쪽만 `>=`로 바뀌면
+# 진단과 런타임이 어긋나 사용자가 멀쩡히 도는 설정을 경고로 보게 되는데,
+# 그 회귀는 이 행이 없으면 어떤 테스트도 잡지 못한다(위 두 케이스는 상한에서
+# 90000/144만큼 떨어져 있어 부등호를 바꿔도 그대로 통과한다).
+atCapRows = [{"lidarFullPath": "|lidar1", "enabled": True,
+              "verticalSamples": 256, "horizontalSamples": 256,
+              "targetMeshCount": 1}]
+assert 256 * 256 == diag.LIDAR_MAX_RAYS_PER_SCAN, (
+    "this boundary case must sit exactly on the cap; if LIDAR_MAX_RAYS_PER_SCAN "
+    "changed, update the factors here too")
+assert diag.checkLidarRayCount(atCapRows) == [], (
+    "a ray count exactly equal to the cap is still scannable (scanLidarNode uses "
+    "'>' too) -- it must not be flagged")
+print("checkLidarRayCount does not flag a configuration exactly at the cap OK")
+
 # --- adjacentMeshPairs / filterAdjacentMeshCollisions (pure) ---
 chainRows = [
     {"axisFullPath": "|axP", "jointName": "p", "boundTargetPath": "|linkP",

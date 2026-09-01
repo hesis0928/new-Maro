@@ -12,6 +12,7 @@ QGuiApplication만 있어 QWidget 생성이 프로세스를 abort시키는 것�
 새 절이 담당한다.
 """
 import os
+import sys
 
 import maya.standalone
 
@@ -81,3 +82,12 @@ print("boundingBox reflects points OK")
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 print("unload without an open window OK")
+
+# [최종 리뷰 Minor-1] 이 파일만 teardown이 없었다 -- 형제 파일들
+# (tests/maya/test_lidar_commands.py, tests/maya/test_lidar_node.py)과 같은
+# 마무리로 맞춘다. uninitialize() 없이 mayapy가 끝나면 Maya가 종료 경로에서
+# 무엇을 내는지가 환경에 따라 달라지고, 명시적인 sys.exit(0)은 인터프리터
+# 종료 중 나는 잡음이 종료 코드로 새어 CTest를 흔드는 것을 막는다.
+maya.standalone.uninitialize()
+print("teardown OK")
+sys.exit(0)

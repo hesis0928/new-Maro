@@ -658,8 +658,19 @@ def _createPlaceholderTargetMesh(object_):
         # sphereTransform이 여전히 유효하다. 그래서 sphereFullPath를 먼저
         # 확인하고, 없으면 sphereTransform으로 대체한다.
         orphan = sphereFullPath if sphereFullPath and cmds.objExists(sphereFullPath) else sphereTransform
-        if orphan and cmds.objExists(orphan):
-            cmds.delete(orphan)
+        # [최종 리뷰 Minor-8] 정리 자체도 실패할 수 있다(그 사이 다른 경로가
+        # 이미 지웠거나, 삭제가 거부되는 상태). 여기서 cmds.delete()가 던지면
+        # 그 예외가 원래 예외를 **대체**해 버려서, 호출부와 사용자는 진짜
+        # 원인("parent/xform/select 중 무엇이 왜 실패했는가")을 영영 못 본다.
+        # 고아 하나가 남는 것보다 원인을 잃는 쪽이 나쁘므로, 정리 실패는
+        # 경고로만 알리고 원래 예외를 그대로 올려보낸다
+        # (_onMenuItemClicked의 축 롤백 블록과 같은 규율).
+        try:
+            if orphan and cmds.objExists(orphan):
+                cmds.delete(orphan)
+        except Exception as deleteExc:  # noqa: BLE001 -- 정리 경로
+            cmds.warning("Maro: failed to clean up the orphaned placeholder mesh "
+                         "'{}': {}".format(orphan, deleteExc))
         raise
 
     return sphereFullPath
@@ -725,6 +736,34 @@ def _onLidarMenuItemClicked(object_):
             if cmds.objExists(lidarAutoTransform):
                 cmds.delete(lidarAutoTransform)
             lidarAutoTransform = None
+
+        # [최종 리뷰 C-1] 이 생성 경로에 한해 rangeMin을 0으로 내린다.
+        #
+        # maroLidar의 클래스 기본값 rangeMin은 0.1 **미터**다(MaroLidarNode.cpp).
+        # 씬의 기본 선형 단위는 센티미터라 mayaPerMeter = 100이고, 따라서
+        # scanLidarNode()가 Embree에 넘기는 tnear는 10 Maya 단위가 된다
+        # (MaroLidarScan.cpp의 rangeMinMaya 변환). 그런데 이 마킹메뉴 경로가
+        # 만드는 배치는 센서 원점과 타겟 사이 거리가 **항상 그보다 훨씬
+        # 짧다**:
+        #
+        #   * 메쉬 케이스 -- 클릭한 메쉬 자신이 targetMeshes[0]가 되고, LiDAR
+        #     셰이프는 그 메쉬의 트랜스폼에 그대로 물린다. 즉 센서 원점이
+        #     메쉬의 피벗이다. 기본 polyCube는 반폭이 1이라 모든 레이가
+        #     ~1 단위에서 맞는다.
+        #   * placeholder 케이스 -- 반지름 1짜리 구를 object_의 기존 bbox
+        #     상단에 놓는데, 그 시점의 bbox는 이미 물려 있는 LiDAR 로케이터
+        #     자신의 기본 [-1,1]^3다. 결국 구 표면이 0~2 단위 사이에 온다.
+        #
+        # 둘 다 10 단위 tnear 안쪽이라, 고치지 않으면 **갓 만든 LiDAR는 기본
+        # 설정으로 단 한 점도 못 맞힌다**. tests/maya/test_lidar_commands.py가
+        # 이미 같은 함정을 독립적으로 만나 rangeMin = 0.0으로 우회해 두었지만
+        # (그 파일의 주석 참고) 그 발견이 사용자 경로로 옮겨온 적은 없었다.
+        #
+        # 노드 자신의 클래스 기본값(0.1)은 일부러 그대로 둔다 -- 타겟을
+        # 의도적으로 멀리 배치하는 스크립트/프로그램 경로에서는 근거리
+        # 클리핑이 있는 쪽이 실제 LiDAR에 가깝고 합리적인 기본값이다.
+        # 문제인 것은 "거리 0에 자동 탑재하는" 이 마킹메뉴 경로뿐이다.
+        cmds.setAttr(lidar + ".rangeMin", 0.0)
 
         pointCloud = cmds.createNode("maroPointCloud")
         pointCloud = cmds.ls(pointCloud, long=True)[0]

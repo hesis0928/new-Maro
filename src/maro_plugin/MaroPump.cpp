@@ -10,10 +10,8 @@
 #include <maya/MDagPath.h>
 #include <maya/MDistance.h>
 #include <maya/MFnDependencyNode.h>
-#include <maya/MFnMesh.h>
 #include <maya/MFnPointArrayData.h>
 #include <maya/MGlobal.h>
-#include <maya/MIntArray.h>
 #include <maya/MItDependencyNodes.h>
 #include <maya/MMatrix.h>
 #include <maya/MPlug.h>
@@ -24,6 +22,10 @@
 #include <maya/MTimerMessage.h>
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
+// [최종 리뷰 I-5] 라이브 프리뷰의 명시적 리드로우 신호
+// (MHWRender::MRenderer::setGeometryDrawDirty). MaroPointCloudNode.cpp가
+// preEvaluation()에서 같은 호출을 하기 위해 include하는 것과 같은 헤더다.
+#include <maya/MViewport2Renderer.h>
 
 #include "maro_lidar/Decimation.h"
 #include "maro_lidar/ScanEngine.h"
@@ -307,7 +309,8 @@ void MaroPump::collectLidarScans(MaroRosRuntime& runtime) {
             messagePlug.connectedTo(destinations, false, true);
             for (unsigned int i = 0; i < destinations.length(); ++i) {
                 if (destinations[i].attribute() != MaroPointCloudNode::aSourceLidar) continue;
-                MFnDependencyNode pointCloudFn(destinations[i].node());
+                const MObject pointCloudObj = destinations[i].node();
+                MFnDependencyNode pointCloudFn(pointCloudObj);
                 if (pointCloudFn.typeId() != MaroPointCloudNode::id) continue;
 
                 const auto preview = maro::lidar::decimateForPreview(points, kMaxPreviewPoints);
@@ -319,7 +322,39 @@ void MaroPump::collectLidarScans(MaroRosRuntime& runtime) {
                 MFnPointArrayData pointArrayDataFn;
                 MObject pointsData = pointArrayDataFn.create(mayaPoints);
                 MPlug pointsPlug = pointCloudFn.findPlug(MaroPointCloudNode::aPoints, false);
-                pointsPlug.setValue(pointsData);
+                // [최종 리뷰 Minor, I-5 인접] 예전에는 반환 상태를 그냥
+                // 버렸다. 쓰기가 실패하면 프리뷰는 조용히 직전 스냅샷에
+                // 얼어붙고, 사용자는 "펌프가 안 도는가/게이트가 꺼졌는가"를
+                // 구분할 단서를 전혀 못 얻는다. 이 파일의 관례(BoadMaro::error)
+                // 로 보고한다.
+                const MStatus writeStatus = pointsPlug.setValue(pointsData);
+                if (!writeStatus) {
+                    maro::BoadMaro::error(
+                        "MaroPump.collectLidarScans.PreviewWriteFailed",
+                        MString("Maro: failed to write the live preview points onto '") +
+                            pointCloudFn.name() + "': " + writeStatus.errorString(),
+                        maro::onfix::capture("maroPointCloud", "points",
+                                             pointCloudFn.name()));
+                    break;
+                }
+
+                // [최종 리뷰 I-5] 리드로우를 명시적으로 요청한다.
+                //
+                // 위 쓰기는 cmds/MDGModifier를 일부러 거치지 않는 raw plug
+                // write다(undo 큐를 30Hz로 도배하지 않기 위해서). 그래서
+                // 뷰포트가 다시 그려질 유일한 근거가
+                // MaroPointCloudNode::preEvaluation()이었는데, 그것은
+                // Evaluation Manager 경로의 콜백이라 -- 이 노드처럼 인바운드
+                // 커넥션이 없어 평가 그래프에 스케줄될 이유가 없는 로케이터에
+                // 대해서는 아예 안 불릴 수 있다. 즉 데이터는 갱신되는데 화면은
+                // 그대로인 상태가 성립한다(수동 체크리스트 §6-3의 3번 항목이
+                // 바로 그 위험을 사람이 확인하라고 남겨 둔 것이다).
+                //
+                // preEvaluation()이 이미 쓰는 것과 정확히 같은 호출을 여기서
+                // 한 번 더 함으로써, 스케줄링에 대한 의존을 없애고 결정적으로
+                // 만든다(두 경로가 같은 틱에 겹쳐 불려도 무해하다 -- 이 API는
+                // 노드를 "다시 그려야 함"으로 표시할 뿐이다).
+                MHWRender::MRenderer::setGeometryDrawDirty(pointCloudObj);
                 break;
             }
         }

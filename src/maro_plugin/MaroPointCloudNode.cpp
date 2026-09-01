@@ -10,16 +10,13 @@
 #include <maya/MFnNumericData.h>
 #include <maya/MFnPointArrayData.h>
 #include <maya/MFnTypedAttribute.h>
-#include <maya/MGlobal.h>
 #include <maya/MPlug.h>
 #include <maya/MPoint.h>
 #include <maya/MPointArray.h>
 
 // Viewport 2.0
-#include <maya/MDrawContext.h>
 #include <maya/MDrawRegistry.h>
 #include <maya/MFnDependencyNode.h>
-#include <maya/MHWGeometryUtilities.h>
 #include <maya/MPxDrawOverride.h>
 #include <maya/MUIDrawManager.h>
 #include <maya/MUserData.h>
@@ -245,12 +242,19 @@ public:
     }
 
     MBoundingBox boundingBox(const MDagPath& objPath, const MDagPath& /*cameraPath*/) const override {
+        // [최종 리뷰 Minor-3] 실패 경로도 기본 생성 MBoundingBox("무효" 상태)가
+        // 아니라 노드 자신의 빈 배열 폴백과 **같은** -1..1 박스를 준다.
+        // MaroPointCloudNode::boundingBox()의 주석이 이미 "무효 박스는 일부
+        // 뷰포트 코드를 놀라게 할 수 있어서 피한다"고 적어 두었는데, 여기
+        // 실패 경로들만 정확히 그 반대를 하고 있었다 -- 같은 노드의 두 경로가
+        // 서로 모순되는 상태였다.
+        static const MBoundingBox kFallback(MPoint(-1, -1, -1), MPoint(1, 1, 1));
         MStatus status;
         MFnDependencyNode nodeFn(objPath.node(&status));
-        if (!status) return MBoundingBox();
+        if (!status) return kFallback;
         auto* node = dynamic_cast<maro::MaroPointCloudNode*>(nodeFn.userNode());
         // MaroPointCloudNode::boundingBox()가 자기 예외를 이미 삼킨다.
-        return node ? node->boundingBox() : MBoundingBox();
+        return node ? node->boundingBox() : kFallback;
     }
 
     // DG 조회는 여기서만 한다 -- addUIDrawables()는 절대 하지 않는다(전역 제약).
