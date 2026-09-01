@@ -22,6 +22,7 @@ MObject MaroLidarNode::aUpdateRate;
 MObject MaroLidarNode::aFrameId;
 MObject MaroLidarNode::aTargetMeshes;
 MObject MaroLidarNode::aEnabled;
+MObject MaroLidarNode::aVisualize;
 
 void* MaroLidarNode::creator() { return new MaroLidarNode(); }
 
@@ -96,6 +97,23 @@ MStatus MaroLidarNode::initialize() {
     aEnabled = numFn.create("enabled", "enb", MFnNumericData::kBoolean, true);
     numFn.setKeyable(true);
     addAttribute(aEnabled);
+
+    // 기본값 false -- 명시적으로 켜야만 라이브 갱신이 켜진다. 씬을 열자마자
+    // 모든 LiDAR가 매 틱 스캔을 시작하면 안 된다 (Task 5).
+    //
+    // 짧은 이름은 브리프가 제안한 "vis"가 아니라 "lvp"다: MPxLocatorNode가
+    // 상속하는 렌더 통계 어트리뷰트 "primaryVisibility"가 이미 짧은 이름
+    // "vis"를 쓰고 있어("vis"는 Maya의 흔한 관례상 "visibility" 계열에
+    // 예약돼 있다), "vis"로 create()하면 짧은 이름 충돌로 addAttribute()가
+    // 조용히 실패한다(반환값을 안 보면 알 수 없다) -- 결과로 만들어지는
+    // 반쯤 등록된 MObject를 나중에 MPlug::asBool()로 읽으면
+    // TdataBlockDG::attrMemAddr에서 액세스 위반이 난다(실측: 이 코드를
+    // "vis"로 처음 넣었을 때 maya_lidar_publish가 collectLidarScans의 바로
+    // 이 줄에서 mayapy를 죽였다). "lvp"는 이 노드 타입의 기존 177개
+    // 상속+고유 어트리뷰트 어느 것과도 충돌하지 않는 것을 실측으로 확인했다.
+    aVisualize = numFn.create("visualize", "lvp", MFnNumericData::kBoolean, false);
+    numFn.setKeyable(true);
+    addAttribute(aVisualize);
 
     return MS::kSuccess;
 }

@@ -23,6 +23,7 @@ _ATTRS = [
     ("updateRate", "Update rate (Hz)", "float"),
     ("frameId", "Frame id", "string"),
     ("enabled", "Enabled", "bool"),
+    ("visualize", "Live preview", "bool"),
 ]
 
 _OPEN_EDITORS = {}  # lidarFullPath -> MaroLidarPanel

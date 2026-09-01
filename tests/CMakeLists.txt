@@ -84,6 +84,7 @@ add_executable(maro_lidar_tests
     lidar/test_ray_pattern.cpp
     lidar/test_scan_engine.cpp
     lidar/test_point_cloud_packing.cpp
+    lidar/test_decimation.cpp
 )
 
 target_link_libraries(maro_lidar_tests PRIVATE

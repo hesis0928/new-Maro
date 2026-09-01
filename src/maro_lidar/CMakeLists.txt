@@ -82,6 +82,7 @@ endif()
 
 add_library(maro_lidar STATIC
     src/RayPattern.cpp
+    src/Decimation.cpp
     src/ScanEngine.cpp
     src/PointCloudPacking.cpp
 )

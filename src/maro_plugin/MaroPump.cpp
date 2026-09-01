@@ -11,6 +11,7 @@
 #include <maya/MDistance.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnMesh.h>
+#include <maya/MFnPointArrayData.h>
 #include <maya/MGlobal.h>
 #include <maya/MIntArray.h>
 #include <maya/MItDependencyNodes.h>
@@ -24,12 +25,14 @@
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
+#include "maro_lidar/Decimation.h"
 #include "maro_lidar/ScanEngine.h"
 
 #include "MaroAxisNode.h"
 #include "MaroDiag.h"
 #include "MaroLidarNode.h"
 #include "MaroLidarScan.h"
+#include "MaroPointCloudNode.h"
 #include "MaroRosRuntime.h"
 
 namespace maro {
@@ -43,6 +46,11 @@ std::unique_ptr<maro::lidar::ScanEngine> MaroPump::s_scanEngine;
 namespace {
 
 constexpr float kPumpIntervalSeconds = 1.0f / 30.0f;
+
+// aVisualize가 켜진 maroLidar가 매 틱 짝 maroPointCloud로 밀어 넣는 프리뷰
+// 포인트 상한. 실제 스캔(runtime.lidarQueue()로 나가는 전체 포인트)에는
+// 영향을 주지 않는다 -- 이건 순전히 뷰포트 프리뷰용 디시메이션이다.
+constexpr std::size_t kMaxPreviewPoints = 4096;
 
 AxisConvention conventionOf(const MFnDependencyNode& axisFn) {
     AxisConvention conv;
@@ -287,6 +295,34 @@ void MaroPump::collectLidarScans(MaroRosRuntime& runtime) {
         // 노드의 몫은 끝났으므로 스로틀 기준점을 갱신한다.
         state.lastScan = tickNow;
         state.hasScanned = true;
+
+        // 라이브 프리뷰(Task 5) -- points가 아래에서 std::move로 큐에 들어가기
+        // 전에 먼저 처리해야 한다(그렇지 않으면 빈 벡터를 읽는다). 전역
+        // 제약: cmds/MDGModifier를 거치지 않는 raw plug write여야 한다 --
+        // 이 틱마다(~30fps) 도는 코드가 undo 큐를 도배하면 안 된다(Phase 3
+        // idle-loop 교훈과 같은 이유).
+        if (lidarFn.findPlug(MaroLidarNode::aVisualize, false).asBool()) {
+            MPlug messagePlug = lidarFn.findPlug("message", false);
+            MPlugArray destinations;
+            messagePlug.connectedTo(destinations, false, true);
+            for (unsigned int i = 0; i < destinations.length(); ++i) {
+                if (destinations[i].attribute() != MaroPointCloudNode::aSourceLidar) continue;
+                MFnDependencyNode pointCloudFn(destinations[i].node());
+                if (pointCloudFn.typeId() != MaroPointCloudNode::id) continue;
+
+                const auto preview = maro::lidar::decimateForPreview(points, kMaxPreviewPoints);
+                MPointArray mayaPoints;
+                mayaPoints.setLength(static_cast<unsigned int>(preview.size()));
+                for (unsigned int j = 0; j < mayaPoints.length(); ++j) {
+                    mayaPoints[j] = MPoint(preview[j].x, preview[j].y, preview[j].z, 1.0);
+                }
+                MFnPointArrayData pointArrayDataFn;
+                MObject pointsData = pointArrayDataFn.create(mayaPoints);
+                MPlug pointsPlug = pointCloudFn.findPlug(MaroPointCloudNode::aPoints, false);
+                pointsPlug.setValue(pointsData);
+                break;
+            }
+        }
 
         if (!points.empty()) {
             LidarSample sample;

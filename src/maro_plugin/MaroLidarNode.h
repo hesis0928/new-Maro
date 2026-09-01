@@ -31,6 +31,7 @@ public:
     static MObject aFrameId;
     static MObject aTargetMeshes;
     static MObject aEnabled;
+    static MObject aVisualize;
 };
 
 }  // namespace maro
