@@ -610,8 +610,27 @@ Tasks 1-4에서 구현한 Tech Diag 기술 진단 기능(양쪽 뷰포트 옆의
    그것은 통상적인 DG dirty 전파가 `prepareForDraw()`를 다시 부르게 만드는
    별개의 경로가 동작한다는 증거일 뿐이다(어느 경로인지는 이 절의 범위 밖).
    `preEvaluation()`의 dirty 신호 자체를 증명하는 것은 아래 6번이다.
-4. 뷰를 회전/줌해서 점들이 프러스텀 밖으로 나갔다 들어왔다 해도 컬링되지
-   않고 계속 보이는가(`boundingBox()`가 실제 점 범위를 반영한다는 증거).
+4. **[필수 · `boundingBox()`가 실제 점 범위를 반영하는가]** *(최종 리뷰
+   Minor-4로 문구를 고쳤다 -- 예전 문구는 "프러스텀 밖으로 나가도 컬링되지
+   않는가"였는데, 화면 밖 지오메트리를 컬링하는 것은 Viewport 2.0의 정상
+   동작이지 결함이 아니다. 그대로 두면 정상 동작을 실패로 적게 된다.)*
+   원점에서 멀리 떨어진 점을 하나 추가한 뒤, **그 점이 화면 안에 보이는
+   구도로 카메라를 맞춘 상태에서** 실제로 그려지는지 본다:
+   ```python
+   cmds.setAttr(node + ".points", 6,
+                (0,0,0,1), (2,0,0,1), (0,2,0,1), (0,0,2,1), (1,1,1,1),
+                (200, 0, 0, 1),
+                type="pointArray")
+   ```
+   - 뷰포트에서 `f`(프레임 전체)를 눌러 모든 점이 들어오는 구도로 맞춘다.
+   - **[필수]** 멀리 있는 그 점이 **화면 안에 있는 동안 계속 보인다.**
+     `boundingBox()`가 실제 점 범위를 안 읽고 고정된 작은 박스(예: 빈 배열
+     폴백인 -1..1)만 돌려주면, 화면에 분명히 들어와 있는데도 이 점이
+     통째로 사라진다 -- 그것이 이 항목이 잡으려는 회귀다.
+   - **[필수]** 그려진 점들의 전체 퍼짐이 위에서 설정한 좌표와 눈으로
+     일치한다(원점 근처 5개 + 멀리 X축 방향 1개).
+   - 반대로 카메라를 돌려 그 먼 점이 **화면 밖으로 완전히 나가면** 안
+     보이는 것이 정상이다 -- 이것은 실패가 아니다.
 5. `cmds.setAttr(node + ".enabled", False)` — 점이 사라지고, 다시 `True`로
    되돌리면 다시 보이는가.
 6. **[필수 · `preEvaluation()`이 실제로 지켜보는 유일한 어트리뷰트]** 점이
@@ -667,7 +686,23 @@ Tasks 1-4에서 구현한 Tech Diag 기술 진단 기능(양쪽 뷰포트 옆의
 
 ### 6-2. 마킹메뉴 + 설정 팝업 (Task 4)
 
-1. 플러그인 로드 후 씬에 메쉬 오브젝트 하나를 만든다. 우클릭 → **[필수]**
+0. **[선행 조건 · 반드시 먼저 한다]** *(최종 리뷰 I-2)* 바로 앞 §6-1의
+   마지막 단계가 `cmds.unloadPlugin("maro", force=True)`로 **플러그인을 강제
+   언로드**했다 -- 그것이 §6-1의 go/no-go 판정 그 자체였으므로 건너뛸 수
+   없었고, 그 결과 `## 준비`가 세워 둔 상태(메인 창, 두 뷰포트, ROS 프록시,
+   그리고 `dagMenuProc` 체이닝까지)가 **전부 사라져 있다.** 이 절과 §6-3은
+   그 상태가 살아 있다고 전제하므로, 여기서 다시 세우고 시작한다:
+
+   ```python
+   import maya.cmds as cmds
+   cmds.loadPlugin(r"C:\Users\ckd30\Projects\Maya_Ros_Sim\out\build\src\maro_plugin\Release\maro.mll")
+   cmds.file(new=True, force=True)
+   cmds.maroMainWindow()
+   ```
+
+   `## 준비`의 4단계까지를 그대로 다시 한 것이다. "Maro" 창이 떠 있고 좌우
+   두 뷰포트(Maya/ROS)가 보이는 상태가 되어야 아래로 진행한다.
+1. 씬에 메쉬 오브젝트 하나를 만든다. 우클릭 → **[필수]**
    네이티브 마킹 메뉴에 "Maro node editor"와 나란히 "Maro LiDAR" 항목이
    보이는가.
 2. "Maro LiDAR" 클릭 — **[필수]** 설정 팝업이 뜨고, 12개 필드가 기본값으로
@@ -686,6 +721,31 @@ Tasks 1-4에서 구현한 Tech Diag 기술 진단 기능(양쪽 뷰포트 옆의
 
 ### 6-3. 라이브 프리뷰 (Task 5) — **[필수 · go/no-go]**
 
+0. **[선행 조건 · 반드시 먼저 한다]** *(최종 리뷰 I-1)* **브리지 펌프를
+   켠다.** 라이브 프리뷰의 갱신은 오직 `MaroPump::collectLidarScans()` 안에서만
+   일어나고, 그 함수는 `MaroPump::start()`가 타이머를 걸어 뒀을 때만 틱한다.
+   `MaroPump::start()`를 부르는 곳은 `maroStartBridge` 커맨드 **하나뿐**이다 --
+   즉 이걸 안 하면 "Live preview" 체크박스를 켜든 말든 포인트가 영영 갱신되지
+   않고, 이 절 전체가 원인 불명의 FAIL로 끝난다(이 문서 어디에도 브리지를
+   켜는 단계가 없었던 것이 그 함정이었다):
+
+   ```python
+   cmds.maroStartBridge("checklistRobot")
+   ```
+
+   인자는 로봇 이름 문자열 하나다(`tests/maya/test_bridge_pump.py`는
+   `cmds.maroStartBridge("maro")`, `tests/maya/test_lidar_publish.py`는
+   `cmds.maroStartBridge("testRobot")`로 부른다 -- 이름 자체는 /tf 발행에만
+   쓰이므로 아무 값이나 좋다). 실제로 켜졌는지는 아래로 확인한다:
+
+   ```python
+   cmds.maroBridgeStats()   # 펌프가 돌기 시작하면 카운터가 0에서 늘어난다
+   ```
+
+   §6-2까지는 "Scan now" 버튼(=`maroSnapshotLidarScan`, 브리지와 무관한
+   동기 스냅샷)만 썼기 때문에 브리지가 필요 없었다 -- 그래서 여기가 이
+   문서에서 브리지를 처음 켜는 자리다. 이 절이 끝나면 `cmds.maroStopBridge()`로
+   되돌려 둔다.
 1. LiDAR 설정 팝업에서 "Live preview" 체크박스를 켜고 "적용".
 2. 씬에서 타겟 메쉬를 이동시킨다(예: `translateX`를 애니메이션 재생 없이
    드래그로 계속 바꿔 본다). **[필수]** ROS 뷰포트의 포인트클라우드가
@@ -708,10 +768,42 @@ Tasks 1-4에서 구현한 Tech Diag 기술 진단 기능(양쪽 뷰포트 옆의
    Editor에서 반복 조회해 데이터 자체는 계속 바뀌고 있는지("화면만 안
    그려짐" — 리드로우 트리거 누락) 아니면 데이터도 멈춰 있는지("펌프/게이트
    문제")를 구분해 기록한다.
-4. Script Editor를 열어 둔 채 1-2번을 반복 — **[필수]** `undo` 히스토리가
-   매 틱 쌓이지 않는가(`cmds.undoInfo(query=True, undoQueueEmpty=True)`가
-   계속 갱신되는 동안에도 사용자가 켠 마지막 실제 undo 지점 이후로 늘지
-   않아야 한다 -- 라이브 프리뷰가 undo 큐를 도배하면 이 검사가 실패한다).
+
+   > **갱신 (최종 리뷰 I-5):** 그 사이 `MaroPump::collectLidarScans()`의
+   > 라이브 프리뷰 블록이 raw plug write **직후** 직접
+   > `MHWRender::MRenderer::setGeometryDrawDirty(pointCloudNode)`를 부르도록
+   > 고쳐졌다(`MaroPointCloudNode::preEvaluation()`이 쓰는 것과 같은 호출).
+   > 즉 이제 리드로우는 Evaluation Manager가 이 노드를 평가 그래프에
+   > 스케줄해 주느냐에 더 이상 의존하지 않는다. 이 항목은 그래도 그대로
+   > 수행한다 — 이 수정이 실제 GPU 컨텍스트에서 의도대로 먹는지는 여전히
+   > 사람만 확인할 수 있고, 이 항목이 그 유일한 확인 지점이다.
+4. **[필수 · undo 큐를 도배하지 않는다]** *(최종 리뷰 Minor-10으로 문구를
+   고쳤다 -- 예전 문구는 `cmds.undoInfo(query=True, undoQueueEmpty=True)`를
+   봤는데, 그것은 "큐가 비었는가"라는 **bool**이지 개수가 아니다. 세션에서
+   undo 가능한 일을 한 번이라도 한 뒤에는 영원히 `False`로 고정되므로,
+   프리뷰가 매 틱 undo 항목을 밀어 넣고 있든 아니든 똑같이 `False`다 --
+   무엇도 판정하지 못한다.)* 대신 **"가장 최근 undo 항목이 무엇인가"를
+   전후로 비교**한다:
+
+   ```python
+   # (1) 라이브 프리뷰가 켜져 있고 펌프가 도는 상태에서, 기준점을 만든다.
+   cmds.polyCube(name="undoProbeCube")      # 확실한 undo 항목 하나
+   cmds.undoInfo(query=True, undoName=True) # -> 이 문자열을 적어 둔다
+   ```
+
+   이제 **아무것도 하지 않고**(마우스도 움직이지 않고) 10초쯤 기다린 뒤,
+   같은 질의를 다시 한다:
+
+   ```python
+   cmds.undoInfo(query=True, undoName=True)
+   ```
+
+   **[필수]** 두 값이 **같아야 한다.** 라이브 프리뷰가 undo 큐에 무언가를
+   밀어 넣고 있다면, 아무 조작도 안 했는데 "가장 최근 undo 항목"이 큐브
+   생성에서 다른 것으로 바뀌어 있다. 이어서 `Ctrl+Z`를 **한 번** 눌러
+   큐브가 곧바로 사라지는지도 확인한다(프리뷰 항목이 쌓였다면 여러 번
+   눌러야 큐브에 도달한다). 이것이 "라이브 프리뷰 쓰기는 커맨드/`MDGModifier`
+   가 아니라 raw plug write여야 한다"는 설계 제약의 실제 검증이다.
 5. `verticalSamples`/`horizontalSamples`를 스펙급으로 크게 올려(예:
    64 x 2048, 단 `kMaxRaysPerScan` 상한 65536 이내로) 라이브 프리뷰를 켠
    채로 몇 초 관찰 — **[필수]** Maya UI가 멈추지 않고(디시메이션이
@@ -781,6 +873,17 @@ Phase 2, Phase 3 판정을 함께 담고 있다(§1-1이 Phase 2, §1-2가 Phase
 | 6-1. `enabled` 토글이 반영된다 | 5(LiDAR) | 관찰 | | | `addUIDrawables()`가 캐시된 값을 실제로 쓰는지 |
 | 6-1. **`.points`를 다른 배열로 재설정 — 그려진 점이 실제로 바뀐다** | 5(LiDAR) | 필수 | | | `preEvaluation()`이 `dirtyPlugExists(aPoints, ...)`로 지켜보는 유일한 경로의 실제 증거(리뷰 Finding I3) |
 | 6-1. **점이 보이는 상태로 언로드 — 무크래시** | 5(LiDAR) | 필수 | | | Task 1의 진짜 go/no-go. `unloadPlugin("maro", force=True)`로 검증(리뷰 Finding I2 — 강제 옵션 없이는 Maya가 노드 인스턴스가 남아 있는 한 언로드 자체를 거부한다) |
+| 6-2. 마킹 메뉴에 "Maro LiDAR" 항목이 보인다 | 5(LiDAR) | 필수 | | | Task 4. §6-2의 0번(플러그인 재로드 + `maroMainWindow()`)을 먼저 해야 한다 — §6-1이 강제 언로드로 그 상태를 없앤다(최종 리뷰 I-2) |
+| 6-2. 설정 팝업이 뜨고 12개 필드가 기본값으로 채워진다 | 5(LiDAR) | 필수 | | | |
+| 6-2. 재클릭이 재생성이 아니라 재오픈이다(바꾼 값 유지) | 5(LiDAR) | 필수 | | | |
+| 6-2. 비-메쉬 오브젝트에서 placeholder 구가 생기고 선택된다 | 5(LiDAR) | 필수 | | | |
+| 6-2. 타겟 메쉬 추가/제거가 실제 연결에 반영된다 | 5(LiDAR) | 필수 | | | `cmds.listConnections`로 확인 |
+| 6-2. **"Scan now" → ROS 뷰포트에 포인트가 나타난다** | 5(LiDAR) | 필수 | | | 드로우 오버라이드가 실제 스캔 데이터로 그리는 첫 확인. 갓 만든 LiDAR가 기본 설정으로 히트를 내는지도 여기서 함께 드러난다(최종 리뷰 C-1 — `_onLidarMenuItemClicked()`이 `rangeMin`을 0으로 세운다; 배치 가드는 `tests/maya/test_lidar_menu.py`) |
+| 6-3. 브리지를 켠 뒤 라이브 프리뷰가 메쉬를 실시간으로 따라간다 | 5(LiDAR) | 필수 | | | Task 5. §6-3의 0번(`cmds.maroStartBridge(...)`)을 먼저 해야 한다 — 펌프가 안 돌면 프리뷰는 영영 갱신되지 않는다(최종 리뷰 I-1) |
+| 6-3. **정지 상태에서도 펌프 틱만으로 스스로 다시 그려진다** | 5(LiDAR) | 필수 | | | 리드로우 타이밍. 최종 리뷰 I-5로 `setGeometryDrawDirty()`를 명시 호출하도록 고침 — 실제 GPU 컨텍스트에서의 확인은 이 행이 유일하다 |
+| 6-3. undo 큐가 프리뷰 틱으로 도배되지 않는다 | 5(LiDAR) | 필수 | | | `undoInfo -q -undoName`을 전후 비교(최종 리뷰 Minor-10으로 검사 방법 교체 — 예전 `undoQueueEmpty` bool은 아무것도 판정하지 못했다) |
+| 6-3. 스펙급 샘플 수에서도 UI가 멈추지 않는다(디시메이션) | 5(LiDAR) | 필수 | | | 예: 64 x 2048, `kMaxRaysPerScan`(65536) 이내 |
+| 6-3. **라이브 프리뷰가 도는 채로 언로드 — 무크래시** | 5(LiDAR) | 필수 | | | Task 5의 진짜 go/no-go. 렌더러가 소유한 오브젝트가 살아 있는 상태라 위험도가 가장 높다 |
 
 ### 종합 판정 (2026-08-25)
 

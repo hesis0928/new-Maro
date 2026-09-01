@@ -1762,7 +1762,18 @@ MObject MaroLidarNode::aVisualize;
 ```
 `initialize()`의 `aEnabled` 등록 블록 다음에 추가:
 ```cpp
-    aVisualize = numFn.create("visualize", "vis", MFnNumericData::kBoolean, false);
+// [Task 5 구현자가 실측으로 발견/수정] 짧은 이름은 이 플랜이 처음 적었던
+// "vis"가 아니라 "lvp"다. MPxLocatorNode가 상속하는 렌더 통계 어트리뷰트
+// "primaryVisibility"가 이미 짧은 이름 "vis"를 쓰고 있어서, "vis"로 create()
+// 하면 짧은 이름 충돌로 addAttribute()가 **조용히** 실패한다(반환값을 안 보면
+// 알 수 없다). 그렇게 반쯤 등록된 MObject를 나중에 MPlug::asBool()로 읽으면
+// TdataBlockDG::attrMemAddr에서 액세스 위반이 난다 -- 실측으로 maya_lidar_publish
+// 테스트가 collectLidarScans의 그 줄에서 mayapy를 죽였다. "lvp"는 이 노드
+// 타입의 기존 177개 상속+고유 어트리뷰트 어느 것과도 충돌하지 않음을
+// 실측으로 확인했다. (위 Task 1의 MTypeId 정정과 같은 종류의 정정이다 --
+// 플랜이 작성 시점의 정보로 고른 식별자가 실제 등록 시점에는 이미 쓰이고
+// 있었던 경우.)
+    aVisualize = numFn.create("visualize", "lvp", MFnNumericData::kBoolean, false);
     numFn.setKeyable(true);
     addAttribute(aVisualize);
 ```
