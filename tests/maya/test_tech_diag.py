@@ -160,6 +160,35 @@ assert diag.checkMeshCollisions({}) == []
 assert diag.checkMeshCollisions({"|onlyOne": (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)}) == []
 print("checkMeshCollisions OK")
 
+# --- checkLidarTargetMeshes / checkLidarRayCount (순수 함수) --------------
+
+noTargetRows = [{"lidarFullPath": "|lidar1", "enabled": True, "verticalSamples": 4,
+                 "horizontalSamples": 4, "targetMeshCount": 0}]
+findings = diag.checkLidarTargetMeshes(noTargetRows)
+assert len(findings) == 1 and findings[0]["category"] == "lidarNoTargetMesh"
+print("checkLidarTargetMeshes flags an enabled lidar with no target OK")
+
+disabledNoTargetRows = [{"lidarFullPath": "|lidar1", "enabled": False, "verticalSamples": 4,
+                         "horizontalSamples": 4, "targetMeshCount": 0}]
+assert diag.checkLidarTargetMeshes(disabledNoTargetRows) == []
+print("checkLidarTargetMeshes ignores a disabled lidar OK")
+
+hasTargetRows = [{"lidarFullPath": "|lidar1", "enabled": True, "verticalSamples": 4,
+                  "horizontalSamples": 4, "targetMeshCount": 1}]
+assert diag.checkLidarTargetMeshes(hasTargetRows) == []
+print("checkLidarTargetMeshes passes a lidar with a target OK")
+
+overCapRows = [{"lidarFullPath": "|lidar1", "enabled": True, "verticalSamples": 300,
+                "horizontalSamples": 300, "targetMeshCount": 1}]
+findings = diag.checkLidarRayCount(overCapRows)
+assert len(findings) == 1 and findings[0]["category"] == "lidarRayCountExceeded"
+print("checkLidarRayCount flags an over-cap configuration OK")
+
+underCapRows = [{"lidarFullPath": "|lidar1", "enabled": True, "verticalSamples": 4,
+                 "horizontalSamples": 36, "targetMeshCount": 1}]
+assert diag.checkLidarRayCount(underCapRows) == []
+print("checkLidarRayCount passes a default-scale configuration OK")
+
 # --- adjacentMeshPairs / filterAdjacentMeshCollisions (pure) ---
 chainRows = [
     {"axisFullPath": "|axP", "jointName": "p", "boundTargetPath": "|linkP",
@@ -375,6 +404,23 @@ assert [f for f in diag._runRosSideChecks()
         if f["category"] == "duplicateJointName"] == [], \
     "re-running the check after the remedies must find no duplicates left"
 print("_runRosSideChecks duplicate-name remedy collision avoidance OK")
+
+# --- _collectLidarRows()/(_runMayaSideChecks 경유) 통합 확인 --------------
+
+cmds.file(new=True, force=True)
+
+lidar = cmds.createNode("maroLidar")
+lidar = cmds.ls(lidar, long=True)[0]
+cmds.setAttr(lidar + ".enabled", True)
+cmds.setAttr(lidar + ".verticalSamples", 300)
+cmds.setAttr(lidar + ".horizontalSamples", 300)
+# targetMeshes를 일부러 비워 둔다 -- 두 검사 모두 걸려야 한다.
+
+mayaFindings = diag._runMayaSideChecks()
+categories = {f["category"] for f in mayaFindings}
+assert "lidarNoTargetMesh" in categories, categories
+assert "lidarRayCountExceeded" in categories, categories
+print("_runMayaSideChecks surfaces both new lidar findings OK")
 
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])

@@ -24,6 +24,12 @@ from PySide6 import QtWidgets
 
 LIMIT_PROXIMITY_THRESHOLD = 0.9
 
+# MaroLidarScan.h의 kMaxRaysPerScan과 반드시 같은 값이어야 한다 -- 이 프로젝트가
+# Python/C++ 경계에서 상수를 공유하는 기존 관례(AXIS_FIELDS/CAPABILITY_FIELDS)와 같은
+# 이유로 여기서도 독립적으로 선언한다(순환 임포트가 없는 게 아니라, 애초에 Python이
+# C++ 상수를 직접 참조할 방법이 없다).
+LIDAR_MAX_RAYS_PER_SCAN = 65536
+
 # C++ 쪽 계약. maroObjectNodeEditor.py/maroSingleObjectNodeEditor.py도 각자
 # 독립적으로 같은 값을 선언한다 -- 순환 import를 피하기 위한 이 프로젝트의
 # 기존 관례.
@@ -187,6 +193,48 @@ def checkMeshCollisions(boundingBoxesByMesh):
                 "summary": "{} and {} bounding boxes overlap".format(meshA, meshB),
                 "axis": None,
                 "meshes": (meshA, meshB),
+                "remedy": None,
+            })
+    return findings
+
+
+def checkLidarTargetMeshes(lidarRows):
+    """enabled인 maroLidar가 targetMeshes를 하나도 갖고 있지 않으면 경고.
+
+    Maya를 부르지 않는 순수 함수다(lidarRows에 이미 들어 있는 필드만 본다)."""
+    findings = []
+    for row in lidarRows:
+        if not row["enabled"]:
+            continue
+        if row["targetMeshCount"] == 0:
+            findings.append({
+                "category": "lidarNoTargetMesh",
+                "severity": "warning",
+                "summary": "{}: enabled but has no target mesh connected".format(
+                    row["lidarFullPath"]),
+                "axis": None,
+                "remedy": None,
+            })
+    return findings
+
+
+def checkLidarRayCount(lidarRows):
+    """verticalSamples x horizontalSamples가 LIDAR_MAX_RAYS_PER_SCAN을
+    넘는 설정을 찾는다 -- 그 스캔은 레이캐스팅 자체가 매 틱 조용히 거부된다
+    (MaroPump.cpp의 RayCountTooLarge 경고와 같은 조건)."""
+    findings = []
+    for row in lidarRows:
+        rayCount = row["verticalSamples"] * row["horizontalSamples"]
+        if rayCount > LIDAR_MAX_RAYS_PER_SCAN:
+            findings.append({
+                "category": "lidarRayCountExceeded",
+                "severity": "warning",
+                "summary": (
+                    "{}: verticalSamples({}) x horizontalSamples({}) = {} exceeds "
+                    "the per-scan cap of {}".format(
+                        row["lidarFullPath"], row["verticalSamples"],
+                        row["horizontalSamples"], rayCount, LIDAR_MAX_RAYS_PER_SCAN)),
+                "axis": None,
                 "remedy": None,
             })
     return findings
@@ -388,6 +436,26 @@ def _readCurrentValue(axis, driveIsLinear):
     return om2.MAngle(raw, om2.MAngle.uiUnit()).asRadians()
 
 
+def _collectLidarRows():
+    """씬의 모든 maroLidar를 checkLidarTargetMeshes/checkLidarRayCount가
+    필요로 하는 좁은 필드로 조회한다. targetMeshCount는 evaluateNumElements가
+    아니라 listConnections로 실제 연결 개수를 센다 -- 빈 논리 인덱스를
+    materialize하는 함정(MaroLidarScan.cpp의 firstConnectedMesh 도크스트링과
+    같은 함정)을 cmds 쪽에서는 elementByLogicalIndex를 직접 안 써서 피한다."""
+    rows = []
+    for lidar in cmds.ls(type="maroLidar", long=True) or []:
+        connectedMeshes = cmds.listConnections(
+            lidar + ".targetMeshes", source=True, destination=False) or []
+        rows.append({
+            "lidarFullPath": lidar,
+            "enabled": bool(cmds.getAttr(lidar + ".enabled")),
+            "verticalSamples": cmds.getAttr(lidar + ".verticalSamples"),
+            "horizontalSamples": cmds.getAttr(lidar + ".horizontalSamples"),
+            "targetMeshCount": len(connectedMeshes),
+        })
+    return rows
+
+
 def _runMayaSideChecks():
     axisRows = sliceAxisTechRows(cmds.maroListAxisNodes())
     capsByAxis = {}
@@ -424,6 +492,10 @@ def _runMayaSideChecks():
     # 부모-자식 축에 물린 메쉬끼리의 겹침은 뺀다(adjacentMeshPairs 도크스트링).
     findings += filterAdjacentMeshCollisions(checkMeshCollisions(boxes),
                                              adjacentMeshPairs(axisRows))
+
+    lidarRows = _collectLidarRows()
+    findings += checkLidarTargetMeshes(lidarRows)
+    findings += checkLidarRayCount(lidarRows)
     return findings
 
 
