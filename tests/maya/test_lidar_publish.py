@@ -18,6 +18,14 @@ rangeMax = 0.02 m = 2 유닛 < 100 유닛이므로 스캔이 멈춰야 한다 --
 
 발행된 PointCloud2의 바이트 내용(좌표/frame_id)까지는 검증하지 않는다 --
 maro_test_peer에 PointCloud2 구독 모드가 없어서다(브리프 §남는 검증 공백).
+
+Fix round 1, Finding I2: Task 5의 라이브 프리뷰 경로(MaroPump::collectLidarScans의
+.visualize 게이트 -> .message/aSourceLidar 연결 추적 -> decimateForPreview() ->
+짝 maroPointCloud.points로의 raw plug write)는 이 파일이 이미 띄워 둔 실제
+브리지/펌프에 얹어 검증한다 -- 새 rclcpp 컨텍스트를 또 띄우는 별도 테스트
+파일을 만들지 않는다(그러면 bridge_pump/lidar_publish처럼 RUN_SERIAL과 DDS
+도메인 격리를 또 신경 써야 한다). visualize=false일 때 points가 전혀
+바뀌지 않는 것과, true로 켜면 실제로 채워지는 것을 둘 다 확인한다.
 """
 import math
 import os
@@ -137,6 +145,62 @@ try:
         f"(stats={cmds.maroBridgeStats()})"
     )
     print(f"lidar publish OK (lidarScans={lidar_scans}, publishErrors={pub_errors})")
+
+    # --- Fix round 1, Finding I2: 라이브 프리뷰(visualize) 파이프라인 자체를
+    # 종단으로 검증한다. 지금까지의 assert는 전부 게이트(asBool() 읽기)
+    # 이전, 즉 발행 큐 방향만 확인했다 -- .message/aSourceLidar 연결을 따라가
+    # 짝 maroPointCloud를 찾고, decimateForPreview()로 줄이고,
+    # MDGModifier 없이 raw plug write하는 나머지 절반은 지금까지 어떤
+    # 테스트도 건드리지 않았다(다른 테스트는 전부 .visualize를 true로
+    # 세팅하지 않거나, asBool()이 false를 돌려주는 것만 본다).
+    pointCloud = cmds.createNode("maroPointCloud")
+    pointCloud = cmds.ls(pointCloud, long=True)[0]
+    cmds.connectAttr(lidar + ".message", pointCloud + ".sourceLidar")
+
+    def points_of(node):
+        values = cmds.getAttr(node + ".points")
+        return values if values else []
+
+    # visualize 기본값은 false다. 스캔은 이미 위에서 확인했듯 계속 발행 큐로
+    # 흐르고 있지만, 라이브 프리뷰 게이트가 꺼져 있으면 pointCloud.points는
+    # 절대 손대면 안 된다 -- 이 상태에서 그 어트리뷰트를 건드릴 수 있는
+    # 것은 Task 3의 수동 maroSnapshotLidarScan뿐이어야 한다(여긴 부르지
+    # 않는다). 이게 "게이트가 실제로 뭔가를 막고 있다"는 근거다.
+    assert cmds.getAttr(lidar + ".visualize") is False, (
+        "expected visualize to default to false")
+    pump(1.0)
+    assert points_of(pointCloud) == [], (
+        "maroPointCloud.points changed while visualize is false -- the "
+        "live-preview gate did not actually gate anything "
+        f"(points={points_of(pointCloud)})"
+    )
+    print("visualize=false leaves the paired point cloud untouched OK")
+
+    # 켜면 다음 몇 틱 안에 실제로 채워져야 한다.
+    cmds.setAttr(lidar + ".visualize", True)
+    assert wait_until(lambda: len(points_of(pointCloud)) > 0, timeout=20), (
+        "enabling visualize did not populate the paired maroPointCloud.points "
+        f"(points={points_of(pointCloud)})"
+    )
+    preview_points = points_of(pointCloud)
+    # 수직/수평 샘플이 둘 다 1이므로(위 설정) 스캔 하나가 히트를 정확히
+    # 하나만 낸다 -- 디시메이션 상한(kMaxPreviewPoints=4096)과는 무관하게
+    # 이 씬에서는 정확히 1개를 기대할 수 있다.
+    assert len(preview_points) == 1, (
+        f"expected exactly one preview point for a 1x1 scan, got {preview_points}")
+    # cmds.getAttr()가 pointArray 어트리뷰트에 대해 돌려주는 튜플은
+    # (x, y, z, w) 4개다(MPoint의 동차 좌표 그대로) -- 앞의 3개만 쓴다.
+    px, py, pz = preview_points[0][:3]
+    assert math.isfinite(px) and math.isfinite(py) and math.isfinite(pz), (
+        f"preview point is not finite: {preview_points[0]}")
+    # 라이다는 평면(원점, 폭/높이 10)의 원점 바로 위 100 유닛에서 똑바로
+    # 아래를 본다(위 rotateX 주석 참고) -- 히트는 원점 근처여야 한다. 이건
+    # "쓰레기 값이 아니라 실제 스캔 결과가 그대로 넘어왔다"는 근거다.
+    assert abs(px) < 1.0 and abs(py) < 1.0 and abs(pz) < 1.0, (
+        f"preview point {preview_points[0]} is not near the expected "
+        "ground-plane hit near the origin"
+    )
+    print(f"visualize=true populates the paired point cloud OK ({preview_points[0]})")
 
     # --- Finding C1: rangeMin/rangeMax는 미터다 -------------------------
     # 0.02 m = 2 Maya 유닛. 목표는 100 유닛 떨어져 있으므로 사거리 밖이고,

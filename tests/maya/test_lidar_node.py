@@ -33,6 +33,7 @@ expected = [
     "frameId",
     "targetMeshes",
     "enabled",
+    "visualize",
 ]
 for attr in expected:
     assert cmds.attributeQuery(attr, node=lidar, exists=True), f"missing attr: {attr}"
