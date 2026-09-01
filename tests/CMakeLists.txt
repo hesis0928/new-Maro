@@ -289,7 +289,8 @@ if(MARO_BUILD_PLUGIN)
                       remedy_availability remedy_ambiguous_names
                       main_thread_queue remedy_apply sentinel lidar_node
                       ros_proxy_commands ros_proxy_sync axis_editor_commands
-                      dag_menu tech_diag point_cloud_node lidar_commands lidar_menu)
+                      dag_menu tech_diag point_cloud_node lidar_commands
+                      lidar_menu skeleton_upload)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")
