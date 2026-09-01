@@ -1,6 +1,7 @@
 """maroSnapshotLidarScan의 undo/redo 계약과 실제 스캔 결과를 배치 모드에서
 고정한다. 브리지(rclcpp) 없이 동작해야 한다는 것이 이 커맨드의 핵심
 요구사항이므로, maroStartBridge를 전혀 부르지 않는다."""
+import math
 import os
 
 import maya.standalone
@@ -156,11 +157,54 @@ cmds.setAttr(offsetLidar + ".offsetTranslateX", 0.0)
 # binding computing the same underlying transform math, so this is a real
 # cross-check of the production code's matrix composition, not an assumed
 # sign eyeballed into a magic constant.
+#
+# [Fix round 1] The above description was true in intent but not in effect:
+# `offsetLidar` itself sits on an *identity* mount transform, so
+# `offsetMatrix * worldMatrix` and `worldMatrix * offsetMatrix` are
+# algebraically indistinguishable when worldMatrix is identity -- this test
+# would pass even if MaroLidarScan.cpp's multiplication order were flipped.
+# To make this a real regression test for composition order, give the mount
+# a genuine (non-identity, non-single-axis) rotation + translation --
+# rotateZ=40deg, translate=(300, 50, 0), matching the reviewer's suggested
+# magnitude -- on a *separate* lidar/ground pair so the baseline and
+# offsetTranslateX assertions above (which assume an identity mount) are
+# left untouched.
+rotateOffsetGround, _ = cmds.polyPlane(
+    width=20000, height=20000, subdivisionsX=1, subdivisionsY=1, name="rotateOffsetGround")
+cmds.setAttr(rotateOffsetGround + ".translateY", -1000)
+
+# Non-identity mount: rotateZ is an angle attribute, so under this scene's
+# currentUnit(angle="rad") the literal below is radians, not degrees.
+lidarMount = cmds.createNode("transform", name="lidarMount")
+cmds.setAttr(lidarMount + ".translate", 300, 50, 0, type="double3")
+cmds.setAttr(lidarMount + ".rotateZ", math.radians(40))
+
+rotateLidar = cmds.createNode("maroLidar", parent=lidarMount)
+rotateLidar = cmds.ls(rotateLidar, long=True)[0]
+cmds.connectAttr(rotateOffsetGround + ".message", rotateLidar + ".targetMeshes[0]")
+cmds.setAttr(rotateLidar + ".verticalSamples", 1)
+cmds.setAttr(rotateLidar + ".horizontalSamples", 1)
+cmds.setAttr(rotateLidar + ".verticalMinAngle", -1.5707963267948966)  # straight down
+cmds.setAttr(rotateLidar + ".horizontalMinAngle", 0.0)
+cmds.setAttr(rotateLidar + ".rangeMin", 0.0)
+cmds.setAttr(rotateLidar + ".rangeMax", 5000.0)
+
+rotateOffsetPointCloud = cmds.createNode("maroPointCloud")
+rotateOffsetPointCloud = cmds.ls(rotateOffsetPointCloud, long=True)[0]
+
+# Read the LiDAR's *actual* current world matrix off the real DAG node
+# (MDagPath + inclusiveMatrix, the same call MaroLidarScan.cpp itself makes)
+# rather than assuming identity -- this is what lets the cross-check below
+# actually exercise a non-trivial worldMatrix.
+rotateLidarSel = om2.MSelectionList()
+rotateLidarSel.add(rotateLidar)
+rotateLidarDagPath = rotateLidarSel.getDagPath(0)
+mountWorldMatrix = rotateLidarDagPath.inclusiveMatrix()
+
 rotateAngle = 0.3  # radians
 offsetXform = om2.MTransformationMatrix()
 offsetXform.setRotation(om2.MEulerRotation(rotateAngle, 0.0, 0.0))
 offsetMatrix = offsetXform.asMatrix()
-mountWorldMatrix = om2.MMatrix()  # offsetLidar itself has an identity transform
 effectiveMatrix = offsetMatrix * mountWorldMatrix
 
 localDir = om2.MVector(0.0, -1.0, 0.0)  # matches computeRayDirections at vertical=-pi/2
@@ -177,14 +221,13 @@ expectedHit = (
     originVec.z + worldDir.z * t,
 )
 
-cmds.setAttr(offsetLidar + ".offsetRotateX", rotateAngle)
-rotatedHit = _singleHit(offsetLidar, offsetPointCloud)
+cmds.setAttr(rotateLidar + ".offsetRotateX", rotateAngle)
+rotatedHit = _singleHit(rotateLidar, rotateOffsetPointCloud)
 for actual, expected, axis in zip(rotatedHit, expectedHit, "xyz"):
     assert abs(actual - expected) < 1e-2, (
         f"offsetRotateX={rotateAngle}: expected hit {axis}~={expected}, "
         f"got {rotatedHit} (full expected {expectedHit})")
 print(f"offsetRotateX OK (expected {expectedHit}, got {rotatedHit})")
-cmds.setAttr(offsetLidar + ".offsetRotateX", 0.0)
 
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])

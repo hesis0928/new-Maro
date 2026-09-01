@@ -158,9 +158,25 @@ LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine&
     const double rangeMinMaya = rangeMin * mayaPerMeter;
     const double rangeMaxMaya = rangeMax * mayaPerMeter;
 
+    const double offsetTranslateXMeters =
+        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateX, false).asDouble();
+    const double offsetTranslateYMeters =
+        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateY, false).asDouble();
+    const double offsetTranslateZMeters =
+        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateZ, false).asDouble();
+    const double offsetRotateX =
+        lidarFn.findPlug(MaroLidarNode::aOffsetRotateX, false).asMAngle().asRadians();
+    const double offsetRotateY =
+        lidarFn.findPlug(MaroLidarNode::aOffsetRotateY, false).asMAngle().asRadians();
+    const double offsetRotateZ =
+        lidarFn.findPlug(MaroLidarNode::aOffsetRotateZ, false).asMAngle().asRadians();
+
     if (!std::isfinite(verticalMinAngle) || !std::isfinite(verticalMaxAngle) ||
         !std::isfinite(horizontalMinAngle) || !std::isfinite(horizontalMaxAngle) ||
-        !std::isfinite(rangeMinMaya) || !std::isfinite(rangeMaxMaya)) {
+        !std::isfinite(rangeMinMaya) || !std::isfinite(rangeMaxMaya) ||
+        !std::isfinite(offsetTranslateXMeters) || !std::isfinite(offsetTranslateYMeters) ||
+        !std::isfinite(offsetTranslateZMeters) || !std::isfinite(offsetRotateX) ||
+        !std::isfinite(offsetRotateY) || !std::isfinite(offsetRotateZ)) {
         return LidarScanResult::kInvalidConfig;
     }
     // Embree가 문서로 요구하는 전제: 0 <= tnear <= tfar.
@@ -197,19 +213,6 @@ LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine&
     // (오프셋된 행렬 * 마운트 월드 행렬). raw worldMatrix 자체는 그대로
     // 남겨 둔다 -- 원점/방향 계산에는 effectiveWorldMatrix만 쓴다.
     const MMatrix worldMatrix = lidarPath.inclusiveMatrix();
-
-    const double offsetTranslateXMeters =
-        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateX, false).asDouble();
-    const double offsetTranslateYMeters =
-        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateY, false).asDouble();
-    const double offsetTranslateZMeters =
-        lidarFn.findPlug(MaroLidarNode::aOffsetTranslateZ, false).asDouble();
-    const double offsetRotateX =
-        lidarFn.findPlug(MaroLidarNode::aOffsetRotateX, false).asMAngle().asRadians();
-    const double offsetRotateY =
-        lidarFn.findPlug(MaroLidarNode::aOffsetRotateY, false).asMAngle().asRadians();
-    const double offsetRotateZ =
-        lidarFn.findPlug(MaroLidarNode::aOffsetRotateZ, false).asMAngle().asRadians();
 
     // offsetTranslate*는 미터다 (rangeMin/rangeMax와 같은 규칙, 위 주석
     // 참고) -- 같은 mayaPerMeter로 Maya 단위로 바꿔야 아래 행렬 합성이
