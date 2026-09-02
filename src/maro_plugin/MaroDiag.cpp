@@ -347,6 +347,11 @@ void BoadMaro::info(const MString& message) {
     // (MaroDiag.h의 스레드 안전성 주석 참고).
     if (isMainThread()) {
         MGlobal::displayInfo(MString("[Maro-Info] ") + message);
+        // 연속된 진단 블록을 구분하는 시각적 구분선. 레코드의 심각도와
+        // 무관하게 항상 displayInfo로 찍는다 -- 그래야 에러/경고 색이 아닌
+        // 기본색으로 나와 "메시지의 일부"가 아니라 "구분자"로 보인다
+        // (2026-09-02-maro-diag-console-separator-design.md §3).
+        MGlobal::displayInfo(MString("------------"));
     }
     pushAndJournal(std::move(rec));
 }
@@ -358,6 +363,8 @@ void BoadMaro::warn(const MString& message) {
     rec.message = message.asChar();
     if (isMainThread()) {
         MGlobal::displayWarning(MString("[Maro-Warn] ") + message);
+        // 구분선은 항상 displayInfo로 찍는다 -- info()와 같은 이유.
+        MGlobal::displayInfo(MString("------------"));
     }
     pushAndJournal(std::move(rec));
 }
@@ -370,6 +377,10 @@ void BoadMaro::devInfo(const MString& message) {
     rec.message = message.asChar();
     if (isMainThread()) {
         MGlobal::displayInfo(MString("[Maro-Dev] ") + message);
+        // 구분선은 항상 displayInfo로 찍는다 -- info()와 같은 이유. _DEBUG
+        // 밖(이 프로젝트의 기본 빌드 구성인 RelWithDebInfo 포함)에서는 이
+        // 함수 본문 전체가 무연산이므로 이 줄도 자연히 컴파일되지 않는다.
+        MGlobal::displayInfo(MString("------------"));
     }
     pushAndJournal(std::move(rec));
 #else
@@ -576,6 +587,10 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         if (!rec.remedy.empty()) {
             MGlobal::displayInfo(MString("[Maro-Fix] ") + MString(rec.remedy.c_str()));
         }
+        // 구분선은 항상 displayInfo로 찍는다 -- info()와 같은 이유. 에러
+        // 줄과 (있으면) 해법 줄까지 전부 찍은 뒤 이 진단 이벤트 전체에
+        // 대해 정확히 한 번만 찍는다.
+        MGlobal::displayInfo(MString("------------"));
     }
     // 리뷰 Finding I1: 이 함수의 위쪽 try/catch는 book 조회/기록만 감쌌다 --
     // 여기, 순번 배정+삽입+저널 기록은 그 catch 밖이었다. pushAndJournal이

@@ -35,3 +35,31 @@
 확인용 진단을 만들려면: `maroAxis` 노드와 `pointLight`를 만들고
 `maroBindAxis`로 둘을 묶어 본다(거부되며 에러가 하나 쌓인다). 여러 번
 반복하면 접힌 행에 `x N`이 붙는 것을 볼 수 있다.
+
+## 진단 콘솔 구분선
+
+인터랙티브 Maya 2026에서 `maro.mll`을 로드한 뒤 스크립트 에디터에서 아래를
+실행해 서로 다른 심각도의 진단을 연달아 두 번 이상 일으킨다:
+
+```python
+import maya.cmds as cmds
+cmds.maroDiagEmit(severity="info", message="separator check A")
+cmds.maroDiagEmit(severity="warn", message="separator check B")
+cmds.maroDiagEmit(severity="error", message="separator check C", siteTag="ManualSeparatorCheck")
+```
+
+- [ ] **블록이 나뉘어 보인다** — 세 진단 각각의 출력 뒤에 `------------` 줄이
+      한 번씩만 보이고, 세 블록이 서로 섞이지 않고 스크롤 상에서 명확히
+      구분되는지 확인한다.
+- [ ] **구분선은 항상 기본색이다** — `[Maro-Warn]`/`[Maro-Error]` 줄은
+      Maya의 경고색/에러색으로 뜨는데, 그 바로 뒤의 `------------` 줄은
+      색이 섞이지 않고 기본색(정보색)으로 뜨는지 확인한다.
+- [ ] **해법이 있는 에러는 한 블록으로 묶인다** — 이미 book에 해법이
+      등록된 에러(예: 기존 "해법 적용과 undo" 절이 만드는 `AxisAlreadyBound`
+      진단을 두 번째로 재현)를 일으켜, `[Maro-Error]` 줄과 `[Maro-Fix]`
+      줄 사이에는 구분선이 끼지 않고, 그 두 줄 전체 뒤에만 구분선이 한 번
+      오는지 확인한다.
+
+`devInfo`(`[Maro-Dev]`)는 이 프로젝트의 기본 빌드 구성(RelWithDebInfo)에서
+함수 본문 전체가 컴파일되지 않으므로 이 체크리스트로 확인할 수 없다 --
+코드 리뷰로만 검증된 경로임을 기록해 둔다.
