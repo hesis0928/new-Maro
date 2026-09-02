@@ -184,8 +184,11 @@ class SkeletonUploadDialog(QtWidgets.QWidget):
         layout.addWidget(self._statusLabel)
 
     def closeEvent(self, event):
+        global _OPEN_DIALOG
         try:
             self._removeImportCallback()
+            if _OPEN_DIALOG is self:
+                _OPEN_DIALOG = None
         except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
             import traceback
             traceback.print_exc()
