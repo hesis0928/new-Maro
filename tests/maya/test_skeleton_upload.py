@@ -145,6 +145,59 @@ assert notFound is None, f"expected None for a mesh-free subtree, got {notFound}
 assert maroSkeletonUpload._findMeshInAssemblies([]) is None
 print("_findMeshInAssemblies found/not-found/empty cases OK")
 
+# --- [최종 리뷰 I-2] before/after 어셈블리 스냅샷 diff는 반드시 long=True로
+# 비교해야 한다 -----------------------------------------------------------
+# _onImportClicked/_onAfterImport(다이얼로그, Qt 필요 -- 배치 모드에서
+# 인스턴스화 불가)가 쓰는 것과 같은 cmds.ls(assemblies=True) 스냅샷-diff
+# 패턴 자체를 여기서 직접 재현한다. cmds.ls(assemblies=True)(long=True 없이)
+# 는 "짧은 유일 이름"을 주는데, 그 유일성은 씬 전체 상태에 달려 있다 -- 아예
+# 무관한 새 최상위/중첩 오브젝트가 같은 짧은 이름을 가지면, 기존 오브젝트를
+# 건드리지 않았어도 그 오브젝트의 짧은 유일 이름이 바뀐다. 그러면
+# before-스냅샷의 이름과 after-스냅샷의 이름이 문자열로 달라져서, diff가 그
+# 기존 오브젝트를 "새로 생김"으로 잘못 분류한다. long=True로 비교하면 항상
+# 풀 경로("|pCube1")라 씬 어디에 새 노드가 생기든 흔들리지 않는다.
+cmds.file(new=True, force=True)
+preExisting = cmds.polyCube(name="pCube1")[0]
+beforeShort = set(cmds.ls(assemblies=True) or [])
+beforeLong = set(cmds.ls(assemblies=True, long=True) or [])
+assert "pCube1" in beforeShort
+assert "|pCube1" in beforeLong
+
+# 무관한 새 그룹 밑에, 기존 최상위 오브젝트와 같은 짧은 이름을 가진 노드를
+# 만든다 -- 형제 이름 충돌이 아니라(다른 부모라 Maya가 막지 않는다) 씬
+# 전체에서 "pCube1"이라는 짧은 이름 자체가 모호해지는 경우다.
+decoyGroup = cmds.group(empty=True, name="decoyGroup")
+decoyNested = cmds.createNode("transform", name="pCube1", parent=decoyGroup)
+
+afterShort = set(cmds.ls(assemblies=True) or [])
+afterLong = set(cmds.ls(assemblies=True, long=True) or [])
+# 기존 최상위 pCube1이 이제는 짧은 이름이 아니라(다른 이름의 pCube1이
+# 씬에 생겼으므로) 스스로를 구분할 수 있는 이름으로 보고된다 -- 최상위
+# 오브젝트라 그 구분되는 이름은 곧 풀 경로("|pCube1")와 같다. 즉
+# beforeShort에 있던 "pCube1"이 afterShort에는 더 이상 없다.
+assert "pCube1" not in afterShort, (
+    "test setup assumption broken: expected the pre-existing top-level "
+    "pCube1's short-unique name to change once a same-named nested node "
+    f"appears elsewhere, afterShort={afterShort}")
+assert "|pCube1" in afterLong, (
+    "the pre-existing object's long name must stay stable across the "
+    f"mutation, afterLong={afterLong}")
+
+shortDiff = afterShort - beforeShort
+longDiff = afterLong - beforeLong
+assert "|pCube1" in shortDiff, (
+    "this reproduces the I-2 bug: comparing WITHOUT long=True incorrectly "
+    "includes the untouched pre-existing object in the 'newly imported' "
+    f"diff, shortDiff={shortDiff}")
+assert "|pCube1" not in longDiff, (
+    "comparing WITH long=True must exclude the untouched pre-existing "
+    f"object from the diff, longDiff={longDiff}")
+assert longDiff == {"|decoyGroup"}, (
+    f"long=True diff must contain exactly the actually-new top-level "
+    f"object, got {longDiff}")
+print("assembly snapshot diff: without long=True incorrectly includes a "
+      "pre-existing object, with long=True correctly excludes it OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()

@@ -143,9 +143,15 @@ def stop():
     global _OPEN_DIALOG
     if _OPEN_DIALOG is None:
         return
+    # close()는 closeEvent를 동기적으로 실행한다 -- closeEvent는 자기 자신이
+    # _OPEN_DIALOG일 때 모듈 전역을 이미 None으로 지운다. 그래서 close()를
+    # 부른 다음 줄에서 전역을 다시 읽으면(재대입 전) None.deleteLater()가 돼
+    # AttributeError가 난다(mayapy 없이 순수 PySide6 QWidget으로 재현 확인).
+    # 전역을 다시 읽지 않도록 로컬 참조를 먼저 잡아 둔다.
+    dialog = _OPEN_DIALOG
     try:
-        _OPEN_DIALOG.close()
-        _OPEN_DIALOG.deleteLater()
+        dialog.close()
+        dialog.deleteLater()
     except Exception:  # noqa: BLE001 -- 언로드 정리 경계
         import traceback
         traceback.print_exc()
@@ -201,7 +207,13 @@ class SkeletonUploadDialog(QtWidgets.QWidget):
 
     def _onImportClicked(self):
         try:
-            self._beforeAssemblies = set(cmds.ls(assemblies=True) or [])
+            # long=True 필수: 풀 경로가 아니면 임포트가 씬 어딘가에 새로
+            # 넣는 무관한 노드 때문에 기존 최상위 오브젝트의 "짧은 유일
+            # 이름"이 바뀔 수 있다(예: 새 노드가 짧은 이름을 충돌시켜
+            # Maya가 기존 오브젝트를 더 긴 이름으로 다시 보고하게 됨) --
+            # before/after를 짧은 이름으로 비교하면 그 기존 오브젝트가
+            # "새로 임포트됨"으로 잘못 분류된다(mayapy로 재현 확인).
+            self._beforeAssemblies = set(cmds.ls(assemblies=True, long=True) or [])
             # 이전에 임포트를 취소해 콜백이 여전히 걸려 있을 수 있다 --
             # 중복 등록을 피한다.
             self._removeImportCallback()
@@ -218,7 +230,7 @@ class SkeletonUploadDialog(QtWidgets.QWidget):
         # 더 나쁜 상황으로 이어질 수 있다.
         try:
             self._removeImportCallback()
-            afterAssemblies = set(cmds.ls(assemblies=True) or [])
+            afterAssemblies = set(cmds.ls(assemblies=True, long=True) or [])
             newAssemblies = list(afterAssemblies - (self._beforeAssemblies or set()))
             if not newAssemblies:
                 self._statusLabel.setText("임포트된 새 오브젝트를 찾지 못했습니다.")
