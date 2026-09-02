@@ -49,5 +49,6 @@ def build():
                   command="import maroSkeletonUpload\nmaroSkeletonUpload.show()",
                   parent=MENU_NAME)
     cmds.menuItem(divider=True, parent=MENU_NAME)
-    cmds.menuItem(label="ROS 연결 설정 (준비 중)", enable=False, parent=MENU_NAME)
-    cmds.menuItem(label="환경설정 (준비 중)", enable=False, parent=MENU_NAME)
+    cmds.menuItem(label="환경설정...",
+                  command="import maroSettingsPanel\nmaroSettingsPanel.show()",
+                  parent=MENU_NAME)

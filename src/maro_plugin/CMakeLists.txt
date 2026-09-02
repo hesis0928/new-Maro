@@ -166,6 +166,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroMenu
     maroObjectNodeEditor
     maroRosProxy
+    maroSettingsPanel
     maroSkeletonUpload
     maroSingleObjectNodeEditor
     maroTechDiag

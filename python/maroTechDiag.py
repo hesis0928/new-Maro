@@ -83,10 +83,15 @@ def sliceCapabilityTechRows(flat):
     return rows
 
 
-def checkLimitProximity(axisRows, capabilityRowsByAxis, currentValueByAxis):
+def checkLimitProximity(axisRows, capabilityRowsByAxis, currentValueByAxis,
+                         threshold=LIMIT_PROXIMITY_THRESHOLD):
     """리밋(capType 1 또는 5)이 있는 축마다, 현재 구동값이 min/max 범위의
-    LIMIT_PROXIMITY_THRESHOLD 이상 근접했으면 경고를 낸다. conventionAxis로
-    capMin/capMax/capEnable의 X/Y/Z 중 어느 성분이 이 축에 해당하는지 고른다."""
+    threshold 이상 근접했으면 경고를 낸다. conventionAxis로
+    capMin/capMax/capEnable의 X/Y/Z 중 어느 성분이 이 축에 해당하는지 고른다.
+    threshold를 생략하면 LIMIT_PROXIMITY_THRESHOLD(기본 0.9)를 쓴다 --
+    이 함수는 여전히 Maya를 부르지 않는 순수 함수다. maroSettingsPanel이
+    저장한 사용자 설정값은 이 함수가 아니라 호출자(_runMayaSideChecks)가
+    _limitProximityThreshold()로 읽어서 넘긴다."""
     findings = []
     for axisRow in axisRows:
         axis = axisRow["axisFullPath"]
@@ -105,8 +110,8 @@ def checkLimitProximity(axisRows, capabilityRowsByAxis, currentValueByAxis):
             if span <= 0:
                 continue
             proximity = (currentValue - minV) / span
-            nearMax = proximity >= LIMIT_PROXIMITY_THRESHOLD
-            nearMin = proximity <= (1.0 - LIMIT_PROXIMITY_THRESHOLD)
+            nearMax = proximity >= threshold
+            nearMin = proximity <= (1.0 - threshold)
             if nearMax or nearMin:
                 # 어느 쪽 끝에 붙었는지, 지금 값이 얼마인지, 어느 capability
                 # 슬롯이 건 리밋인지를 전부 요약에 담는다. 해법 버튼이 없는
@@ -124,7 +129,7 @@ def checkLimitProximity(axisRows, capabilityRowsByAxis, currentValueByAxis):
                         "{}: capability[{}] current value {:.4f} is within {:.0f}% of its "
                         "{} limit {:.4f} (range {:.4f}..{:.4f})".format(
                             axis, capRow["logicalIndex"], currentValue,
-                            (1.0 - LIMIT_PROXIMITY_THRESHOLD) * 100,
+                            (1.0 - threshold) * 100,
                             boundLabel, boundValue, minV, maxV)),
                     "axis": axis,
                     "remedy": None,
@@ -456,6 +461,18 @@ def _collectLidarRows():
     return rows
 
 
+def _limitProximityThreshold():
+    """maroSettingsPanel이 저장한 리밋 근접 임계값을 optionVar에서 읽는다.
+    저장된 적 없으면 LIMIT_PROXIMITY_THRESHOLD(기본 0.9). checkLimitProximity()
+    자신은 이 함수를 부르지 않는다 -- 그 함수의 "Maya를 부르지 않는다"는
+    계약(순수 함수, 기존 mayapy 배치 테스트가 이미 이걸 전제한다)을 지키기
+    위해, optionVar를 읽는 이 한 곳만 Maya를 부르고 그 결과를 인자로
+    넘긴다."""
+    if cmds.optionVar(exists="maroSettingTechDiagLimitProximityThreshold"):
+        return cmds.optionVar(query="maroSettingTechDiagLimitProximityThreshold")
+    return LIMIT_PROXIMITY_THRESHOLD
+
+
 def _runMayaSideChecks():
     axisRows = sliceAxisTechRows(cmds.maroListAxisNodes())
     capsByAxis = {}
@@ -481,7 +498,8 @@ def _runMayaSideChecks():
             driveIsLinear = cmds.getAttr(axis + ".driveIsLinear")
             currentValueByAxis[axis] = _readCurrentValue(axis, driveIsLinear)
 
-    findings = checkLimitProximity(axisRows, capsByAxis, currentValueByAxis)
+    findings = checkLimitProximity(axisRows, capsByAxis, currentValueByAxis,
+                                    threshold=_limitProximityThreshold())
 
     boundMeshes = [row["boundTargetPath"] for row in axisRows
                    if row["enabled"] and row["boundTargetPath"]]

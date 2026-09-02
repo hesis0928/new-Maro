@@ -104,6 +104,30 @@ assert twoFindings[0]["summary"] != twoFindings[1]["summary"], \
     "findings from two different limit slots must be distinguishable"
 print("checkLimitProximity OK")
 
+# --- checkLimitProximity: threshold 파라미터가 실제로 판정을 바꾼다 ---
+# 90%(기본값)로는 안 걸리지만 50%로는 걸리는 값을 고른다.
+midRangeAxisRows = [{"axisFullPath": "|axis1", "jointName": "j1", "boundTargetPath": "|cube1",
+                      "enabled": True, "conventionAxis": 0, "capabilityCount": 1}]
+midRangeCaps = {"|axis1": [{"logicalIndex": 0, "capType": 1,
+                            "capMin": (0.0, 0.0, 0.0), "capMax": (10.0, 0.0, 0.0),
+                            "capEnable": (True, False, False)}]}
+defaultFindings = diag.checkLimitProximity(midRangeAxisRows, midRangeCaps, {"|axis1": 6.0})
+assert defaultFindings == [], defaultFindings  # 60%는 기본 90% 임계값 밖
+lowThresholdFindings = diag.checkLimitProximity(
+    midRangeAxisRows, midRangeCaps, {"|axis1": 6.0}, threshold=0.5)
+assert len(lowThresholdFindings) == 1, lowThresholdFindings  # 60% >= 50% 임계값
+print("checkLimitProximity threshold parameter OK")
+
+# --- _limitProximityThreshold(): optionVar 왕복 ---
+_THRESHOLD_VAR = "maroSettingTechDiagLimitProximityThreshold"
+if cmds.optionVar(exists=_THRESHOLD_VAR):
+    cmds.optionVar(remove=_THRESHOLD_VAR)
+assert diag._limitProximityThreshold() == 0.9, diag._limitProximityThreshold()
+cmds.optionVar(floatValue=(_THRESHOLD_VAR, 0.6))
+assert abs(diag._limitProximityThreshold() - 0.6) < 1e-6, diag._limitProximityThreshold()
+cmds.optionVar(remove=_THRESHOLD_VAR)
+print("_limitProximityThreshold OK")
+
 # --- checkJointStatesIntegrity ---
 rowsEmpty = [{"axisFullPath": "|a1", "jointName": "", "boundTargetPath": "|c1",
               "enabled": True, "conventionAxis": 0, "capabilityCount": 1}]

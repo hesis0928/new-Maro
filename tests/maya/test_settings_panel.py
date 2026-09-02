@@ -33,6 +33,13 @@ def _clearAllVars():
             cmds.optionVar(remove=name)
 
 
+# CMake가 .py를 .mll 옆에 스테이징했는가(MARO_PLUGIN_PY_MODULES).
+stagedModule = os.path.join(pluginDir, "maroSettingsPanel.py")
+assert os.path.isfile(stagedModule), (
+    f"maroSettingsPanel.py must be staged next to the plug-in, not found at {stagedModule}"
+)
+print("module staged next to the plug-in OK")
+
 _clearAllVars()
 
 # --- readRosSettings: 아무것도 저장 안 됐을 때 기본값 ---
