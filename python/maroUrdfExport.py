@@ -1,8 +1,13 @@
 """Maro URDF 내보내기 -- maroAxis 체인과 capability 스택으로부터 URDF(XML)를
 생성한다(설계 스펙 2026-09-02-maro-urdf-export-design.md).
 
-새 C++ 코드 없음 -- 기존 maroListAxisNodes/cmds.xform/maroMayaToRos만
-조합한다. 이 파일 위쪽의 함수들(buildAxisTree/axisVectorForConvention/
+새 C++ 코드 없음 -- 기존 maroListAxisNodes/maroMayaToRos와
+maya.api.OpenMaya(내부 단위로만 동작)만 조합한다. **cmds.xform은 쓰지
+않는다** -- cmds.xform은 사용자가 바꿀 수 있는 현재 UI 선형 단위로 값을
+돌려주는데 maroMayaToRos는 입력이 항상 Maya 내부 단위(센티미터)라고
+전제하므로, 그 자리에 cmds.xform을 쓰면 UI 단위 설정에 따라 조용히 틀린
+위치가 나온다(_gatherAxisWorldTransformRos의 주석 참고). 이 파일
+위쪽의 함수들(buildAxisTree/axisVectorForConvention/
 jointType/computeRelativeOrigin/buildUrdfXml)은 Maya 씬을 조회하지 않는
 순수 함수다 -- mayapy 배치에서 실제 씬 없이 딕셔너리/튜플만으로 검증
 가능하다. 씬을 조회하는 부분과 UI 배선은 이 파일 아래쪽(Task 4)에서
@@ -48,13 +53,31 @@ def buildAxisTree(axisRows):
     return roots[0], childrenByParent
 
 
-_AXIS_VECTORS = {0: (1.0, 0.0, 0.0), 1: (0.0, 1.0, 0.0), 2: (0.0, 0.0, 1.0)}
+_AXIS_VECTORS = {0: (1.0, 0.0, 0.0), 1: (0.0, 0.0, 1.0), 2: (0.0, -1.0, 0.0)}
 
 
 def axisVectorForConvention(conventionAxis):
-    """conventionAxis(0=X 1=Y 2=Z)를 관절 프레임 안에서의 단위 축 벡터로
-    바꾼다. origin이 이미 로케이터의 자세를 관절 프레임으로 확정하므로
-    별도 좌표 변환이 필요 없다(설계 스펙 §3.3)."""
+    """conventionAxis(0=X 1=Y 2=Z, Maya-로컬 축 인덱스)를 URDF <axis xyz=>에
+    쓸 ROS 프레임 단위 축 벡터로 바꾼다.
+
+    설계 스펙 §3.3은 원래 "origin이 이미 로케이터 자세를 관절 프레임으로
+    확정하므로 별도 좌표 변환이 필요 없다"고 주장했으나, 이는 틀렸다(최종
+    전체 브랜치 리뷰에서 발견). <origin>의 위치/자세는 실제로 맞다 --
+    computeRelativeOrigin이 부모/자식 로케이터를 각각 이미 ROS 프레임으로
+    변환한 뒤(_gatherAxisWorldTransformRos가 cmds.maroMayaToRos로) 상대
+    변환을 켤레(conjugation)로 계산하기 때문에, 그 켤레 연산 자체가
+    자기완결적으로 일관된다(따로 검증됨).
+
+    하지만 axisVectorForConvention은 그 켤레와 무관한 별개의 값 -- "이
+    관절이 로컬 X/Y/Z 중 어느 축으로 도는가"를 conventionAxis라는
+    Maya-로컬 인덱스에서 뽑아 ROS 프레임 벡터로 직접 내보낸다. 이 축
+    "선택" 자체에도 코드베이스 전역에서 쓰는 것과 똑같은 Maya->ROS
+    재배치를 적용해야 한다 -- maroMayaToRos/mayaToRosRotation
+    (src/maro_transform/src/Convert.cpp)의 (x,y,z)->(x,-z,y) 재배치는 X만
+    고정하고 Y/Z는 서로 뒤바뀌므로(Y->Z, Z->-Y), origin 켤레가 알아서
+    "고쳐주는" 게 아니다. 그래서 _AXIS_VECTORS는 conventionAxis별 raw
+    Maya 로컬 단위 벡터가 아니라 그 벡터에 (x,y,z)->(x,-z,y)를 미리 적용해
+    둔 결과다: X(1,0,0)->(1,0,0), Y(0,1,0)->(0,0,1), Z(0,0,1)->(0,-1,0)."""
     if conventionAxis not in _AXIS_VECTORS:
         raise ValueError("conventionAxis must be 0, 1, or 2, got {}".format(conventionAxis))
     return _AXIS_VECTORS[conventionAxis]
@@ -78,6 +101,11 @@ def jointType(capabilityRows):
     이 함수는 Maya를 부르지 않는다 -- 호출자가 conventionAxis 성분 해석과
     단위 변환을 이미 끝내 둔 순수 데이터만 받는다.
     """
+    # coupling(mimic)을 rotation/translation보다 먼저 확인한다 -- 이는
+    # MaroAxisNode::compute()의 C++ 순서("가장 낮은 인덱스의 primary
+    # driver가 이긴다")와 의도적으로 다르다. 커맨드 계층의 "축당 driver
+    # 하나" 규칙을 우회하는 씬에서만 두 순서가 갈리며, 이 exporter는
+    # 그런 씬에서도 항상 coupling을 우선하기로 의도적으로 선택했다.
     couplingRow = next((r for r in capabilityRows if r["capType"] in (6, 7)), None)
     if couplingRow is not None:
         # coupling(mimic) 관절은 limit capability를 절대 참고하지 않는다 --
@@ -101,14 +129,21 @@ def jointType(capabilityRows):
 
     if hasRotation:
         if limitRow is not None:
-            return {"type": "revolute", "lower": limitRow["min"], "upper": limitRow["max"],
-                    "mimic": None}
+            lower, upper = limitRow["min"], limitRow["max"]
+            # MaroAxisNode.cpp 자신도 minX > maxX인 씬을 std::min/std::max로
+            # 클램프해 관용적으로 받아들인다 -- 여기서도 같은 관용을 지켜
+            # 뒤집힌 limit이 lower > upper인 무효 URDF(check_urdf가 거부)로
+            # 새는 걸 막는다. 이미 올바른 순서인 흔한 경우는 그대로다.
+            lower, upper = min(lower, upper), max(lower, upper)
+            return {"type": "revolute", "lower": lower, "upper": upper, "mimic": None}
         return {"type": "continuous", "lower": None, "upper": None, "mimic": None}
 
     if hasTranslation:
         if translationLimitRow is not None:
-            return {"type": "prismatic", "lower": translationLimitRow["min"],
-                    "upper": translationLimitRow["max"], "mimic": None}
+            lower, upper = translationLimitRow["min"], translationLimitRow["max"]
+            lower, upper = min(lower, upper), max(lower, upper)
+            return {"type": "prismatic", "lower": lower,
+                    "upper": upper, "mimic": None}
         # URDF는 prismatic에 <limit>이 필수다 -- translationLimit이 없으면
         # "사실상 무제한"이라는 관례로 아주 넓은 값을 채운다(설계 스펙 §3.4).
         return {"type": "prismatic", "lower": -1.0e6, "upper": 1.0e6, "mimic": None}
@@ -281,6 +316,17 @@ def _resolveCapabilityDetails(axis, capRow, conventionAxis):
         # aRatio/aOffset은 MFnUnitAttribute가 아니라 평범한 double이다
         # (MaroCapabilityNodes.h 확인) -- 단위 변환이 필요 없다.
         node = capRow["capabilityNodeName"]
+        if not node:
+            # connected가 False였다는 뜻 -- capabilityNodeName이 빈
+            # 문자열이면 아래 cmds.getAttr(node + ".ratio")가
+            # "No object matches name: .ratio"라는 알아보기 힘든 Maya
+            # 에러로 새어나간다. sourceValue(Linear) 커넥션이 없을 때
+            # 이미 던지는 형제 ValueError와 같은 명확함으로 여기서 먼저
+            # 잡는다.
+            raise ValueError(
+                "axis '{}' capability slot {} (capType {}) has no connected "
+                "coupling node -- capabilityNodeName is empty".format(
+                    axis, idx, capType))
         result["ratio"] = cmds.getAttr(node + ".ratio")
         result["offset"] = cmds.getAttr(node + ".offset")
         sourcePlugName = "sourceValue" if capType == 6 else "sourceValueLinear"
@@ -359,6 +405,23 @@ def _buildRobotModel():
             childPos, childQuat = _gatherAxisWorldTransformRos(childAxis)
             xyz, rpy = computeRelativeOrigin(parentPos, parentQuat, childPos, childQuat)
 
+            axisVector = None
+            if jt["type"] != "fixed":
+                axisVector = axisVectorForConvention(childRow["conventionAxis"])
+                # conventionInvert는 라이브 ROS 퍼블리시 경로(Convert.cpp의
+                # axisVectorOf, MaroPump.cpp가 findPlug로 읽음)가 이미
+                # 존중하는 플래그다 -- 여기서 안 읽으면 이 플래그를 쓰는
+                # 리그는 URDF 조인트가 실제 라이브 동작과 반대 방향으로
+                # 돈다. Maya->ROS 재배치는 선형 사상이므로 재배치 이후에
+                # 부호를 뒤집어도 재배치 이전에 뒤집는 것과 결과가 같다
+                # (M*(-v) == -(M*v)).
+                if cmds.getAttr(childAxis + ".conventionInvert"):
+                    # 0.0을 곧이곧대로 부호만 뒤집으면 -0.0이 나와
+                    # "{:.0f}".format(-0.0) == "-0"으로 URDF에 그대로
+                    # 새어나간다(수치적으로는 0과 같지만 보기 흉하다) --
+                    # 0 성분은 0.0으로 정규화해 둔다.
+                    axisVector = tuple(0.0 if v == 0.0 else -v for v in axisVector)
+
             links.append({"name": _shortName(childRow["boundTargetPath"])})
             joints.append({
                 "name": childRow["jointName"],
@@ -367,8 +430,7 @@ def _buildRobotModel():
                 "child": _shortName(childRow["boundTargetPath"]),
                 "originXyz": xyz,
                 "originRpy": rpy,
-                "axis": (axisVectorForConvention(childRow["conventionAxis"])
-                         if jt["type"] != "fixed" else None),
+                "axis": axisVector,
                 "lower": jt["lower"],
                 "upper": jt["upper"],
                 "mimic": jt["mimic"],

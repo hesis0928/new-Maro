@@ -75,15 +75,28 @@ except ValueError as e:
 print("buildAxisTree rejects empty jointName on one axis among many OK")
 
 # --- axisVectorForConvention ---
-assert urdf.axisVectorForConvention(0) == (1.0, 0.0, 0.0)
-assert urdf.axisVectorForConvention(1) == (0.0, 1.0, 0.0)
-assert urdf.axisVectorForConvention(2) == (0.0, 0.0, 1.0)
+# axisVectorForConvention()가 실제로 maroMayaToRos와 같은 (x,y,z)->(x,-z,y)
+# 재배치를 적용하는지, 값을 다시 베끼는 게 아니라 독립적으로 재확인한다
+# (computeRelativeOrigin의 kZYX->kXYZ 발견과 같은 이유 -- "당연해 보이는
+# 가정"이 이 계획에서 이미 두 번 틀렸다).
+def _mayaToRosVector(v):
+    x, y, z = v
+    return (x, -z, y)
+
+for conventionAxis, mayaLocal in ((0, (1.0, 0.0, 0.0)),
+                                    (1, (0.0, 1.0, 0.0)),
+                                    (2, (0.0, 0.0, 1.0))):
+    expected = _mayaToRosVector(mayaLocal)
+    got = urdf.axisVectorForConvention(conventionAxis)
+    assert all(abs(a - b) < 1e-9 for a, b in zip(expected, got)), (
+        conventionAxis, expected, got)
+
 try:
     urdf.axisVectorForConvention(3)
     raise AssertionError("expected ValueError for out-of-range conventionAxis")
 except ValueError:
     pass
-print("axisVectorForConvention OK")
+print("axisVectorForConvention applies the maroMayaToRos basis remap OK")
 
 # --- jointType ---
 result = urdf.jointType([{"capType": 0}])
@@ -297,16 +310,29 @@ cmds.setAttr(childAxis + ".conventionAxis", 0)  # X축
 cmds.maroConnectAxis(childAxis, rootAxis)
 cmds.maroAddCapability(childAxis, type="rotation")
 
-# capType 1(rotation limit) 실측 -- 이 파일 위쪽의 cmds.currentUnit(angle="rad")
-# 덕분에 -1.0/1.0을 minX/maxX에 그대로 넣으면 라디안으로 명확히 해석된다
-# (minX/maxX 자체는 MFnUnitAttribute라 setAttr이 UI 각도 단위를 적용한다).
-# 아래 lower/upper 단정은 _resolveCapabilityDetails가 capMin/capMax(평범한
-# double, 항상 라디안)를 그대로 통과시키는지 확인한다 -- 잘못된
-# MAngle.uiUnit() 재해석이 부활하면 여기서 값이 어긋난다.
+# capType 1(rotation limit) 실측 -- 세션 각도 단위를 일부러 "deg"로 바꾼
+# 채로 minX/maxX를 라디안 등가값의 "도" 표현(-57.29578/57.29578 =
+# ∓1 rad)으로 넣는다. minX/maxX는 MFnUnitAttribute라 setAttr이 그 순간의
+# UI 각도 단위로 해석해 저장하지만, MaroLimitNode::compute는 그걸
+# .asAngle().asRadians()로 읽어 "진짜" 라디안 값(-1.0/1.0, 세션과 무관)을
+# capMin/capMax(평범한 double)에 쓴다 -- 그래서 cmds.getAttr(capMin)은
+# 어느 세션에서 설정했든 항상 -1.0을 돌려준다.
+#
+# 세션이 rad였다면 om2.MAngle.uiUnit()이 kRadians가 되어, 이미 제거된
+# 버그(MAngle(raw, uiUnit()).asRadians())가 부활해도 MAngle(-1.0,
+# kRadians).asRadians() == -1.0인 항등 연산이 되어 이 테스트가 절대 못
+# 잡는다(이전 라운드에서 실제로 그랬던 결함). deg 세션에서는 그 버그가
+# 부활하면 raw(-1.0, 이미 진짜 라디안 값)를 MAngle(-1.0, kDegrees)로
+# 잘못 해석해 .asRadians()가 다시 도->라디안 변환을 적용, 기대값(-1.0)의
+# 1/57 수준인 ~-0.0175로 벗어난 값이 나온다 -- 그래서 이 세션 설정이
+# 실제로 버그를 잡아낼 수 있다. 아래 lower/upper 단정은
+# _resolveCapabilityDetails가 capMin/capMax를 감싸지 않고 그대로
+# 통과시키는지 확인한다.
+cmds.currentUnit(angle="deg")
 limitNode = cmds.maroAddCapability(childAxis, type="limit")[0]
 cmds.setAttr(limitNode + ".enableX", True)
-cmds.setAttr(limitNode + ".minX", -1.0)
-cmds.setAttr(limitNode + ".maxX", 1.0)
+cmds.setAttr(limitNode + ".minX", -57.29578)  # -1 rad in degrees
+cmds.setAttr(limitNode + ".maxX", 57.29578)   # +1 rad in degrees
 
 flatAxes = cmds.maroListAxisNodes()
 axisRows = urdf.sliceAxisRows(flatAxes)
@@ -333,10 +359,22 @@ lower = float(limitEl.get("lower"))
 upper = float(limitEl.get("upper"))
 # capMin/capMax는 항상 라디안이다(단위와 무관, MaroLimitNode::compute가
 # 저장 전에 변환) -- _resolveCapabilityDetails가 그대로 통과시켜야 한다.
-assert abs(lower - (-1.0)) < 1e-6, lower  # would be ~-0.0175 if the unit-trap bug were reintroduced
+assert abs(lower - (-1.0)) < 1e-6, lower  # would be ~-0.0175 (57x too small) if the .uiUnit() bug were reintroduced
 assert abs(upper - 1.0) < 1e-6, upper
-print("end-to-end revolute limit: lower={} upper={} (radians, matches input, not unit-trapped)".format(
-    lower, upper))
+print("end-to-end revolute limit: lower={} upper={} (radians, matches input, not unit-trapped "
+      "even under a degrees session)".format(lower, upper))
+# 이 케이스가 끝났으니 이 파일의 나머지가 기대하는 라디안 세션으로
+# 즉시 되돌린다 -- 안 그러면 아래(또는 이후 실행되는) 라디안 가정
+# 단정들이 조용히 깨진다.
+cmds.currentUnit(angle="rad")
+
+# conventionAxis=0(X)이므로 conventionInvert가 꺼져 있을 때 axisVectorForConvention의
+# 수정(C1) 그대로 "1 0 0"이 나와야 한다.
+axisEl = j.find("axis")
+assert axisEl is not None, "expected an <axis> element on a revolute joint"
+assert axisEl.get("xyz") == "1 0 0", axisEl.get("xyz")
+print("end-to-end axis xyz honors the maroMayaToRos remap for conventionAxis=X OK")
+
 originXyz = [float(v) for v in j.find("origin").get("xyz").split()]
 # childMesh는 rootMesh 기준 Y로 10cm = 0.1m 위에 있다(Maya 내부 단위는
 # 센티미터, ROS는 미터). Y-up(Maya) -> Z-up(ROS) 변환 때문에 정확히 어느
@@ -347,6 +385,28 @@ originXyz = [float(v) for v in j.find("origin").get("xyz").split()]
 originMagnitude = sum(v * v for v in originXyz) ** 0.5
 assert abs(originMagnitude - 0.1) < 1e-3, originXyz
 print("end-to-end export() with a real 2-axis chain OK")
+
+# --- conventionInvert(I2): 라이브 ROS 퍼블리시 경로(Convert.cpp의
+# axisVectorOf)가 이미 존중하는 플래그를 exporter도 존중해야 한다 --
+# 안 그러면 이 플래그를 쓰는 리그는 URDF 조인트가 실제 라이브 동작과
+# 반대 방향으로 돈다. 같은 childAxis(conventionAxis=0=X)에 conventionInvert만
+# 켜고 다시 내보내서 axis xyz가 "1 0 0" -> "-1 0 0"으로 뒤집히는지 확인한다.
+cmds.setAttr(childAxis + ".conventionInvert", True)
+
+tmpPathInvert = os.path.join(tempfile.gettempdir(), "maro_urdf_export_test_invert.urdf")
+resultInvert = urdf.export(path=tmpPathInvert)
+assert resultInvert == tmpPathInvert, resultInvert
+
+treeInvert = ET2.parse(tmpPathInvert)
+jointElsInvert = treeInvert.getroot().findall("joint")
+assert len(jointElsInvert) == 1, jointElsInvert
+axisElInvert = jointElsInvert[0].find("axis")
+assert axisElInvert is not None, "expected an <axis> element on a revolute joint"
+assert axisElInvert.get("xyz") == "-1 0 0", axisElInvert.get("xyz")
+print("end-to-end conventionInvert flips exported axis xyz (1 0 0 -> -1 0 0) OK")
+
+cmds.setAttr(childAxis + ".conventionInvert", False)
+os.remove(tmpPathInvert)
 
 os.remove(tmpPath)
 
