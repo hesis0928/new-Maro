@@ -201,6 +201,67 @@ for i in range(3):
                 i, j, expectedColumnVectorMatrix[i][j], gotColumnVectorMatrix[i][j]))
 print("computeRelativeOrigin rotation matches URDF rpy convention (independently verified) OK")
 
+# --- buildUrdfXml ---
+robotEl = urdf.buildUrdfXml(
+    "test_robot",
+    links=[{"name": "base"}, {"name": "arm1"}],
+    joints=[{
+        "name": "j1", "type": "revolute", "parent": "base", "child": "arm1",
+        "originXyz": (0.1, 0.2, 0.3), "originRpy": (0.0, 0.0, 0.0),
+        "axis": (1.0, 0.0, 0.0), "lower": -1.0, "upper": 1.0, "mimic": None,
+    }])
+assert robotEl.get("name") == "test_robot"
+links = robotEl.findall("link")
+assert [l.get("name") for l in links] == ["base", "arm1"], links
+joints = robotEl.findall("joint")
+assert len(joints) == 1, joints
+j = joints[0]
+assert j.get("name") == "j1" and j.get("type") == "revolute", j.attrib
+assert j.find("parent").get("link") == "base"
+assert j.find("child").get("link") == "arm1"
+assert j.find("origin").get("xyz") == "0.100000 0.200000 0.300000"
+assert j.find("axis").get("xyz") == "1 0 0"
+limitEl = j.find("limit")
+assert limitEl.get("lower") == "-1.000000" and limitEl.get("upper") == "1.000000"
+assert limitEl.get("effort") == "1000" and limitEl.get("velocity") == "10"
+assert j.find("mimic") is None
+print("buildUrdfXml revolute joint OK")
+
+# fixed 조인트는 axis/limit이 없어야 한다.
+robotEl = urdf.buildUrdfXml(
+    "test_robot2", links=[{"name": "a"}, {"name": "b"}],
+    joints=[{"name": "jf", "type": "fixed", "parent": "a", "child": "b",
+             "originXyz": (0, 0, 0), "originRpy": (0, 0, 0),
+             "axis": None, "lower": None, "upper": None, "mimic": None}])
+jf = robotEl.find("joint")
+assert jf.find("axis") is None
+assert jf.find("limit") is None
+print("buildUrdfXml fixed joint has no axis/limit OK")
+
+# continuous 조인트는 axis는 있지만 limit은 없어야 한다.
+robotEl = urdf.buildUrdfXml(
+    "test_robot3", links=[{"name": "a"}, {"name": "b"}],
+    joints=[{"name": "jc", "type": "continuous", "parent": "a", "child": "b",
+             "originXyz": (0, 0, 0), "originRpy": (0, 0, 0),
+             "axis": (0.0, 1.0, 0.0), "lower": None, "upper": None, "mimic": None}])
+jc = robotEl.find("joint")
+assert jc.find("axis") is not None
+assert jc.find("limit") is None
+print("buildUrdfXml continuous joint has axis but no limit OK")
+
+# mimic이 있으면 <mimic>이 나와야 한다.
+robotEl = urdf.buildUrdfXml(
+    "test_robot4", links=[{"name": "a"}, {"name": "b"}],
+    joints=[{"name": "jm", "type": "revolute", "parent": "a", "child": "b",
+             "originXyz": (0, 0, 0), "originRpy": (0, 0, 0),
+             "axis": (1.0, 0.0, 0.0), "lower": -1.0, "upper": 1.0,
+             "mimic": {"joint": "source_j", "multiplier": 2.0, "offset": 0.1}}])
+mimicEl = robotEl.find("joint").find("mimic")
+assert mimicEl.get("joint") == "source_j"
+assert mimicEl.get("multiplier") == "2.000000"
+assert mimicEl.get("offset") == "0.100000"
+print("buildUrdfXml mimic joint OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)

@@ -10,6 +10,7 @@ jointType/computeRelativeOrigin/buildUrdfXml)은 Maya 씬을 조회하지 않는
 """
 
 import maya.api.OpenMaya as om2
+import xml.etree.ElementTree as ET
 
 
 def buildAxisTree(axisRows):
@@ -148,3 +149,42 @@ def computeRelativeOrigin(parentPosRos, parentQuatRos, childPosRos, childQuatRos
     rpy = (euler.x, euler.y, euler.z)
 
     return (xyz.x, xyz.y, xyz.z), rpy
+
+
+def buildUrdfXml(robotName, links, joints):
+    """links: [{"name": str}, ...]. joints: [{"name": str, "type": str,
+    "parent": str, "child": str, "originXyz": (x,y,z), "originRpy": (r,p,y),
+    "axis": (x,y,z)|None, "lower": float|None, "upper": float|None,
+    "mimic": {"joint": str, "multiplier": float, "offset": float}|None}, ...].
+
+    <robot name=robotName>를 루트로 하는 xml.etree.ElementTree.Element를
+    돌려준다 -- 파일 쓰기는 호출자 몫이다(이 함수는 트리만 조립하는 순수
+    함수). "fixed" 타입은 <axis>/<limit>을 안 낸다. "continuous" 타입은
+    <axis>는 내지만 <limit>은 안 낸다.
+    """
+    robot = ET.Element("robot", name=robotName)
+    for link in links:
+        ET.SubElement(robot, "link", name=link["name"])
+
+    for joint in joints:
+        jointEl = ET.SubElement(robot, "joint", name=joint["name"], type=joint["type"])
+        ET.SubElement(jointEl, "parent", link=joint["parent"])
+        ET.SubElement(jointEl, "child", link=joint["child"])
+        ox, oy, oz = joint["originXyz"]
+        orr, orp, ory = joint["originRpy"]
+        ET.SubElement(jointEl, "origin",
+                      xyz="{:.6f} {:.6f} {:.6f}".format(ox, oy, oz),
+                      rpy="{:.6f} {:.6f} {:.6f}".format(orr, orp, ory))
+        if joint["type"] != "fixed":
+            ax, ay, az = joint["axis"]
+            ET.SubElement(jointEl, "axis", xyz="{:.0f} {:.0f} {:.0f}".format(ax, ay, az))
+        if joint["type"] in ("revolute", "prismatic"):
+            ET.SubElement(jointEl, "limit",
+                          lower="{:.6f}".format(joint["lower"]),
+                          upper="{:.6f}".format(joint["upper"]),
+                          effort="1000", velocity="10")
+        if joint["mimic"] is not None:
+            ET.SubElement(jointEl, "mimic", joint=joint["mimic"]["joint"],
+                          multiplier="{:.6f}".format(joint["mimic"]["multiplier"]),
+                          offset="{:.6f}".format(joint["mimic"]["offset"]))
+    return robot
