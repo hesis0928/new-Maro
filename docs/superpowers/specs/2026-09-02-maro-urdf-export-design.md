@@ -52,7 +52,7 @@ relative = inverse(A_rosMatrix) * B_rosMatrix
 | rotation + limit(해당 축 enable) | `revolute` | `<limit lower= upper=>`를 `capMin`/`capMax`에서 채움 |
 | translation only | `prismatic` | URDF는 `<limit>` 필수 — limit 없으면 아주 넓은 값(예: ±1e6미터)으로 채우고 주석으로 "무제한 관례" 명시 |
 | translation + translationLimit(해당 축 enable) | `prismatic` | `<limit>`을 `capMin`/`capMax`에서 채움(센티미터→미터 변환) |
-| coupling(각도, capType 6) | `revolute` + `<mimic joint="{소스 축의 jointName}" multiplier="{ratio}" offset="{offset}">` | 소스 축은 `cmds.listConnections(couplingNode + ".sourceValue"/".sourceValueLinear", source=True)`로 역추적한다 — 기존에 재사용할 헬퍼가 없어 이번에 새로 작성해야 하는 부분이지만(확인함), `maroLidarPanel._pairedPointCloud()`가 이미 같은 방식(`listConnections`로 메시지/값 연결을 역추적)을 쓰고 있어 이 코드베이스의 낯선 패턴은 아니다 |
+| coupling(각도, capType 6) | `continuous` + `<mimic joint="{소스 축의 jointName}" multiplier="{ratio}" offset="{offset}">` | **정정(구현 단계 태스크 리뷰에서 발견)**: 애초 이 표는 "revolute"라고 적었으나, mimic 관절이라고 해서 반드시 각도 제한이 있는 건 아니다(예: 대칭 기어). rotation-only 관절과 같은 원칙 그대로 취급한다 — coupling 자체는 `limit` capability를 절대 참고하지 않고 항상 `continuous`/`prismatic` + `mimic`으로 확정한다(리밋이 있는 mimic 관절이 필요해지면 별도 후속 설계). 소스 축은 `cmds.listConnections(couplingNode + ".sourceValue"/".sourceValueLinear", source=True)`로 역추적한다 — 기존에 재사용할 헬퍼가 없어 이번에 새로 작성해야 하는 부분이지만(확인함), `maroLidarPanel._pairedPointCloud()`가 이미 같은 방식(`listConnections`로 메시지/값 연결을 역추적)을 쓰고 있어 이 코드베이스의 낯선 패턴은 아니다 |
 | coupling(선형, capType 7) | `prismatic` + 같은 `<mimic>` | |
 | 없음, 또는 sensorDirection/sensorRange만 | `fixed` | 센서 축은 로봇 관절이 아니라 좌표 프레임으로만 표현 |
 
