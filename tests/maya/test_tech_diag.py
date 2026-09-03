@@ -128,11 +128,14 @@ assert abs(diag._limitProximityThreshold() - 0.6) < 1e-6, diag._limitProximityTh
 cmds.optionVar(remove=_THRESHOLD_VAR)
 print("_limitProximityThreshold OK")
 
-# maroTechDiag.py는 의도적으로 maroSettingsPanel을 import하지 않는다(Qt를
-# 끌어들이지 않기 위해) -- 그래서 _limitProximityThreshold()의 optionVar
-# 이름 문자열이 maroSettingsPanel._TECH_DIAG_THRESHOLD_VAR와 같은 값을
-# 쓰는지 이 소스 텍스트 핀으로만 잡을 수 있다. 하나가 바뀌고 다른 하나가
-# 안 바뀌면 이 assert가 실패한다.
+# maroTechDiag.py는 의도적으로 maroSettingsPanel을 import하지 않는다 --
+# AXIS_FIELDS/CAPABILITY_FIELDS(이 파일 33-35번째 줄 주석)와 같은 이유로,
+# 파일 간 결합을 늘리지 않기 위해 optionVar 이름 문자열을 각자 독립적으로
+# 선언해 둔다(Qt 여부와는 무관하다 -- 이 파일은 이미 PySide6를 쓴다). 그래서
+# _limitProximityThreshold()의 optionVar 이름 문자열이
+# maroSettingsPanel._TECH_DIAG_THRESHOLD_VAR와 같은 값을 쓰는지 이 소스
+# 텍스트 핀으로만 잡을 수 있다. 하나가 바뀌고 다른 하나가 안 바뀌면 이
+# assert가 실패한다.
 import inspect
 import maroSettingsPanel as settingsPanel  # noqa: E402 -- 값만 참조, 값 핀 전용
 techDiagSource = inspect.getsource(diag)
