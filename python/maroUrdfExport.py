@@ -72,37 +72,39 @@ def jointType(capabilityRows):
     이 함수는 Maya를 부르지 않는다 -- 호출자가 conventionAxis 성분 해석과
     단위 변환을 이미 끝내 둔 순수 데이터만 받는다.
     """
-    hasRotation = any(r["capType"] == 0 for r in capabilityRows)
-    hasTranslation = any(r["capType"] == 4 for r in capabilityRows)
     couplingRow = next((r for r in capabilityRows if r["capType"] in (6, 7)), None)
-    limitRow = next(
-        (r for r in capabilityRows if r["capType"] == 1 and r.get("enabled")), None)
-    translationLimitRow = next(
-        (r for r in capabilityRows if r["capType"] == 5 and r.get("enabled")), None)
-
-    mimic = None
     if couplingRow is not None:
+        # coupling(mimic) 관절은 limit capability를 절대 참고하지 않는다 --
+        # mimic 관절이라고 반드시 각도/거리 제한이 있는 건 아니므로(예:
+        # 대칭 기어), rotation-only/translation-only와 같은 원칙 그대로
+        # 항상 continuous/prismatic로 확정한다(설계 스펙 §3.4 정정 참고).
         mimic = {
             "joint": couplingRow["sourceJointName"],
             "multiplier": couplingRow["ratio"],
             "offset": couplingRow["offset"],
         }
+        jointKind = "continuous" if couplingRow["capType"] == 6 else "prismatic"
+        return {"type": jointKind, "lower": None, "upper": None, "mimic": mimic}
 
-    isAngularDriver = hasRotation or (couplingRow is not None and couplingRow["capType"] == 6)
-    isLinearDriver = hasTranslation or (couplingRow is not None and couplingRow["capType"] == 7)
+    hasRotation = any(r["capType"] == 0 for r in capabilityRows)
+    hasTranslation = any(r["capType"] == 4 for r in capabilityRows)
+    limitRow = next(
+        (r for r in capabilityRows if r["capType"] == 1 and r.get("enabled")), None)
+    translationLimitRow = next(
+        (r for r in capabilityRows if r["capType"] == 5 and r.get("enabled")), None)
 
-    if isAngularDriver:
+    if hasRotation:
         if limitRow is not None:
             return {"type": "revolute", "lower": limitRow["min"], "upper": limitRow["max"],
-                    "mimic": mimic}
-        return {"type": "continuous", "lower": None, "upper": None, "mimic": mimic}
+                    "mimic": None}
+        return {"type": "continuous", "lower": None, "upper": None, "mimic": None}
 
-    if isLinearDriver:
+    if hasTranslation:
         if translationLimitRow is not None:
             return {"type": "prismatic", "lower": translationLimitRow["min"],
-                    "upper": translationLimitRow["max"], "mimic": mimic}
+                    "upper": translationLimitRow["max"], "mimic": None}
         # URDF는 prismatic에 <limit>이 필수다 -- translationLimit이 없으면
         # "사실상 무제한"이라는 관례로 아주 넓은 값을 채운다(설계 스펙 §3.4).
-        return {"type": "prismatic", "lower": -1.0e6, "upper": 1.0e6, "mimic": mimic}
+        return {"type": "prismatic", "lower": -1.0e6, "upper": 1.0e6, "mimic": None}
 
     return {"type": "fixed", "lower": None, "upper": None, "mimic": None}

@@ -52,6 +52,20 @@ except ValueError as e:
     assert "|root" in str(e), e
 print("buildAxisTree rejects empty jointName OK")
 
+try:
+    urdf.buildAxisTree([
+        {"axisFullPath": "|root", "parentAxisPath": "", "jointName": "j_root"},
+        {"axisFullPath": "|root|child1", "parentAxisPath": "|root", "jointName": "j_child1"},
+        {"axisFullPath": "|root|child1|child2", "parentAxisPath": "|root|child1",
+         "jointName": ""},
+    ])
+    raise AssertionError("expected ValueError for empty jointName among multiple axes")
+except ValueError as e:
+    # only the offending axis should be named -- the list literal has exactly
+    # one entry, so this also rules out the two valid axes leaking in.
+    assert "missing on: ['|root|child1|child2']" in str(e), e
+print("buildAxisTree rejects empty jointName on one axis among many OK")
+
 # --- axisVectorForConvention ---
 assert urdf.axisVectorForConvention(0) == (1.0, 0.0, 0.0)
 assert urdf.axisVectorForConvention(1) == (0.0, 1.0, 0.0)
@@ -94,12 +108,16 @@ result = urdf.jointType([
 ])
 assert result["type"] == "continuous", result
 assert result["mimic"] == {"joint": "shoulder", "multiplier": 2.0, "offset": 0.1}, result
+assert result["lower"] is None, result
+assert result["upper"] is None, result
 
 result = urdf.jointType([
     {"capType": 7, "ratio": 1.5, "offset": 0.0, "sourceJointName": "elbow"},
 ])
 assert result["type"] == "prismatic", result
 assert result["mimic"] == {"joint": "elbow", "multiplier": 1.5, "offset": 0.0}, result
+assert result["lower"] is None, result
+assert result["upper"] is None, result
 
 result = urdf.jointType([])
 assert result == {"type": "fixed", "lower": None, "upper": None, "mimic": None}, result
