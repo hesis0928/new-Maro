@@ -84,6 +84,7 @@ add_library(maro_lidar STATIC
     src/RayPattern.cpp
     src/Decimation.cpp
     src/ScanEngine.cpp
+    src/CollisionEngine.cpp
     src/PointCloudPacking.cpp
 )
 

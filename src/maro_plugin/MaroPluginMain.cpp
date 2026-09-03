@@ -4,6 +4,7 @@
 
 #include "MaroAxisNode.h"
 #include "MaroCapabilityNodes.h"
+#include "MaroCollisionCommands.h"
 #include "MaroCommandDeviceNode.h"
 #include "MaroCommands.h"
 #include "MaroDeleteWatcher.h"
@@ -457,6 +458,14 @@ MStatus initializePlugin(MObject obj) {
         return status;
     }
 
+    status = plugin.registerCommand("maroCheckMeshCollision",
+                                    maro::MaroCheckMeshCollisionCommand::creator,
+                                    maro::MaroCheckMeshCollisionCommand::newSyntax);
+    if (!status) {
+        status.perror("Maro: failed to register maroCheckMeshCollision");
+        return status;
+    }
+
     status = maro::MaroDeleteWatcher::install();
     if (!status) {
         status.perror("Maro: failed to install delete watcher");
@@ -606,6 +615,7 @@ MStatus uninitializePlugin(MObject obj) {
         // maroMainWindow 블록보다 "먼저" 온다(가장 나중에 등록된 것부터
         // 먼저 해제) -- 위 maroLidar/maroAxis, maroApplyRemedy/
         // maroDiagRequestRemedy 선례와 같은 논리.
+        plugin.deregisterCommand("maroCheckMeshCollision");
         plugin.deregisterCommand("maroQueryLidarScan");
         plugin.deregisterCommand("maroSnapshotLidarScan");
         plugin.deregisterCommand("maroUnbindAxis");

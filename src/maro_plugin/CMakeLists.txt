@@ -27,6 +27,7 @@ set(SOURCE_FILES
     MaroRosProxyCommands.cpp
     MaroAxisEditorCommands.cpp
     MaroSentinelClient.cpp
+    MaroCollisionCommands.cpp
 )
 
 set(LIBRARIES
