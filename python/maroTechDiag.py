@@ -17,6 +17,7 @@ maya.api.OpenMaya의 MAngle/MDistance)만으로 동작한다. 검사 결과는 �
 """
 
 import itertools
+import math
 
 import maya.api.OpenMaya as om2
 import maya.cmds as cmds
@@ -246,6 +247,138 @@ def checkLidarRayCount(lidarRows):
                 "axis": None,
                 "remedy": None,
             })
+    return findings
+
+
+def checkLidarZeroHits(lidarRows, scanByLidar):
+    """enabled + 타겟 메쉬가 연결된 LiDAR가 kOk 스캔에서 히트를 하나도
+    못 냈으면 경고. 다른 상태(kNoTargetMesh/kMeshExtractFailed/
+    kInvalidConfig/kRayCountExceeded)는 원인이 다른 방식으로 이미 드러나
+    있으므로 대상이 아니다."""
+    findings = []
+    for row in lidarRows:
+        if not row["enabled"] or row["targetMeshCount"] == 0:
+            continue
+        scan = scanByLidar.get(row["lidarFullPath"])
+        if scan is None or scan["status"] != "kOk":
+            continue
+        if len(scan["hitPoints"]) == 0:
+            findings.append({
+                "category": "lidarZeroHits",
+                "severity": "warning",
+                "summary": "{}: target mesh(es) connected but the scan detected "
+                           "nothing".format(row["lidarFullPath"]),
+                "axis": None,
+                "remedy": None,
+            })
+    return findings
+
+
+# 실제 캐스팅이 있었는지와 무관하게(kMeshExtractFailed/kRayCountExceeded도
+# 유효 지오메트리를 준다, 설계 스펙 §8) 범위/FOV 정적 검사는 적용 가능하다.
+_LIDAR_GEOMETRY_VALID_STATUSES = ("kOk", "kMeshExtractFailed", "kRayCountExceeded")
+
+
+def _nearestDistanceToBox(point, box):
+    """점에서 AABB(xmin,ymin,zmin,xmax,ymax,zmax)까지의 최단 거리(박스
+    안이면 0). 표준 클램프 공식."""
+    xmin, ymin, zmin, xmax, ymax, zmax = box
+    cx = min(max(point[0], xmin), xmax)
+    cy = min(max(point[1], ymin), ymax)
+    cz = min(max(point[2], zmin), zmax)
+    dx, dy, dz = point[0] - cx, point[1] - cy, point[2] - cz
+    return (dx * dx + dy * dy + dz * dz) ** 0.5
+
+
+def checkLidarOutOfRange(lidarRows, scanByLidar, targetMeshBoxesByLidar):
+    """타겟 메쉬 AABB의 LiDAR 유효 원점까지 최근접 거리가 rangeMax를
+    넘으면 경고 -- 실제 스캔 여부와 무관한 순수 기하 판정."""
+    findings = []
+    for row in lidarRows:
+        if not row["enabled"]:
+            continue
+        scan = scanByLidar.get(row["lidarFullPath"])
+        if scan is None or scan["status"] not in _LIDAR_GEOMETRY_VALID_STATUSES:
+            continue
+        origin = om2.MPoint(0, 0, 0) * scan["effectiveWorldMatrix"]
+        originTuple = (origin.x, origin.y, origin.z)
+        for mesh, box in targetMeshBoxesByLidar.get(row["lidarFullPath"], {}).items():
+            if _nearestDistanceToBox(originTuple, box) > scan["rangeMaxMaya"]:
+                findings.append({
+                    "category": "lidarOutOfRange",
+                    "severity": "warning",
+                    "summary": "{}: target mesh {} is beyond rangeMax and can never "
+                               "be detected".format(row["lidarFullPath"], mesh),
+                    "axis": None,
+                    "remedy": None,
+                })
+    return findings
+
+
+def _localAngles(worldPoint, effectiveWorldMatrix):
+    """worldPoint를 LiDAR의 로컬(센서) 프레임으로 옮긴 뒤 RayPattern.cpp와
+    같은 각도 규약(vertical=asin(y/|.|), horizontal=atan2(x,z))으로 각도를
+    구한다."""
+    local = om2.MPoint(worldPoint[0], worldPoint[1], worldPoint[2]) * effectiveWorldMatrix.inverse()
+    length = math.sqrt(local.x * local.x + local.y * local.y + local.z * local.z)
+    if length < 1e-9:
+        return 0.0, 0.0
+    vertical = math.asin(max(-1.0, min(1.0, local.y / length)))
+    horizontal = math.atan2(local.x, local.z)
+    return vertical, horizontal
+
+
+def checkLidarOutOfFov(lidarRows, scanByLidar, targetMeshBoxesByLidar):
+    """타겟 메쉬 AABB 중심이 설정된 수직/수평 FOV 밖이면 경고. 박스 중심
+    하나만 보는 근사(설계 스펙 §10의 알려진 한계)."""
+    findings = []
+    for row in lidarRows:
+        if not row["enabled"]:
+            continue
+        scan = scanByLidar.get(row["lidarFullPath"])
+        if scan is None or scan["status"] not in _LIDAR_GEOMETRY_VALID_STATUSES:
+            continue
+        for mesh, box in targetMeshBoxesByLidar.get(row["lidarFullPath"], {}).items():
+            center = ((box[0] + box[3]) / 2.0, (box[1] + box[4]) / 2.0, (box[2] + box[5]) / 2.0)
+            vertical, horizontal = _localAngles(center, scan["effectiveWorldMatrix"])
+            outOfVertical = not (scan["verticalMinAngle"] <= vertical <= scan["verticalMaxAngle"])
+            outOfHorizontal = not (
+                scan["horizontalMinAngle"] <= horizontal <= scan["horizontalMaxAngle"])
+            if outOfVertical or outOfHorizontal:
+                findings.append({
+                    "category": "lidarOutOfFov",
+                    "severity": "warning",
+                    "summary": "{}: target mesh {} is outside the configured "
+                               "FOV".format(row["lidarFullPath"], mesh),
+                    "axis": None,
+                    "remedy": None,
+                })
+    return findings
+
+
+def checkLidarHitBoundsConsistency(lidarRows, scanByLidar):
+    """kOk 스캔의 히트점이 전부 [rangeMin, rangeMax] 안에 있는지 자체
+    검증(방어적 회귀 검사 -- 정상 상황에선 항상 통과해야 한다, ScanEngine::
+    castRay의 tnear/tfar 클리핑이 이미 이걸 보장한다)."""
+    findings = []
+    for row in lidarRows:
+        scan = scanByLidar.get(row["lidarFullPath"])
+        if scan is None or scan["status"] != "kOk":
+            continue
+        origin = om2.MPoint(0, 0, 0) * scan["effectiveWorldMatrix"]
+        for point in scan["hitPoints"]:
+            dx, dy, dz = point[0] - origin.x, point[1] - origin.y, point[2] - origin.z
+            distance = (dx * dx + dy * dy + dz * dz) ** 0.5
+            if not (scan["rangeMinMaya"] - 1e-6 <= distance <= scan["rangeMaxMaya"] + 1e-6):
+                findings.append({
+                    "category": "lidarHitOutOfBounds",
+                    "severity": "warning",
+                    "summary": "{}: a scan hit point is outside [rangeMin, rangeMax] "
+                               "(possible regression)".format(row["lidarFullPath"]),
+                    "axis": None,
+                    "remedy": None,
+                })
+                break  # 축당 한 번만 보고 -- 점마다 반복 경고는 노이즈
     return findings
 
 
@@ -510,6 +643,25 @@ def _limitProximityThreshold():
     return LIMIT_PROXIMITY_THRESHOLD
 
 
+def _collectLidarScans(lidarRows):
+    """각 maroLidar를 maroQueryLidarScan으로 조회해 parseLidarScanQuery()
+    결과를 lidarFullPath별로 모은다. 씬을 바꾸지 않는다."""
+    return {row["lidarFullPath"]: parseLidarScanQuery(cmds.maroQueryLidarScan(row["lidarFullPath"]))
+            for row in lidarRows}
+
+
+def _collectLidarTargetMeshBoxes(lidarRows):
+    """각 maroLidar가 연결한 타겟 메쉬들의 월드 AABB를 모은다."""
+    boxesByLidar = {}
+    for row in lidarRows:
+        meshes = cmds.listConnections(
+            row["lidarFullPath"] + ".targetMeshes", source=True, destination=False) or []
+        boxesByLidar[row["lidarFullPath"]] = {
+            mesh: tuple(cmds.exactWorldBoundingBox(mesh)) for mesh in meshes
+        }
+    return boxesByLidar
+
+
 def _runMayaSideChecks():
     axisRows = sliceAxisTechRows(cmds.maroListAxisNodes())
     capsByAxis = {}
@@ -551,6 +703,12 @@ def _runMayaSideChecks():
     lidarRows = _collectLidarRows()
     findings += checkLidarTargetMeshes(lidarRows)
     findings += checkLidarRayCount(lidarRows)
+    scanByLidar = _collectLidarScans(lidarRows)
+    targetMeshBoxesByLidar = _collectLidarTargetMeshBoxes(lidarRows)
+    findings += checkLidarZeroHits(lidarRows, scanByLidar)
+    findings += checkLidarOutOfRange(lidarRows, scanByLidar, targetMeshBoxesByLidar)
+    findings += checkLidarOutOfFov(lidarRows, scanByLidar, targetMeshBoxesByLidar)
+    findings += checkLidarHitBoundsConsistency(lidarRows, scanByLidar)
     return findings
 
 

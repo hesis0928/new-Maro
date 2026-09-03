@@ -301,6 +301,58 @@ assert grandPairs == {
 }, grandPairs
 print("adjacentMeshPairs three-level ancestor chain OK")
 
+# --- checkLidarZeroHits ---
+lidarRowsZero = [{"lidarFullPath": "|lidarA", "enabled": True, "verticalSamples": 1,
+                  "horizontalSamples": 1, "targetMeshCount": 1}]
+scanEmpty = {"|lidarA": {"status": "kOk", "hitPoints": []}}
+findings = diag.checkLidarZeroHits(lidarRowsZero, scanEmpty)
+assert len(findings) == 1 and findings[0]["category"] == "lidarZeroHits", findings
+scanNonEmpty = {"|lidarA": {"status": "kOk", "hitPoints": [(0.0, 0.0, 0.0)]}}
+assert diag.checkLidarZeroHits(lidarRowsZero, scanNonEmpty) == []
+scanFailed = {"|lidarA": {"status": "kMeshExtractFailed", "hitPoints": []}}
+assert diag.checkLidarZeroHits(lidarRowsZero, scanFailed) == [], (
+    "a non-kOk status must not also be flagged as a zero-hit finding")
+lidarRowsNoMesh = [{"lidarFullPath": "|lidarB", "enabled": True, "verticalSamples": 1,
+                    "horizontalSamples": 1, "targetMeshCount": 0}]
+assert diag.checkLidarZeroHits(lidarRowsNoMesh, {"|lidarB": {"status": "kOk", "hitPoints": []}}) == []
+print("checkLidarZeroHits OK")
+
+# --- checkLidarOutOfRange ---
+import maya.api.OpenMaya as om2Test
+scanInRange = {"|lidarA": {"status": "kOk", "rangeMaxMaya": 100.0,
+                           "effectiveWorldMatrix": om2Test.MMatrix()}}
+boxesFar = {"|lidarA": {"|meshFar": (200.0, 0.0, 0.0, 210.0, 10.0, 10.0)}}
+findings = diag.checkLidarOutOfRange(lidarRowsZero, scanInRange, boxesFar)
+assert len(findings) == 1 and findings[0]["category"] == "lidarOutOfRange", findings
+boxesNear = {"|lidarA": {"|meshNear": (10.0, 0.0, 0.0, 20.0, 10.0, 10.0)}}
+assert diag.checkLidarOutOfRange(lidarRowsZero, scanInRange, boxesNear) == []
+print("checkLidarOutOfRange OK")
+
+# --- checkLidarOutOfFov ---
+scanNarrowFov = {"|lidarA": {"status": "kOk",
+                             "verticalMinAngle": -0.1, "verticalMaxAngle": 0.1,
+                             "horizontalMinAngle": -0.1, "horizontalMaxAngle": 0.1,
+                             "effectiveWorldMatrix": om2Test.MMatrix()}}
+# 로컬 +Z 방향(수직=0, 수평=0)이면 FOV 안. 로컬 +X 방향은 수평 ~pi/2로 밖.
+boxesInFov = {"|lidarA": {"|meshInFov": (-1.0, -1.0, 9.0, 1.0, 1.0, 11.0)}}
+assert diag.checkLidarOutOfFov(lidarRowsZero, scanNarrowFov, boxesInFov) == []
+boxesOutOfFov = {"|lidarA": {"|meshOutOfFov": (9.0, -1.0, -1.0, 11.0, 1.0, 1.0)}}
+findings = diag.checkLidarOutOfFov(lidarRowsZero, scanNarrowFov, boxesOutOfFov)
+assert len(findings) == 1 and findings[0]["category"] == "lidarOutOfFov", findings
+print("checkLidarOutOfFov OK")
+
+# --- checkLidarHitBoundsConsistency ---
+scanValidHit = {"|lidarA": {"status": "kOk", "rangeMinMaya": 0.0, "rangeMaxMaya": 100.0,
+                            "effectiveWorldMatrix": om2Test.MMatrix(),
+                            "hitPoints": [(50.0, 0.0, 0.0)]}}
+assert diag.checkLidarHitBoundsConsistency(lidarRowsZero, scanValidHit) == []
+scanBadHit = {"|lidarA": {"status": "kOk", "rangeMinMaya": 0.0, "rangeMaxMaya": 100.0,
+                          "effectiveWorldMatrix": om2Test.MMatrix(),
+                          "hitPoints": [(500.0, 0.0, 0.0)]}}
+findings = diag.checkLidarHitBoundsConsistency(lidarRowsZero, scanBadHit)
+assert len(findings) == 1 and findings[0]["category"] == "lidarHitOutOfBounds", findings
+print("checkLidarHitBoundsConsistency OK")
+
 # --- suggestDisambiguatedJointName (pure) ---
 assert diag.suggestDisambiguatedJointName("shoulder") == "shoulder_2"
 # 최종 리뷰 Important-4: 이미 쓰이는 이름을 알려주면 충돌을 옮기지 않고 피한다.
@@ -481,6 +533,23 @@ categories = {f["category"] for f in mayaFindings}
 assert "lidarNoTargetMesh" in categories, categories
 assert "lidarRayCountExceeded" in categories, categories
 print("_runMayaSideChecks surfaces both new lidar findings OK")
+
+# --- end-to-end: _runMayaSideChecks() surfaces a zero-hit + out-of-range LiDAR ---
+farMesh = cmds.polyPlane(name="techDiagFarMesh", width=10, height=10,
+                          subdivisionsX=1, subdivisionsY=1)[0]
+cmds.setAttr(farMesh + ".translateX", 100000)  # 훨씬 rangeMax 밖
+lidarNode = cmds.createNode("maroLidar", name="techDiagLidar")
+lidarNode = cmds.ls(lidarNode, long=True)[0]
+cmds.setAttr(lidarNode + ".verticalSamples", 1)
+cmds.setAttr(lidarNode + ".horizontalSamples", 1)
+cmds.setAttr(lidarNode + ".rangeMax", 30.0)  # 미터, 훨씬 작음
+cmds.connectAttr(farMesh + ".message", lidarNode + ".targetMeshes[0]")
+
+allFindings = diag._runMayaSideChecks()
+categories = {f["category"] for f in allFindings}
+assert "lidarZeroHits" in categories, categories
+assert "lidarOutOfRange" in categories, categories
+print("_runMayaSideChecks surfaces lidarZeroHits + lidarOutOfRange OK")
 
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
