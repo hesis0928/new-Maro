@@ -128,6 +128,20 @@ assert abs(diag._limitProximityThreshold() - 0.6) < 1e-6, diag._limitProximityTh
 cmds.optionVar(remove=_THRESHOLD_VAR)
 print("_limitProximityThreshold OK")
 
+# maroTechDiag.py는 의도적으로 maroSettingsPanel을 import하지 않는다(Qt를
+# 끌어들이지 않기 위해) -- 그래서 _limitProximityThreshold()의 optionVar
+# 이름 문자열이 maroSettingsPanel._TECH_DIAG_THRESHOLD_VAR와 같은 값을
+# 쓰는지 이 소스 텍스트 핀으로만 잡을 수 있다. 하나가 바뀌고 다른 하나가
+# 안 바뀌면 이 assert가 실패한다.
+import inspect
+import maroSettingsPanel as settingsPanel  # noqa: E402 -- 값만 참조, 값 핀 전용
+techDiagSource = inspect.getsource(diag)
+assert settingsPanel._TECH_DIAG_THRESHOLD_VAR in techDiagSource, (
+    "maroTechDiag.py's hardcoded optionVar name must match "
+    "maroSettingsPanel._TECH_DIAG_THRESHOLD_VAR"
+)
+print("optionVar name contract (maroTechDiag <-> maroSettingsPanel) OK")
+
 # --- checkJointStatesIntegrity ---
 rowsEmpty = [{"axisFullPath": "|a1", "jointName": "", "boundTargetPath": "|c1",
               "enabled": True, "conventionAxis": 0, "capabilityCount": 1}]

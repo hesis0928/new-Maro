@@ -2,9 +2,12 @@
 경고 임계값을 Maya의 optionVar에 영구 저장한다(이 코드베이스 최초의
 cmds.optionVar 사용).
 
-아래 읽기/쓰기 함수는 Qt와 무관한 순수 함수다 -- mayapy 배치에서 QWidget
-없이 검증 가능하다. UI 클래스(MaroSettingsPanel)는 다음 태스크에서 이
-파일에 추가된다.
+읽기/쓰기 함수 네 개(readRosSettings/writeRosSettings/readTechDiagThreshold/
+writeTechDiagThreshold) 자체는 Qt와 무관한 순수 함수다 -- 그 로직만 놓고
+보면 mayapy 배치에서 QWidget 없이 검증 가능하다. 다만 이 모듈 자체는
+PySide6를 최상단에서 import하므로, 이 파일을 import하는 것 자체는 항상
+PySide6가 설치돼 있어야 한다(UI 클래스 MaroSettingsPanel을 실제로 만들지
+않아도).
 """
 import os
 
@@ -20,6 +23,11 @@ _DEFAULT_ROBOT_NAME = ""
 _DEFAULT_DOMAIN_OVERRIDE = False
 _DEFAULT_DOMAIN_ID = 0
 _DEFAULT_TECH_DIAG_THRESHOLD = 0.9
+
+# 이 프로세스가 원래 갖고 있던 ROS_DOMAIN_ID -- 도메인 ID 직접 지정을 껐을 때
+# 이전 연결이 남긴 값이 아니라 이 값으로 되돌리기 위해 모듈 로드 시 한 번만
+# 캡처해 둔다.
+_ORIGINAL_ROS_DOMAIN_ID = os.environ.get("ROS_DOMAIN_ID")
 
 
 def readRosSettings():
@@ -78,14 +86,21 @@ def stop():
     """플러그인 언로드 시 열려 있는 설정 창을 닫는다. 한 번도 안 열렸어도
     안전한 무동작."""
     global _OPEN_PANEL
-    if _OPEN_PANEL is not None:
-        try:
-            _OPEN_PANEL.close()
-            _OPEN_PANEL.deleteLater()
-        except Exception:  # noqa: BLE001 -- 언로드 정리 경계
-            import traceback
-            traceback.print_exc()
-        _OPEN_PANEL = None
+    if _OPEN_PANEL is None:
+        return
+    # close()는 closeEvent를 동기적으로 실행한다 -- closeEvent는 자기 자신이
+    # _OPEN_PANEL일 때 모듈 전역을 이미 None으로 지운다. 그래서 close()를
+    # 부른 다음 줄에서 전역을 다시 읽으면(재대입 전) None.deleteLater()가 돼
+    # AttributeError가 난다. 전역을 다시 읽지 않도록 로컬 참조를 먼저 잡아
+    # 둔다(maroSkeletonUpload.stop()과 같은 이유, 같은 패턴).
+    panel = _OPEN_PANEL
+    try:
+        panel.close()
+        panel.deleteLater()
+    except Exception:  # noqa: BLE001 -- 언로드 정리 경계
+        import traceback
+        traceback.print_exc()
+    _OPEN_PANEL = None
 
 
 class MaroSettingsPanel(QtWidgets.QWidget):
@@ -121,7 +136,7 @@ class MaroSettingsPanel(QtWidgets.QWidget):
         techDiagGroup = QtWidgets.QGroupBox("Tech Diag")
         techDiagForm = QtWidgets.QFormLayout(techDiagGroup)
         self._thresholdField = QtWidgets.QSpinBox()
-        self._thresholdField.setRange(0, 100)
+        self._thresholdField.setRange(50, 100)
         self._thresholdField.setSuffix("%")
         techDiagForm.addRow("리밋 근접 경고 임계값", self._thresholdField)
         saveThresholdButton = QtWidgets.QPushButton("저장")
@@ -151,6 +166,10 @@ class MaroSettingsPanel(QtWidgets.QWidget):
             writeRosSettings(robotName, overrideEnabled, domainId)
             if overrideEnabled:
                 os.environ["ROS_DOMAIN_ID"] = str(domainId)
+            elif _ORIGINAL_ROS_DOMAIN_ID is not None:
+                os.environ["ROS_DOMAIN_ID"] = _ORIGINAL_ROS_DOMAIN_ID
+            else:
+                os.environ.pop("ROS_DOMAIN_ID", None)
             cmds.maroStartBridge(robotName)
         except Exception as exc:  # noqa: BLE001 -- Qt 콜백 경계
             cmds.warning("Maro: failed to connect: {}".format(exc))

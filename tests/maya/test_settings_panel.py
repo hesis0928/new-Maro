@@ -76,6 +76,18 @@ value = settings.readTechDiagThreshold()
 assert abs(value - 0.75) < 1e-6, value
 print("writeTechDiagThreshold/readTechDiagThreshold round-trip OK")
 
+# 설계 스펙 §4.2: setStyleSheet()를 부르지 않는다 -- Maya 프로세스 전역
+# QApplication의 팔레트/스타일을 그대로 물려받아야 기존 mayaUI와 이질감이
+# 없다. test_main_window.py/test_object_node_editor.py/test_ros_proxy_sync.py/
+# test_single_object_node_editor.py와 같은 관례를 이 모듈에도 적용한다.
+with open(stagedModule, encoding="utf-8") as handle:
+    source = handle.read()
+assert ".setStyleSheet(" not in source, (
+    "maroSettingsPanel.py must not call setStyleSheet() -- it has to inherit "
+    "Maya's global Qt style (design spec 4.2)"
+)
+print("no setStyleSheet OK")
+
 _clearAllVars()
 maya.standalone.uninitialize()
 print("teardown OK")
