@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <maya/MMatrix.h>
 #include <maya/MObject.h>
 
 #include "maro_transform/Types.h"
@@ -52,12 +53,27 @@ SceneUnit currentSceneUnit();
 bool extractMeshBuffers(const MObject& meshNode, std::vector<float>& vertices,
                         std::vector<std::uint32_t>& indices);
 
+// scanLidarNode()가 실제 레이 원점/방향 계산에 쓰는 지오메트리를 호출부에
+// 그대로 노출한다. maroQueryLidarScan(다음 스텝)이 Tech Diag의 정적 range/
+// FOV 검사에 쓴다 -- Python이 좌표 변환 공식을 다시 유도하지 않고 이
+// 행렬의 역행렬만 취하면 되게 하기 위함(설계 스펙 §4.2).
+struct LidarGeometry {
+    double rangeMinMaya = 0.0;
+    double rangeMaxMaya = 0.0;
+    double verticalMinAngle = 0.0;
+    double verticalMaxAngle = 0.0;
+    double horizontalMinAngle = 0.0;
+    double horizontalMaxAngle = 0.0;
+    MMatrix effectiveWorldMatrix;  // identity by default
+};
+
 // lidarNode의 현재 어트리뷰트를 읽어 즉시 동기 스캔하고, 히트를 Maya 월드
 // 좌표(Vec3)로 outPoints에 채운다(호출 전 내용은 지운다). 스로틀
 // (updateRate)이나 진단 래치(1회 경고)는 호출자 책임이다 -- 이 함수는 매번
 // 무조건 스캔한다. engine은 호출자가 소유한다(재사용 가능 -- setMesh()는
 // 반복 호출로 기존 지오메트리를 안전하게 교체한다).
 LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine& engine,
-                               const SceneUnit& unit, std::vector<Vec3>& outPoints);
+                               const SceneUnit& unit, std::vector<Vec3>& outPoints,
+                               LidarGeometry* outGeometry = nullptr);
 
 }  // namespace maro

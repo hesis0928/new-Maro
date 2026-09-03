@@ -1,12 +1,19 @@
 #include "MaroLidarCommands.h"
 
+#include <cstdint>
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <sstream>
 #include <vector>
 
 #include <maya/MArgDatabase.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnPointArrayData.h>
+#include <maya/MMatrix.h>
 #include <maya/MPointArray.h>
 #include <maya/MSelectionList.h>
+#include <maya/MStringArray.h>
 
 #include "maro_lidar/ScanEngine.h"
 #include "maro_transform/Types.h"
@@ -146,6 +153,113 @@ MStatus MaroSnapshotLidarScanCommand::undoIt() {
     } catch (...) {
         maro::BoadMaro::error("MaroSnapshotLidarScanCommand.undoIt.UnknownException",
                               "Maro: maroSnapshotLidarScan undo failed with unknown error.");
+        return MS::kFailure;
+    }
+}
+
+namespace {
+
+const char* lidarScanResultName(LidarScanResult result) {
+    switch (result) {
+        case LidarScanResult::kOk: return "kOk";
+        case LidarScanResult::kNoTargetMesh: return "kNoTargetMesh";
+        case LidarScanResult::kMeshExtractFailed: return "kMeshExtractFailed";
+        case LidarScanResult::kInvalidConfig: return "kInvalidConfig";
+        case LidarScanResult::kRayCountExceeded: return "kRayCountExceeded";
+    }
+    return "kUnknown";
+}
+
+void appendDouble(MStringArray& out, std::ostringstream& num, double value) {
+    num.str("");
+    num.clear();
+    num << value;
+    out.append(MString(num.str().c_str()));
+}
+
+}  // namespace
+
+void* MaroQueryLidarScanCommand::creator() { return new MaroQueryLidarScanCommand(); }
+
+MSyntax MaroQueryLidarScanCommand::newSyntax() {
+    MSyntax syntax;
+    syntax.setObjectType(MSyntax::kSelectionList, 1, 1);
+    return syntax;
+}
+
+MStatus MaroQueryLidarScanCommand::doIt(const MArgList& args) {
+    maro::ScopedCommandContext ctxMarker("MaroQueryLidarScanCommand");
+    try {
+        MStatus status;
+        MArgDatabase argData(syntax(), args, &status);
+        if (!status) return status;
+
+        MSelectionList selection;
+        argData.getObjects(selection);
+        if (selection.length() != 1) {
+            maro::BoadMaro::error(
+                "MaroQueryLidarScanCommand.WrongArgCount",
+                "Maro: maroQueryLidarScan needs exactly one argument: <lidarNode>.",
+                maro::onfix::capture("", "", ""));
+            return MS::kFailure;
+        }
+
+        MObject lidarObj;
+        selection.getDependNode(0, lidarObj);
+        MFnDependencyNode lidarFn(lidarObj);
+        if (lidarFn.typeId() != MaroLidarNode::id) {
+            maro::BoadMaro::error(
+                "MaroQueryLidarScanCommand.NotMaroLidarNode",
+                MString("Maro: '") + lidarFn.name() + "' is not a maroLidar node.",
+                maro::onfix::capture(lidarFn.typeName(), "", lidarFn.name()));
+            return MS::kFailure;
+        }
+
+        maro::lidar::ScanEngine engine;
+        std::vector<Vec3> points;
+        LidarGeometry geometry;
+        const LidarScanResult result =
+            scanLidarNode(lidarObj, engine, currentSceneUnit(), points, &geometry);
+
+        std::ostringstream num;
+        num.imbue(std::locale::classic());
+        num << std::setprecision(std::numeric_limits<double>::max_digits10);
+
+        MStringArray out;
+        out.append(lidarScanResultName(result));
+
+        if (result == LidarScanResult::kInvalidConfig) {
+            for (int i = 0; i < 22; ++i) appendDouble(out, num, 0.0);
+            out.append("0");
+        } else {
+            appendDouble(out, num, geometry.rangeMinMaya);
+            appendDouble(out, num, geometry.rangeMaxMaya);
+            appendDouble(out, num, geometry.verticalMinAngle);
+            appendDouble(out, num, geometry.verticalMaxAngle);
+            appendDouble(out, num, geometry.horizontalMinAngle);
+            appendDouble(out, num, geometry.horizontalMaxAngle);
+            for (unsigned int r = 0; r < 4; ++r) {
+                for (unsigned int c = 0; c < 4; ++c) {
+                    appendDouble(out, num, geometry.effectiveWorldMatrix(r, c));
+                }
+            }
+            out.append(MString() + static_cast<int>(points.size()));
+            for (const Vec3& p : points) {
+                appendDouble(out, num, p.x);
+                appendDouble(out, num, p.y);
+                appendDouble(out, num, p.z);
+            }
+        }
+
+        setResult(out);
+        return MS::kSuccess;
+    } catch (const std::exception& e) {
+        maro::BoadMaro::error("MaroQueryLidarScanCommand.doIt.Exception",
+                              MString("Maro: maroQueryLidarScan failed: ") + e.what());
+        return MS::kFailure;
+    } catch (...) {
+        maro::BoadMaro::error("MaroQueryLidarScanCommand.doIt.UnknownException",
+                              "Maro: maroQueryLidarScan failed with unknown error.");
         return MS::kFailure;
     }
 }

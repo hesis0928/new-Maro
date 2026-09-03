@@ -23,4 +23,17 @@ private:
     bool m_stagedChange = false;
 };
 
+// <lidarNode>: lidarNode를 즉시 동기 스캔하되 씬을 전혀 바꾸지 않는다 --
+// maroPointCloud도, MDGModifier도 없다. Tech Diag의 동적 LiDAR 검사(설계
+// 스펙 2026-09-04)가 쓰는 유일한 조회 경로. 결과 형식은
+// docs/superpowers/plans/2026-09-04-maro-lidar-sensor-validation.md의
+// Task 2 표 참고.
+class MaroQueryLidarScanCommand : public MPxCommand {
+public:
+    static void* creator();
+    static MSyntax newSyntax();
+    MStatus doIt(const MArgList& args) override;
+    bool isUndoable() const override { return false; }
+};
+
 }  // namespace maro

@@ -36,6 +36,10 @@ LIDAR_MAX_RAYS_PER_SCAN = 65536
 AXIS_FIELDS = 10
 CAPABILITY_FIELDS = 5
 
+# maroQueryLidarScan()의 계약. 계획 문서 2026-09-04-maro-lidar-sensor-
+# validation.md의 Task 2 표와 반드시 일치해야 한다.
+LIDAR_QUERY_HEADER_FIELDS = 24
+
 
 def sliceAxisTechRows(flat):
     """maroListAxisNodes()의 평탄한 배열에서 이 모듈이 필요로 하는 필드만
@@ -439,6 +443,39 @@ def _readCurrentValue(axis, driveIsLinear):
     if driveIsLinear:
         return om2.MDistance(raw, om2.MDistance.uiUnit()).asCentimeters()
     return om2.MAngle(raw, om2.MAngle.uiUnit()).asRadians()
+
+
+def parseLidarScanQuery(flat):
+    """maroQueryLidarScan()의 평탄한 문자열 배열을 딕셔너리로 되돌린다.
+    hitPoints는 (x,y,z) 튜플 목록. status가 "kInvalidConfig"면 matrix/range/
+    FOV 필드는 전부 0이고 hitPoints는 빈 목록이다 -- 호출부는 이 경우 그
+    필드들을 쓰면 안 된다(설계 스펙 §8)."""
+    if len(flat) < LIDAR_QUERY_HEADER_FIELDS:
+        raise ValueError(
+            "lidar scan query array length {} is shorter than the header ({})".format(
+                len(flat), LIDAR_QUERY_HEADER_FIELDS))
+    matrixValues = [float(v) for v in flat[7:23]]
+    hitCount = int(flat[23])
+    hitTail = flat[LIDAR_QUERY_HEADER_FIELDS:]
+    if len(hitTail) != hitCount * 3:
+        raise ValueError(
+            "lidar scan query hit-point tail length {} does not match "
+            "hitCount*3 ({})".format(len(hitTail), hitCount * 3))
+    hitPoints = [
+        (float(hitTail[i]), float(hitTail[i + 1]), float(hitTail[i + 2]))
+        for i in range(0, len(hitTail), 3)
+    ]
+    return {
+        "status": flat[0],
+        "rangeMinMaya": float(flat[1]),
+        "rangeMaxMaya": float(flat[2]),
+        "verticalMinAngle": float(flat[3]),
+        "verticalMaxAngle": float(flat[4]),
+        "horizontalMinAngle": float(flat[5]),
+        "horizontalMaxAngle": float(flat[6]),
+        "effectiveWorldMatrix": om2.MMatrix(matrixValues),
+        "hitPoints": hitPoints,
+    }
 
 
 def _collectLidarRows():

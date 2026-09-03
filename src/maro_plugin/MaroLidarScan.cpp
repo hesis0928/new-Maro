@@ -132,7 +132,8 @@ std::vector<MObject> allConnectedMeshes(MPlug meshesPlug) {
 }  // namespace
 
 LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine& engine,
-                               const SceneUnit& unit, std::vector<Vec3>& outPoints) {
+                               const SceneUnit& unit, std::vector<Vec3>& outPoints,
+                               LidarGeometry* outGeometry) {
     outPoints.clear();
     MFnDependencyNode lidarFn(lidarNode);
 
@@ -204,6 +205,16 @@ LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine&
     const MVector worldOrigin(MPoint(0, 0, 0) * effectiveWorldMatrix);
     const Vec3 origin{worldOrigin.x, worldOrigin.y, worldOrigin.z};
     if (!isFinite(origin)) return LidarScanResult::kInvalidConfig;
+
+    if (outGeometry) {
+        outGeometry->rangeMinMaya = rangeMinMaya;
+        outGeometry->rangeMaxMaya = rangeMaxMaya;
+        outGeometry->verticalMinAngle = verticalMinAngle;
+        outGeometry->verticalMaxAngle = verticalMaxAngle;
+        outGeometry->horizontalMinAngle = horizontalMinAngle;
+        outGeometry->horizontalMaxAngle = horizontalMaxAngle;
+        outGeometry->effectiveWorldMatrix = effectiveWorldMatrix;
+    }
 
     const long long rayCount = static_cast<long long>(verticalSamples) *
                                static_cast<long long>(horizontalSamples);
