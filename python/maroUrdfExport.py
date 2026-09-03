@@ -244,8 +244,18 @@ def _resolveCapabilityDetails(axis, capRow, conventionAxis):
     """capRow(logicalIndex/capabilityNodeName/capType)에 jointType()이 바로
     쓸 수 있는 값(min/max/enabled 또는 ratio/offset/sourceJointName)을
     채운다. 이 함수만 실제 씬을 조회한다(cmds.getAttr/listConnections).
-    capMin/capMax는 현재 UI 단위로 오므로 MAngle/MDistance로 감싸 라디안/
-    미터로 명시 변환한다(Tech Diag가 이미 겪은 단위 함정과 같은 이유)."""
+
+    capMin/capMax는 MFnUnitAttribute가 아니라 평범한 MFnNumericData::k3Double
+    이다(MaroAxisNode.cpp) -- cmds.getAttr은 이 값에 UI 단위 변환을 절대
+    적용하지 않는다(cmds.currentUnit()과 무관). 대신 MaroCapabilityNodes.cpp의
+    MaroLimitNode::compute가 자기 쪽의 진짜 unit-typed 속성(각도는 degrees로
+    표시)을 이 평범한 double 컴파운드에 쓰기 **전에** 고정 단위로 변환해
+    둔다 -- capType 1은 항상 라디안(.asRadians() 후 저장), capType 5는 항상
+    센티미터(.asCentimeters() 후 저장), 세션 단위 설정과 무관하게 항상
+    그렇다. python/maroTechDiag.py가 이미 이 정확한 결론에 도달해 캡처했고
+    (capMin/capMax를 순수 cmds.getAttr로만 읽는다), 여기서도 같은 방식을
+    따른다 -- capType 1은 감싸지 않고 그대로 쓰고, capType 5만 고정
+    kCentimeters 소스 단위로 MDistance 변환한다(.uiUnit()이 아니다)."""
     capType = capRow["capType"]
     idx = capRow["logicalIndex"]
     result = {"capType": capType}
@@ -254,15 +264,19 @@ def _resolveCapabilityDetails(axis, capRow, conventionAxis):
         minRaw = cmds.getAttr("{}.capabilityIn[{}].capMin".format(axis, idx))[0]
         maxRaw = cmds.getAttr("{}.capabilityIn[{}].capMax".format(axis, idx))[0]
         result["enabled"] = bool(enable[conventionAxis])
-        result["min"] = om2.MAngle(minRaw[conventionAxis], om2.MAngle.uiUnit()).asRadians()
-        result["max"] = om2.MAngle(maxRaw[conventionAxis], om2.MAngle.uiUnit()).asRadians()
+        # 이미 라디안이다(MaroLimitNode::compute가 저장 전에 변환) --
+        # MAngle.uiUnit() 감싸기 금지.
+        result["min"] = minRaw[conventionAxis]
+        result["max"] = maxRaw[conventionAxis]
     elif capType == 5:
         enable = cmds.getAttr("{}.capabilityIn[{}].capEnable".format(axis, idx))[0]
         minRaw = cmds.getAttr("{}.capabilityIn[{}].capMin".format(axis, idx))[0]
         maxRaw = cmds.getAttr("{}.capabilityIn[{}].capMax".format(axis, idx))[0]
         result["enabled"] = bool(enable[conventionAxis])
-        result["min"] = om2.MDistance(minRaw[conventionAxis], om2.MDistance.uiUnit()).asMeters()
-        result["max"] = om2.MDistance(maxRaw[conventionAxis], om2.MDistance.uiUnit()).asMeters()
+        # 이미 센티미터다(MaroCapabilityNodes.cpp가 저장 전에 변환) --
+        # 고정 kCentimeters 소스 단위로만 변환한다(.uiUnit() 아님).
+        result["min"] = om2.MDistance(minRaw[conventionAxis], om2.MDistance.kCentimeters).asMeters()
+        result["max"] = om2.MDistance(maxRaw[conventionAxis], om2.MDistance.kCentimeters).asMeters()
     elif capType in (6, 7):
         # aRatio/aOffset은 MFnUnitAttribute가 아니라 평범한 double이다
         # (MaroCapabilityNodes.h 확인) -- 단위 변환이 필요 없다.
@@ -302,7 +316,9 @@ def _gatherAxisWorldTransformRos(axis):
     회전은 MFnTransform.rotation(kWorld, asQuaternion=True)로 얻는다 --
     부모 변환까지 반영한 진짜 월드 회전임을 이 코드베이스가 이미
     실측으로 검증해 둔 방식이다(python/maroRosProxy.py의 같은 호출과
-    그 옆 주석 참고)."""
+    그 옆 주석 참고). (`_resolveCapabilityDetails`의 capMin/capMax는 이와는
+    별개 문제다 -- 그쪽은 애초에 UI 단위가 전혀 개입하지 않는 평범한
+    double이라 감싸면 안 되는 값이었다.)"""
     transformPath = cmds.listRelatives(axis, parent=True, fullPath=True)[0]
     dagPath = om2.MSelectionList().add(transformPath).getDagPath(0)
     worldMatrix = om2.MTransformationMatrix(dagPath.inclusiveMatrix())

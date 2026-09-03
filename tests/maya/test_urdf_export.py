@@ -297,6 +297,17 @@ cmds.setAttr(childAxis + ".conventionAxis", 0)  # X축
 cmds.maroConnectAxis(childAxis, rootAxis)
 cmds.maroAddCapability(childAxis, type="rotation")
 
+# capType 1(rotation limit) 실측 -- 이 파일 위쪽의 cmds.currentUnit(angle="rad")
+# 덕분에 -1.0/1.0을 minX/maxX에 그대로 넣으면 라디안으로 명확히 해석된다
+# (minX/maxX 자체는 MFnUnitAttribute라 setAttr이 UI 각도 단위를 적용한다).
+# 아래 lower/upper 단정은 _resolveCapabilityDetails가 capMin/capMax(평범한
+# double, 항상 라디안)를 그대로 통과시키는지 확인한다 -- 잘못된
+# MAngle.uiUnit() 재해석이 부활하면 여기서 값이 어긋난다.
+limitNode = cmds.maroAddCapability(childAxis, type="limit")[0]
+cmds.setAttr(limitNode + ".enableX", True)
+cmds.setAttr(limitNode + ".minX", -1.0)
+cmds.setAttr(limitNode + ".maxX", 1.0)
+
 flatAxes = cmds.maroListAxisNodes()
 axisRows = urdf.sliceAxisRows(flatAxes)
 assert len(axisRows) == 2, axisRows
@@ -315,7 +326,17 @@ jointEls = robotEl.findall("joint")
 assert len(jointEls) == 1, jointEls
 j = jointEls[0]
 assert j.get("name") == "arm_joint", j.attrib
-assert j.get("type") == "continuous", j.attrib  # rotation만 있고 limit 없음
+assert j.get("type") == "revolute", j.attrib  # limit capability가 활성화됐으므로 continuous가 아니다
+limitEl = j.find("limit")
+assert limitEl is not None, "expected a <limit> element on a revolute joint"
+lower = float(limitEl.get("lower"))
+upper = float(limitEl.get("upper"))
+# capMin/capMax는 항상 라디안이다(단위와 무관, MaroLimitNode::compute가
+# 저장 전에 변환) -- _resolveCapabilityDetails가 그대로 통과시켜야 한다.
+assert abs(lower - (-1.0)) < 1e-6, lower  # would be ~-0.0175 if the unit-trap bug were reintroduced
+assert abs(upper - 1.0) < 1e-6, upper
+print("end-to-end revolute limit: lower={} upper={} (radians, matches input, not unit-trapped)".format(
+    lower, upper))
 originXyz = [float(v) for v in j.find("origin").get("xyz").split()]
 # childMesh는 rootMesh 기준 Y로 10cm = 0.1m 위에 있다(Maya 내부 단위는
 # 센티미터, ROS는 미터). Y-up(Maya) -> Z-up(ROS) 변환 때문에 정확히 어느
