@@ -21,7 +21,7 @@
 
 - **`maroListAxisNodes()`**(양방향 쿼리, 이미 있음) — 전체 축과 각 축의 `parentAxisPath`/`boundTargetPath`/`jointName`/`conventionAxis`/`driveIsLinear` 조회.
 - **`maroListAxisNodes(capabilities=axis)`**(이미 있음) — 각 축의 capability 스택(`capType`/`capMin`/`capMax`/`capEnable` 등) 조회.
-- **`cmds.xform(axis, query=True, worldSpace=True, translation=True)`** + **`maya.api.OpenMaya.MFnTransform(dagPath).rotation(om2.MSpace.kWorld, asQuaternion=True)`** — 각 축의 월드 위치/회전. 후자는 이 코드베이스가 이미 실측으로 검증해 둔 방식이다(`python/maroRosProxy.py:204-211`의 기존 주석 — `MFnTransform.rotation(kWorld, asQuaternion=True)`이 부모 변환까지 반영한 진짜 월드 회전이고 `inclusiveMatrix`에서 뽑은 값과 일치함을 확인했다고 적혀 있음). 이번 작업이 그 결론을 그대로 재사용한다.
+- **정정(Task 4 구현 중 발견)**: 위치는 `cmds.xform`이 아니라 `dagPath.inclusiveMatrix()` + `om2.MTransformationMatrix(...).translation(kWorld)`로 얻는다 — `cmds.xform`은 세션의 현재 UI 선형 단위로 값을 주는데, `maroMayaToRos`는 입력이 Maya 내부 단위(항상 센티미터)라고 전제해서 둘이 다르면 조용히 틀린 위치가 나온다(`maya.api.OpenMaya`는 이 UI 단위 계층 아래에서 항상 내부 단위로만 동작해 이 함정 자체가 성립하지 않는다). **`maya.api.OpenMaya.MFnTransform(dagPath).rotation(om2.MSpace.kWorld, asQuaternion=True)`** — 각 축의 월드 회전. 이 코드베이스가 이미 실측으로 검증해 둔 방식이다(`python/maroRosProxy.py:204-211`의 기존 주석 — `MFnTransform.rotation(kWorld, asQuaternion=True)`이 부모 변환까지 반영한 진짜 월드 회전이고 `inclusiveMatrix`에서 뽑은 값과 일치함을 확인했다고 적혀 있음). 이번 작업이 그 결론을 그대로 재사용한다.
 - **`cmds.maroMayaToRos(px= py= pz= qx= qy= qz= qw=)`**(이미 있음, `MaroRosRuntime.cpp`의 실제 ROS 발행 경로와 같은 소스) — 위에서 얻은 Maya 월드 위치/쿼터니언을 ROS(Z-up, 미터) 위치/쿼터니언으로 변환.
 
 메뉴 배선: `python/maroMenu.py`에 항목 하나 추가(`import maroUrdfExport\nmaroUrdfExport.export()`), `src/maro_plugin/CMakeLists.txt`의 `MARO_PLUGIN_PY_MODULES`에 `maroUrdfExport` 추가.
@@ -38,11 +38,19 @@ relative = inverse(A_rosMatrix) * B_rosMatrix
 
 **정정(자체 검토 중 발견)**: 루트 축에는 이 계산을 적용하지 않는다. URDF 자체에는 루트 링크의 "월드 기준 위치"를 담는 필드가 없다 — `<origin>`은 오직 `<joint>` 안에서 "부모 링크 → 이 조인트 프레임"의 상대 변환을 표현할 뿐이고, 루트 링크(`base_link`)는 어떤 조인트로도 부모에 연결되지 않으므로 `<origin>` 자체가 존재하지 않는다(실제 월드 배치는 URDF 밖에서, 예를 들어 스폰 시점의 정적 tf나 시뮬레이터 설정으로 다뤄지는 게 표준 관례다). 그래서 이 도구는 루트 축에 대해서는 `<origin>` 계산을 아예 건너뛰고, 루트의 `<link>` 요소만(조인트 없이) 만든다.
 
-### 3.3 관절 축(`<axis>`) 계산 — 별도 변환이 필요 없다
+### 3.3 관절 축(`<axis>`) 계산
 
-`<origin>`이 이미 "부모 기준 이 축 로케이터의 자세"를 URDF 관절 프레임으로 그대로 확정하므로, `conventionAxis`가 가리키는 로케이터의 로컬 축은 **그 관절 프레임 안에서 이미** X=(1,0,0), Y=(0,1,0), Z=(0,0,1)이다. 별도 회전/변환이 필요 없다 — `conventionAxis` 값 하나를 그대로 세 단위벡터 중 하나로 매핑하면 끝이다.
+**정정(전체 브랜치 최종 리뷰에서 발견, 실측 반증됨)**: 이 절의 원래 주장 — "`conventionAxis`를 세 단위벡터 중 하나로 그대로 매핑하면 끝, 별도 변환 불필요" — 은 **틀렸다**. 원래 근거("부모·자식 양쪽에 같은 변환을 적용한 뒤 상대 변환을 취하면 로컬 기저벡터의 축 대응 관계 자체는 바뀌지 않는다")는 **§3.2의 origin 계산에 대해서는 참**이다(관계 변환 자체가 conjugation을 보존하므로) — 하지만 **conventionAxis가 가리키는 축 하나를 직접 뽑아 쓰는 것은 다른 문제**다. `maro_transform::mayaToRosRotation`(`Convert.cpp:18-20`)의 실제 구현은 `(x, y, z) -> (x, -z, y)`라는 고정된 성분 재배치이고, 이건 X축만 그대로 두고 Y/Z는 서로 바꾼다(순수 회전이라 "손잡이 보존"은 맞지만, "축 대응관계 보존"과는 다른 성질이다) — 그래서 `conventionAxis`가 가리키는 로컬 축 벡터 자체도 이 재배치를 그대로 거쳐야 한다. 200개 무작위 부모/자식 방향 쌍으로 수치 검증한 결과 X축(변환 후에도 그대로)만 우연히 맞고 Y/Z축은 실제로 틀린 방향이 나왔다 — `conventionAxis`의 기본값이 Y(`MaroAxisNode.cpp`)이므로 **기본 설정 리그가 전부 틀린 축 방향으로 내보내지고 있었다**.
 
-(참고: Maya↔ROS 변환이 순수 회전(핸디니스를 보존하는 변환)이라는 전제가 이 단순화의 근거다 — `maro_transform::mayaToRosRotation`이 이미 검증된 회전 변환이므로, 부모·자식 양쪽에 동일하게 적용된 뒤 상대 변환을 취하면 로컬 기저벡터의 축 대응 관계 자체는 바뀌지 않는다.)
+올바른 매핑(`(x,y,z)->(x,-z,y)`를 세 단위벡터에 직접 적용한 결과):
+
+| conventionAxis | Maya 로컬 축 | URDF `<axis>` |
+|---|---|---|
+| 0 (X) | (1,0,0) | (1,0,0) |
+| 1 (Y) | (0,1,0) | (0,0,1) |
+| 2 (Z) | (0,0,1) | (0,-1,0) |
+
+구현/테스트 수정은 `docs/superpowers/plans/2026-09-02-maro-urdf-export.md`의 Task 4 이후 "Fix Round 2" 커밋 참고.
 
 ### 3.4 관절 타입 매핑
 
@@ -72,7 +80,7 @@ relative = inverse(A_rosMatrix) * B_rosMatrix
 ## 4. 테스트 전략
 
 - 트리 구성(루트 판정, 부모-자식 매핑), origin/axis 계산(순수 행렬 연산, Maya 의존 부분과 분리 가능), 관절 타입 매핑, XML 조립은 전부 **입력을 파이썬 딕셔너리/튜플로 받는 순수 함수**로 분리한다 — 이 프로젝트의 기존 관례(`maroTechDiag.py`의 `check*` 함수들과 동일 원칙)를 그대로 따라 mayapy 배치 테스트가 Qt/실제 씬 없이도 로직을 검증할 수 있게 한다.
-- 월드 트랜스폼 조회(`cmds.xform`/`MFnTransform`/`maroMayaToRos` 호출)만 담당하는 얇은 조합 함수 하나(`_gatherAxisWorldTransforms()`류)가 순수 함수들과 실제 씬 사이의 유일한 경계가 된다 — mayapy 배치에서 실제 축 2-3개짜리 작은 체인을 만들어 이 경계 함수까지 포함한 종단 간 테스트도 가능(파일 다이얼로그만 빼면 나머지는 전부 배치 테스트 가능하다).
+- 월드 트랜스폼 조회(위 정정대로 `cmds.xform`이 아니라 `inclusiveMatrix`/`MFnTransform`/`maroMayaToRos` 호출)만 담당하는 얇은 조합 함수 하나(`_gatherAxisWorldTransforms()`류)가 순수 함수들과 실제 씬 사이의 유일한 경계가 된다 — mayapy 배치에서 실제 축 2-3개짜리 작은 체인을 만들어 이 경계 함수까지 포함한 종단 간 테스트도 가능(파일 다이얼로그만 빼면 나머지는 전부 배치 테스트 가능하다).
 - `cmds.fileDialog2` 호출 자체(실제 파일 저장 대화상자)는 mayapy 배치로 검증 불가능 — 메뉴 클릭부터 실제 파일이 디스크에 쓰이는지까지는 대화형 Maya 수동 체크리스트로 확인한다. 체크리스트의 go/no-go 항목은 **내보낸 URDF를 실제 `check_urdf`(ROS 2 CLI 도구) 또는 RViz2로 로드해 관절이 시각적으로 제자리에서 올바른 방향으로 돌아가는지** — 이 프로젝트가 반복해 온 "추측 대신 실측" 원칙을 좌표계/축 변환처럼 틀리기 쉬운 부분에 그대로 적용한다.
 
 ## 5. 범위 밖
