@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include <maya/MObject.h>
@@ -39,6 +40,17 @@ enum class LidarScanResult {
 // 변환에, 후자는 rangeMin/rangeMax의 미터->Maya 단위 변환에) 여기서 한 곳에만
 // 둔다.
 SceneUnit currentSceneUnit();
+
+// meshNode(트랜스폼 또는 셰이프)에서 월드 좌표 정점/삼각형 인덱스 버퍼를
+// 뽑는다. scanLidarNode()의 다중 메쉬 병합과, 별도 파일의 정밀 메쉬 충돌
+// 커맨드(CollisionEngine 기반)가 공유한다 -- 트랜스폼에 셰이프가 둘 이상인
+// 경우(마킹 메뉴가 LiDAR 로케이터를 타겟 메쉬와 같은 트랜스폼에 올리는 경우
+// 등, 최종 리뷰 C-1 참고)와 intermediate object 제외까지 이미 하드닝된
+// 로직이므로 같은 문제를 두 번 풀지 않는다. 실패(메쉬를 못 찾음, MFnMesh
+// 생성 실패, getPoints/getTriangles 실패)하면 false, vertices/indices는
+// 그대로 둔다.
+bool extractMeshBuffers(const MObject& meshNode, std::vector<float>& vertices,
+                        std::vector<std::uint32_t>& indices);
 
 // lidarNode의 현재 어트리뷰트를 읽어 즉시 동기 스캔하고, 히트를 Maya 월드
 // 좌표(Vec3)로 outPoints에 채운다(호출 전 내용은 지운다). 스로틀

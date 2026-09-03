@@ -32,8 +32,6 @@ SceneUnit currentSceneUnit() {
     return unit;
 }
 
-namespace {
-
 // meshNode는 targetMeshes에 연결된 노드다. 사용자는 보통 트랜스폼의
 // .message를 잇는다(tests/maya/test_lidar_node.py와 python/maroDagMenu.py가
 // 이미 그 관례로 바인딩한다) -- MFnMesh는 트랜스폼을 받지 않으므로 여기서
@@ -113,21 +111,22 @@ bool extractMeshBuffers(const MObject& meshNode, std::vector<float>& vertices,
     return true;
 }
 
-// targetMeshes(메시지 배열)에서 처음으로 연결된 소스 노드를 찾는다.
-// elementByLogicalIndex(0)가 아니라 evaluateNumElements()+
+namespace {
+
+// targetMeshes(메시지 배열)에 연결된 소스 노드를 전부 모은다.
+// elementByLogicalIndex(0)이 아니라 evaluateNumElements()+
 // elementByPhysicalIndex()를 쓴다: 논리 인덱스 접근은 없는 원소를 요구하면
-// 데이터블록에 빈 원소를 만들어 넣는다.
-bool firstConnectedMesh(MPlug meshesPlug, MObject& meshNode) {
+// 데이터블록에 빈 원소를 만들어 넣는다(firstConnectedMesh가 쓰던 것과
+// 같은 이유로 유지).
+std::vector<MObject> allConnectedMeshes(MPlug meshesPlug) {
+    std::vector<MObject> meshes;
     const unsigned int count = meshesPlug.evaluateNumElements();
     for (unsigned int i = 0; i < count; ++i) {
         MPlugArray sources;
         meshesPlug.elementByPhysicalIndex(i).connectedTo(sources, true, false);
-        if (sources.length() > 0) {
-            meshNode = sources[0].node();
-            return true;
-        }
+        if (sources.length() > 0) meshes.push_back(sources[0].node());
     }
-    return false;
+    return meshes;
 }
 
 }  // namespace
@@ -182,41 +181,17 @@ LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine&
     // Embree가 문서로 요구하는 전제: 0 <= tnear <= tfar.
     if (rangeMinMaya < 0.0 || rangeMaxMaya < rangeMinMaya) return LidarScanResult::kInvalidConfig;
 
-    const long long rayCount = static_cast<long long>(verticalSamples) *
-                               static_cast<long long>(horizontalSamples);
-    if (rayCount > kMaxRaysPerScan) return LidarScanResult::kRayCountExceeded;
-
-    MObject meshNode;
-    if (!firstConnectedMesh(lidarFn.findPlug(MaroLidarNode::aTargetMeshes, false), meshNode)) {
-        return LidarScanResult::kNoTargetMesh;
-    }
-
-    std::vector<float> vertices;
-    std::vector<std::uint32_t> indices;
-    if (!extractMeshBuffers(meshNode, vertices, indices)) return LidarScanResult::kMeshExtractFailed;
-    if (!engine.setMesh(vertices, indices)) return LidarScanResult::kMeshExtractFailed;
-
-    const auto localDirections = maro::lidar::computeRayDirections(
-        verticalSamples, verticalMinAngle, verticalMaxAngle, horizontalSamples,
-        horizontalMinAngle, horizontalMaxAngle);
-
+    // [다중 메쉬 지원] 유효 월드 행렬/원점 계산을 타겟 메쉬 확인보다
+    // 앞으로 옮겼다 -- 이 값들은 타겟 메쉬 존재 여부와 무관하게 계산
+    // 가능해야, 다음 태스크의 조회 커맨드가 kNoTargetMesh/
+    // kMeshExtractFailed/kRayCountExceeded에서도 이 지오메트리를 돌려줄
+    // 수 있다(설계 스펙 §3.4/§8).
     MDagPath lidarPath;
     if (MDagPath::getAPathTo(lidarNode, lidarPath) != MS::kSuccess) {
         return LidarScanResult::kInvalidConfig;
     }
-    // 마운트 지점(이 노드가 얹힌 트랜스폼)의 있는 그대로의 월드 행렬. 이
-    // 노드는 전용 트랜스폼 없이 대상 오브젝트 트랜스폼에 직접 얹히므로
-    // (이전 태스크의 검증된 설계 결정, 범위 밖), 실제 센서 원점이 이
-    // 마운트 지점과 정확히 겹치는 경우는 현실에서 사실상 없다. 그 간극을
-    // offsetTranslate/offsetRotate로 메운다: 로컬 오프셋 행렬을 먼저 만들고
-    // (로컬 공간에서 오프셋 적용), 그 다음 마운트의 월드 행렬로 옮긴다
-    // (오프셋된 행렬 * 마운트 월드 행렬). raw worldMatrix 자체는 그대로
-    // 남겨 둔다 -- 원점/방향 계산에는 effectiveWorldMatrix만 쓴다.
     const MMatrix worldMatrix = lidarPath.inclusiveMatrix();
 
-    // offsetTranslate*는 미터다 (rangeMin/rangeMax와 같은 규칙, 위 주석
-    // 참고) -- 같은 mayaPerMeter로 Maya 단위로 바꿔야 아래 행렬 합성이
-    // 같은 단위계 안에서 이뤄진다.
     MTransformationMatrix offsetXform;
     offsetXform.setTranslation(
         MVector(offsetTranslateXMeters * mayaPerMeter, offsetTranslateYMeters * mayaPerMeter,
@@ -229,6 +204,37 @@ LidarScanResult scanLidarNode(const MObject& lidarNode, maro::lidar::ScanEngine&
     const MVector worldOrigin(MPoint(0, 0, 0) * effectiveWorldMatrix);
     const Vec3 origin{worldOrigin.x, worldOrigin.y, worldOrigin.z};
     if (!isFinite(origin)) return LidarScanResult::kInvalidConfig;
+
+    const long long rayCount = static_cast<long long>(verticalSamples) *
+                               static_cast<long long>(horizontalSamples);
+    if (rayCount > kMaxRaysPerScan) return LidarScanResult::kRayCountExceeded;
+
+    // [다중 메쉬 지원] targetMeshes[]에 연결된 것 전부를 모아 하나의
+    // 버퍼로 병합한다(설계 스펙 §3.2) -- 첫 번째 것만 보던 기존 동작을
+    // 대체한다. 일부 메쉬만 추출에 실패해도 나머지로 계속 진행한다(§3.3).
+    const std::vector<MObject> meshNodes =
+        allConnectedMeshes(lidarFn.findPlug(MaroLidarNode::aTargetMeshes, false));
+    if (meshNodes.empty()) return LidarScanResult::kNoTargetMesh;
+
+    std::vector<float> mergedVertices;
+    std::vector<std::uint32_t> mergedIndices;
+    bool anyExtracted = false;
+    for (const MObject& meshNode : meshNodes) {
+        std::vector<float> vertices;
+        std::vector<std::uint32_t> indices;
+        if (!extractMeshBuffers(meshNode, vertices, indices)) continue;
+        const std::uint32_t vertexOffset =
+            static_cast<std::uint32_t>(mergedVertices.size() / 3);
+        mergedVertices.insert(mergedVertices.end(), vertices.begin(), vertices.end());
+        for (std::uint32_t index : indices) mergedIndices.push_back(index + vertexOffset);
+        anyExtracted = true;
+    }
+    if (!anyExtracted) return LidarScanResult::kMeshExtractFailed;
+    if (!engine.setMesh(mergedVertices, mergedIndices)) return LidarScanResult::kMeshExtractFailed;
+
+    const auto localDirections = maro::lidar::computeRayDirections(
+        verticalSamples, verticalMinAngle, verticalMaxAngle, horizontalSamples,
+        horizontalMinAngle, horizontalMaxAngle);
 
     // 방향 벡터에서 평행이동 성분을 제거하기 위해 함께 뺄 기준점.
     const MVector directionBias = MVector(0, 0, 0) * effectiveWorldMatrix;
