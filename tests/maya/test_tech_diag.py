@@ -353,6 +353,90 @@ findings = diag.checkLidarHitBoundsConsistency(lidarRowsZero, scanBadHit)
 assert len(findings) == 1 and findings[0]["category"] == "lidarHitOutOfBounds", findings
 print("checkLidarHitBoundsConsistency OK")
 
+# --- checkLidarOutOfRange: status variations (geometry-valid gate test) ---
+# kMeshExtractFailed is in VALID_STATUSES -> should still flag out-of-range mesh
+scanMeshExtractFailed = {"|lidarA": {"status": "kMeshExtractFailed", "rangeMaxMaya": 100.0,
+                                     "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfRange(lidarRowsZero, scanMeshExtractFailed, boxesFar)
+assert len(findings) == 1 and findings[0]["category"] == "lidarOutOfRange", findings
+print("checkLidarOutOfRange with kMeshExtractFailed still produces finding OK")
+
+# kRayCountExceeded is in VALID_STATUSES -> should still flag out-of-range mesh
+scanRayCountExceeded = {"|lidarA": {"status": "kRayCountExceeded", "rangeMaxMaya": 100.0,
+                                    "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfRange(lidarRowsZero, scanRayCountExceeded, boxesFar)
+assert len(findings) == 1 and findings[0]["category"] == "lidarOutOfRange", findings
+print("checkLidarOutOfRange with kRayCountExceeded still produces finding OK")
+
+# kNoTargetMesh is NOT in VALID_STATUSES -> should NOT flag even with far mesh
+scanNoTargetMesh = {"|lidarA": {"status": "kNoTargetMesh", "rangeMaxMaya": 100.0,
+                                "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfRange(lidarRowsZero, scanNoTargetMesh, boxesFar)
+assert findings == [], "kNoTargetMesh status must skip the check: {}".format(findings)
+print("checkLidarOutOfRange with kNoTargetMesh produces no finding OK")
+
+# kInvalidConfig is NOT in VALID_STATUSES -> should NOT flag even with far mesh
+scanInvalidConfig = {"|lidarA": {"status": "kInvalidConfig", "rangeMaxMaya": 100.0,
+                                 "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfRange(lidarRowsZero, scanInvalidConfig, boxesFar)
+assert findings == [], "kInvalidConfig status must skip the check: {}".format(findings)
+print("checkLidarOutOfRange with kInvalidConfig produces no finding OK")
+
+# --- checkLidarOutOfFov: status variations (geometry-valid gate test) ---
+# kMeshExtractFailed is in VALID_STATUSES -> should still flag out-of-FOV mesh
+scanMeshExtractFailedFov = {"|lidarA": {"status": "kMeshExtractFailed",
+                                        "verticalMinAngle": -0.1, "verticalMaxAngle": 0.1,
+                                        "horizontalMinAngle": -0.1, "horizontalMaxAngle": 0.1,
+                                        "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfFov(lidarRowsZero, scanMeshExtractFailedFov, boxesOutOfFov)
+assert len(findings) == 1 and findings[0]["category"] == "lidarOutOfFov", findings
+print("checkLidarOutOfFov with kMeshExtractFailed still produces finding OK")
+
+# kRayCountExceeded is in VALID_STATUSES -> should still flag out-of-FOV mesh
+scanRayCountExceededFov = {"|lidarA": {"status": "kRayCountExceeded",
+                                       "verticalMinAngle": -0.1, "verticalMaxAngle": 0.1,
+                                       "horizontalMinAngle": -0.1, "horizontalMaxAngle": 0.1,
+                                       "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfFov(lidarRowsZero, scanRayCountExceededFov, boxesOutOfFov)
+assert len(findings) == 1 and findings[0]["category"] == "lidarOutOfFov", findings
+print("checkLidarOutOfFov with kRayCountExceeded still produces finding OK")
+
+# kNoTargetMesh is NOT in VALID_STATUSES -> should NOT flag even with out-of-FOV mesh
+scanNoTargetMeshFov = {"|lidarA": {"status": "kNoTargetMesh",
+                                   "verticalMinAngle": -0.1, "verticalMaxAngle": 0.1,
+                                   "horizontalMinAngle": -0.1, "horizontalMaxAngle": 0.1,
+                                   "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfFov(lidarRowsZero, scanNoTargetMeshFov, boxesOutOfFov)
+assert findings == [], "kNoTargetMesh status must skip the check: {}".format(findings)
+print("checkLidarOutOfFov with kNoTargetMesh produces no finding OK")
+
+# kInvalidConfig is NOT in VALID_STATUSES -> should NOT flag even with out-of-FOV mesh
+scanInvalidConfigFov = {"|lidarA": {"status": "kInvalidConfig",
+                                    "verticalMinAngle": -0.1, "verticalMaxAngle": 0.1,
+                                    "horizontalMinAngle": -0.1, "horizontalMaxAngle": 0.1,
+                                    "effectiveWorldMatrix": om2Test.MMatrix()}}
+findings = diag.checkLidarOutOfFov(lidarRowsZero, scanInvalidConfigFov, boxesOutOfFov)
+assert findings == [], "kInvalidConfig status must skip the check: {}".format(findings)
+print("checkLidarOutOfFov with kInvalidConfig produces no finding OK")
+
+# --- checkLidarZeroHits: enabled=False gate test ---
+lidarRowsDisabled = [{"lidarFullPath": "|lidarA", "enabled": False, "verticalSamples": 1,
+                      "horizontalSamples": 1, "targetMeshCount": 1}]
+scanEmpty = {"|lidarA": {"status": "kOk", "hitPoints": []}}
+findings = diag.checkLidarZeroHits(lidarRowsDisabled, scanEmpty)
+assert findings == [], "disabled lidar must not produce a zero-hits finding: {}".format(findings)
+print("checkLidarZeroHits with enabled=False produces no finding OK")
+
+# --- checkLidarOutOfRange: enabled=False gate test ---
+findings = diag.checkLidarOutOfRange(lidarRowsDisabled, scanInRange, boxesFar)
+assert findings == [], "disabled lidar must not produce an out-of-range finding: {}".format(findings)
+print("checkLidarOutOfRange with enabled=False produces no finding OK")
+
+# --- checkLidarOutOfFov: enabled=False gate test ---
+findings = diag.checkLidarOutOfFov(lidarRowsDisabled, scanNarrowFov, boxesOutOfFov)
+assert findings == [], "disabled lidar must not produce an out-of-FOV finding: {}".format(findings)
+print("checkLidarOutOfFov with enabled=False produces no finding OK")
+
 # --- suggestDisambiguatedJointName (pure) ---
 assert diag.suggestDisambiguatedJointName("shoulder") == "shoulder_2"
 # 최종 리뷰 Important-4: 이미 쓰이는 이름을 알려주면 충돌을 옮기지 않고 피한다.
