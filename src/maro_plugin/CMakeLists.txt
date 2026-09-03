@@ -170,6 +170,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroSkeletonUpload
     maroSingleObjectNodeEditor
     maroTechDiag
+    maroUrdfExport
 )
 foreach(pyModule IN LISTS MARO_PLUGIN_PY_MODULES)
     set(pyModuleSrc "${CMAKE_SOURCE_DIR}/python/${pyModule}.py")

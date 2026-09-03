@@ -49,6 +49,10 @@ def build():
                   command="import maroSkeletonUpload\nmaroSkeletonUpload.show()",
                   parent=MENU_NAME)
     cmds.menuItem(divider=True, parent=MENU_NAME)
+    cmds.menuItem(label="URDF 내보내기...",
+                  command="import maroUrdfExport\nmaroUrdfExport.export()",
+                  parent=MENU_NAME)
+    cmds.menuItem(divider=True, parent=MENU_NAME)
     cmds.menuItem(label="환경설정...",
                   command="import maroSettingsPanel\nmaroSettingsPanel.show()",
                   parent=MENU_NAME)

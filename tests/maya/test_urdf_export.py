@@ -5,6 +5,14 @@ import maya.standalone
 
 maya.standalone.initialize(name="python")
 
+import maya.cmds as cmds  # noqa: E402
+
+plugin = os.environ["MARO_PLUGIN_PATH"]
+cmds.loadPlugin(plugin)
+cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
+cmds.currentUnit(linear="cm")
+
 _pythonDir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "python")
 if _pythonDir not in sys.path:
@@ -261,6 +269,65 @@ assert mimicEl.get("joint") == "source_j"
 assert mimicEl.get("multiplier") == "2.000000"
 assert mimicEl.get("offset") == "0.100000"
 print("buildUrdfXml mimic joint OK")
+
+# --- 종단 간: 실제 2축 체인을 만들어 export()까지 확인 ---
+import tempfile
+
+rootMesh = cmds.polyCube(name="baseLink")[0]
+childMesh = cmds.polyCube(name="armLink")[0]
+cmds.xform(childMesh, worldSpace=True, translation=(0.0, 10.0, 0.0))
+
+rootAxis = cmds.createNode("maroAxis")
+cmds.maroBindAxis(rootAxis, rootMesh)
+cmds.setAttr(rootAxis + ".jointName", "base_joint", type="string")
+rootAxis = cmds.ls(rootAxis, long=True)[0]
+# 루트 축은 origin 계산에 안 쓰이므로(설계 스펙 §3.2 정정) 로케이터
+# 위치는 원점 그대로 둬도 무방하다 -- 실제로도 옮기지 않는다.
+
+childAxis = cmds.createNode("maroAxis")
+cmds.maroBindAxis(childAxis, childMesh)
+cmds.setAttr(childAxis + ".jointName", "arm_joint", type="string")
+childAxis = cmds.ls(childAxis, long=True)[0]
+# 관절 위치를 실제 childMesh 위치에 맞춰 로케이터를 옮긴다(설계 스펙의
+# 새 리깅 관례 -- 로케이터 자신의 위치가 곧 관절 원점).
+cmds.xform(cmds.listRelatives(childAxis, parent=True, fullPath=True)[0],
+           worldSpace=True, translation=(0.0, 10.0, 0.0))
+cmds.setAttr(childAxis + ".conventionAxis", 0)  # X축
+
+cmds.maroConnectAxis(childAxis, rootAxis)
+cmds.maroAddCapability(childAxis, type="rotation")
+
+flatAxes = cmds.maroListAxisNodes()
+axisRows = urdf.sliceAxisRows(flatAxes)
+assert len(axisRows) == 2, axisRows
+
+tmpPath = os.path.join(tempfile.gettempdir(), "maro_urdf_export_test.urdf")
+result = urdf.export(path=tmpPath)
+assert result == tmpPath, result
+assert os.path.isfile(tmpPath), tmpPath
+
+import xml.etree.ElementTree as ET2
+tree = ET2.parse(tmpPath)
+robotEl = tree.getroot()
+linkNames = sorted(l.get("name") for l in robotEl.findall("link"))
+assert linkNames == sorted(["baseLink", "armLink"]), linkNames
+jointEls = robotEl.findall("joint")
+assert len(jointEls) == 1, jointEls
+j = jointEls[0]
+assert j.get("name") == "arm_joint", j.attrib
+assert j.get("type") == "continuous", j.attrib  # rotation만 있고 limit 없음
+originXyz = [float(v) for v in j.find("origin").get("xyz").split()]
+# childMesh는 rootMesh 기준 Y로 10cm = 0.1m 위에 있다(Maya 내부 단위는
+# 센티미터, ROS는 미터). Y-up(Maya) -> Z-up(ROS) 변환 때문에 정확히 어느
+# 성분에 0.1이 나오는지는 mayaToRosPosition의 실제 축 재배치에 달려 있다
+# -- 여기서는 "원점이 원점(0,0,0)이 아니고, 크기가 대략 0.1m"라는 것만
+# 느슨하게 확인한다(정확한 성분별 값은 수동 체크리스트의 RViz2 확인이
+# 담당).
+originMagnitude = sum(v * v for v in originXyz) ** 0.5
+assert abs(originMagnitude - 0.1) < 1e-3, originXyz
+print("end-to-end export() with a real 2-axis chain OK")
+
+os.remove(tmpPath)
 
 maya.standalone.uninitialize()
 print("teardown OK")

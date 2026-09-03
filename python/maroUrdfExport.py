@@ -9,6 +9,9 @@ jointType/computeRelativeOrigin/buildUrdfXml)은 Maya 씬을 조회하지 않는
 추가된다.
 """
 
+import os
+
+import maya.cmds as cmds
 import maya.api.OpenMaya as om2
 import xml.etree.ElementTree as ET
 
@@ -188,3 +191,198 @@ def buildUrdfXml(robotName, links, joints):
                           multiplier="{:.6f}".format(joint["mimic"]["multiplier"]),
                           offset="{:.6f}".format(joint["mimic"]["offset"]))
     return robot
+
+
+AXIS_FIELDS = 10
+CAPABILITY_FIELDS = 5
+
+
+def sliceAxisRows(flat):
+    """maroListAxisNodes()의 평탄한 배열을 축 행 딕셔너리 목록으로
+    되돌린다."""
+    if flat is None:
+        return []
+    if len(flat) % AXIS_FIELDS != 0:
+        raise ValueError(
+            "axis row array length {} is not a multiple of {}".format(
+                len(flat), AXIS_FIELDS))
+    rows = []
+    for i in range(len(flat) // AXIS_FIELDS):
+        f = flat[i * AXIS_FIELDS:(i + 1) * AXIS_FIELDS]
+        rows.append({
+            "axisFullPath": f[0],
+            "jointName": f[1],
+            "boundTargetPath": f[2],
+            "parentAxisPath": f[3],
+            "conventionAxis": int(f[6]),
+        })
+    return rows
+
+
+def sliceCapabilityRows(flat):
+    """maroListAxisNodes(capabilities=axis)의 평탄한 배열을 capability 행
+    딕셔너리 목록으로 되돌린다."""
+    if flat is None:
+        return []
+    if len(flat) % CAPABILITY_FIELDS != 0:
+        raise ValueError(
+            "capability row array length {} is not a multiple of {}".format(
+                len(flat), CAPABILITY_FIELDS))
+    rows = []
+    for i in range(len(flat) // CAPABILITY_FIELDS):
+        f = flat[i * CAPABILITY_FIELDS:(i + 1) * CAPABILITY_FIELDS]
+        rows.append({
+            "logicalIndex": int(f[0]),
+            "capabilityNodeName": f[1],
+            "capType": int(f[3]),
+            "connected": f[4] == "1",
+        })
+    return rows
+
+
+def _resolveCapabilityDetails(axis, capRow, conventionAxis):
+    """capRow(logicalIndex/capabilityNodeName/capType)에 jointType()이 바로
+    쓸 수 있는 값(min/max/enabled 또는 ratio/offset/sourceJointName)을
+    채운다. 이 함수만 실제 씬을 조회한다(cmds.getAttr/listConnections).
+    capMin/capMax는 현재 UI 단위로 오므로 MAngle/MDistance로 감싸 라디안/
+    미터로 명시 변환한다(Tech Diag가 이미 겪은 단위 함정과 같은 이유)."""
+    capType = capRow["capType"]
+    idx = capRow["logicalIndex"]
+    result = {"capType": capType}
+    if capType == 1:
+        enable = cmds.getAttr("{}.capabilityIn[{}].capEnable".format(axis, idx))[0]
+        minRaw = cmds.getAttr("{}.capabilityIn[{}].capMin".format(axis, idx))[0]
+        maxRaw = cmds.getAttr("{}.capabilityIn[{}].capMax".format(axis, idx))[0]
+        result["enabled"] = bool(enable[conventionAxis])
+        result["min"] = om2.MAngle(minRaw[conventionAxis], om2.MAngle.uiUnit()).asRadians()
+        result["max"] = om2.MAngle(maxRaw[conventionAxis], om2.MAngle.uiUnit()).asRadians()
+    elif capType == 5:
+        enable = cmds.getAttr("{}.capabilityIn[{}].capEnable".format(axis, idx))[0]
+        minRaw = cmds.getAttr("{}.capabilityIn[{}].capMin".format(axis, idx))[0]
+        maxRaw = cmds.getAttr("{}.capabilityIn[{}].capMax".format(axis, idx))[0]
+        result["enabled"] = bool(enable[conventionAxis])
+        result["min"] = om2.MDistance(minRaw[conventionAxis], om2.MDistance.uiUnit()).asMeters()
+        result["max"] = om2.MDistance(maxRaw[conventionAxis], om2.MDistance.uiUnit()).asMeters()
+    elif capType in (6, 7):
+        # aRatio/aOffset은 MFnUnitAttribute가 아니라 평범한 double이다
+        # (MaroCapabilityNodes.h 확인) -- 단위 변환이 필요 없다.
+        node = capRow["capabilityNodeName"]
+        result["ratio"] = cmds.getAttr(node + ".ratio")
+        result["offset"] = cmds.getAttr(node + ".offset")
+        sourcePlugName = "sourceValue" if capType == 6 else "sourceValueLinear"
+        sources = cmds.listConnections(
+            node + "." + sourcePlugName, source=True, destination=False, plugs=False) or []
+        if not sources:
+            raise ValueError(
+                "coupling node '{}' has no {} source connection".format(node, sourcePlugName))
+        sourceAxis = cmds.ls(sources[0], long=True)[0]
+        result["sourceJointName"] = cmds.getAttr(sourceAxis + ".jointName")
+    return result
+
+
+def _gatherAxisWorldTransformRos(axis):
+    """axis(maroAxis 로케이터 셰이프)의 부모 트랜스폼의 월드 위치/회전을
+    ROS 프레임 (pos, quat) 튜플로 돌려준다.
+
+    maroAxis는 로케이터 **셰이프**다 -- 위치/회전은 실제로 그 부모
+    트랜스폼에 있으므로(`createNode("maroAxis")`가 자동으로 만드는 부모),
+    `cmds.listRelatives(axis, parent=True)`로 먼저 그 트랜스폼을 얻는다.
+
+    위치는 `cmds.xform`이 아니라 `dagPath.inclusiveMatrix()` +
+    `MTransformationMatrix.translation()`으로 얻는다 -- `cmds.xform`은
+    **현재 UI 선형 단위**(사용자가 in/m 등으로 바꿀 수 있음)로 값을
+    돌려주는데, `maroMayaToRos`(`MaroRosProxyCommands.cpp`)는 입력이
+    Maya **내부** 단위(`MDistance::internalUnit()`, 항상 센티미터)라고
+    전제한다 -- 두 단위가 다르면 사용자의 UI 단위 설정에 따라 조용히
+    틀린 위치가 나온다. `maya.api.OpenMaya`는 이 UI 단위 계층 아래에서
+    항상 내부 단위로만 동작하므로 이 함정 자체가 성립하지 않는다
+    (`_resolveCapabilityDetails`가 `MAngle`/`MDistance`로 반대 방향
+    함정 -- getAttr이 UI 단위로 주는 것 -- 을 막는 것과 쌍을 이룬다).
+
+    회전은 MFnTransform.rotation(kWorld, asQuaternion=True)로 얻는다 --
+    부모 변환까지 반영한 진짜 월드 회전임을 이 코드베이스가 이미
+    실측으로 검증해 둔 방식이다(python/maroRosProxy.py의 같은 호출과
+    그 옆 주석 참고)."""
+    transformPath = cmds.listRelatives(axis, parent=True, fullPath=True)[0]
+    dagPath = om2.MSelectionList().add(transformPath).getDagPath(0)
+    worldMatrix = om2.MTransformationMatrix(dagPath.inclusiveMatrix())
+    pos = worldMatrix.translation(om2.MSpace.kWorld)
+    quat = om2.MFnTransform(dagPath).rotation(om2.MSpace.kWorld, asQuaternion=True)
+    converted = cmds.maroMayaToRos(px=pos.x, py=pos.y, pz=pos.z,
+                                    qx=quat.x, qy=quat.y, qz=quat.z, qw=quat.w)
+    return (converted[0], converted[1], converted[2]), \
+        (converted[3], converted[4], converted[5], converted[6])
+
+
+def _shortName(fullPath):
+    return fullPath.split("|")[-1]
+
+
+def _buildRobotModel():
+    """씬을 조회해 buildUrdfXml에 넘길 (links, joints)를 만든다."""
+    axisRows = sliceAxisRows(cmds.maroListAxisNodes())
+    if not axisRows:
+        raise ValueError("scene has no maroAxis nodes to export")
+    root, childrenByParent = buildAxisTree(axisRows)
+
+    rowsByPath = {row["axisFullPath"]: row for row in axisRows}
+    links = [{"name": _shortName(rowsByPath[root]["boundTargetPath"])}]
+    joints = []
+
+    def _visit(parentAxis):
+        for childAxis in childrenByParent.get(parentAxis, []):
+            childRow = rowsByPath[childAxis]
+            capFlat = cmds.maroListAxisNodes(capabilities=childAxis)
+            capRows = [
+                _resolveCapabilityDetails(childAxis, row, childRow["conventionAxis"])
+                for row in sliceCapabilityRows(capFlat)
+            ]
+            jt = jointType(capRows)
+
+            parentPos, parentQuat = _gatherAxisWorldTransformRos(parentAxis)
+            childPos, childQuat = _gatherAxisWorldTransformRos(childAxis)
+            xyz, rpy = computeRelativeOrigin(parentPos, parentQuat, childPos, childQuat)
+
+            links.append({"name": _shortName(childRow["boundTargetPath"])})
+            joints.append({
+                "name": childRow["jointName"],
+                "type": jt["type"],
+                "parent": _shortName(rowsByPath[parentAxis]["boundTargetPath"]),
+                "child": _shortName(childRow["boundTargetPath"]),
+                "originXyz": xyz,
+                "originRpy": rpy,
+                "axis": (axisVectorForConvention(childRow["conventionAxis"])
+                         if jt["type"] != "fixed" else None),
+                "lower": jt["lower"],
+                "upper": jt["upper"],
+                "mimic": jt["mimic"],
+            })
+            _visit(childAxis)
+
+    _visit(root)
+    return links, joints
+
+
+def export(path=None):
+    """Maro 메뉴의 "URDF 내보내기..." 항목이 부른다. path가 없으면
+    cmds.fileDialog2로 저장 경로를 묻는다(path를 직접 주면 대화상자 없이
+    그 경로에 바로 쓴다 -- 테스트/스크립트용). 성공하면 쓴 경로, 취소/
+    실패하면 None을 돌려준다."""
+    if path is None:
+        results = cmds.fileDialog2(fileMode=0, fileFilter="URDF (*.urdf)",
+                                    caption="Export URDF")
+        if not results:
+            return None
+        path = results[0]
+    try:
+        links, joints = _buildRobotModel()
+        robotName = os.path.splitext(os.path.basename(path))[0]
+        robotElement = buildUrdfXml(robotName, links, joints)
+        ET.indent(robotElement, space="  ")
+        ET.ElementTree(robotElement).write(path, xml_declaration=True, encoding="utf-8")
+        cmds.inViewMessage(amg="Maro: URDF exported to <hl>{}</hl>".format(path),
+                            pos="topCenter", fade=True)
+        return path
+    except Exception as exc:  # noqa: BLE001 -- 메뉴 커맨드 문자열 경계
+        cmds.warning("Maro: URDF export failed: {}".format(exc))
+        return None
