@@ -9,6 +9,8 @@ jointType/computeRelativeOrigin/buildUrdfXml)은 Maya 씬을 조회하지 않는
 추가된다.
 """
 
+import maya.api.OpenMaya as om2
+
 
 def buildAxisTree(axisRows):
     """axisRows: 각 항목이 최소 "axisFullPath"/"parentAxisPath"/"jointName"
@@ -108,3 +110,41 @@ def jointType(capabilityRows):
         return {"type": "prismatic", "lower": -1.0e6, "upper": 1.0e6, "mimic": None}
 
     return {"type": "fixed", "lower": None, "upper": None, "mimic": None}
+
+
+def computeRelativeOrigin(parentPosRos, parentQuatRos, childPosRos, childQuatRos):
+    """parentPosRos/childPosRos: (x, y, z) 미터. parentQuatRos/childQuatRos:
+    (x, y, z, w) -- 전부 이미 ROS 프레임으로 변환된 값(cmds.maroMayaToRos의
+    출력, 호출자가 이미 변환해 넘긴다).
+
+    부모 기준 자식의 상대 변환을 (xyz, rpy) 튜플로 돌려준다 -- xyz는 미터,
+    rpy는 라디안(URDF의 <origin xyz= rpy=>가 그대로 받는 값, 고정축
+    X->Y->Z 순서). 이 함수는 Maya 씬을 조회하지 않는다 -- maya.api.OpenMaya를
+    순수 4x4 행렬/쿼터니언 연산 라이브러리로만 쓴다(설계 스펙 §3.2).
+    """
+    def _matrix(pos, quat):
+        t = om2.MTransformationMatrix()
+        t.setTranslation(om2.MVector(*pos), om2.MSpace.kWorld)
+        t.setRotation(om2.MQuaternion(*quat))
+        return t.asMatrix()
+
+    parentMatrix = _matrix(parentPosRos, parentQuatRos)
+    childMatrix = _matrix(childPosRos, childQuatRos)
+    # Maya는 행벡터 관례(v' = v * M, 왼쪽에서 오른쪽으로 적용)를 쓴다 --
+    # "부모 기준 자식"은 자식을 먼저 적용한 뒤 부모의 역변환을 적용한
+    # 것이다.
+    relative = childMatrix * parentMatrix.inverse()
+
+    relativeXform = om2.MTransformationMatrix(relative)
+    xyz = relativeXform.translation(om2.MSpace.kWorld)
+
+    euler = relativeXform.rotation(asQuaternion=False)
+    # 실측 검증 결과(tests/maya/test_urdf_export.py의 독립 1차 원리 행렬
+    # 비교): om2.MEulerRotation(r, p, y, kXYZ).asMatrix()를 전치(행벡터 ->
+    # 열벡터)한 것이 URDF rpy 공식 R = Rz(yaw) @ Ry(pitch) @ Rx(roll)와
+    # 수치적으로 일치한다 -- brief의 kZYX 가설은 틀렸다(반증됨, 최대 오차
+    # ~0.33). kXYZ가 맞다.
+    euler = euler.reorder(om2.MEulerRotation.kXYZ)
+    rpy = (euler.x, euler.y, euler.z)
+
+    return (xyz.x, xyz.y, xyz.z), rpy
