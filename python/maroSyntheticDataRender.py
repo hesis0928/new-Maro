@@ -134,12 +134,32 @@ def renderSyntheticFrame(cameraTransform, outputDir):
 
     # Beauty (RGBA) is Arnold's built-in main render pass, not something
     # AOVInterface manages -- it goes through defaultArnoldDriver directly.
-    cmds.setAttr("defaultArnoldDriver.aiTranslator", "png", type="string")
-    cmds.setAttr("defaultArnoldDriver.mergeAOVs", 0)
-    cmds.setAttr("defaultArnoldDriver.prefix",
-                 os.path.splitext(paths["beauty"])[0], type="string")
+    # defaultArnoldDriver is shared, session-wide Arnold state -- it isn't
+    # scoped to this render. Mutating it without restoring leaves the
+    # user's own subsequent (unrelated) Arnold renders with the wrong
+    # output format/prefix, and a mid-render exception (e.g. arnoldRender
+    # throwing) would leave the scene half-configured indefinitely. Save
+    # the previous values and restore them in `finally` regardless of
+    # success/failure. (The two dedicated aiAOVDriver nodes and the Z/N AOV
+    # registrations above are new nodes this feature owns outright -- their
+    # existing idempotent-reuse guards already handle repeated calls
+    # correctly, so they don't need save/restore.)
+    previousAiTranslator = cmds.getAttr("defaultArnoldDriver.aiTranslator")
+    previousMergeAOVs = cmds.getAttr("defaultArnoldDriver.mergeAOVs")
+    previousPrefix = cmds.getAttr("defaultArnoldDriver.prefix")
+    try:
+        cmds.setAttr("defaultArnoldDriver.aiTranslator", "png", type="string")
+        cmds.setAttr("defaultArnoldDriver.mergeAOVs", 0)
+        cmds.setAttr("defaultArnoldDriver.prefix",
+                     os.path.splitext(paths["beauty"])[0], type="string")
 
-    cmds.arnoldRender(width=width, height=height, camera=cameraTransform)
+        cmds.arnoldRender(width=width, height=height, camera=cameraTransform)
+    finally:
+        cmds.setAttr("defaultArnoldDriver.aiTranslator", previousAiTranslator, type="string")
+        cmds.setAttr("defaultArnoldDriver.mergeAOVs", previousMergeAOVs)
+        cmds.setAttr("defaultArnoldDriver.prefix",
+                     previousPrefix if previousPrefix is not None else "",
+                     type="string")
 
     calibration = buildCalibrationDict(cameraTransform, frame)
     with open(paths["calibration"], "w") as f:

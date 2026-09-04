@@ -1,6 +1,7 @@
 """합성 데이터(RGB+Depth+Normal+포인트클라우드) 렌더링 패널. 카메라 선택/
 생성, 출력 경로 지정, "렌더 지금" 버튼 하나로 Arnold 렌더 + depth 역투영
 전체 흐름을 실행한다. setStyleSheet()를 부르지 않는다."""
+import json
 import os
 
 import maya.cmds as cmds
@@ -82,6 +83,12 @@ class MaroSyntheticDataPanel(QtWidgets.QWidget):
         self._statusLabel = QtWidgets.QLabel("")
         layout.addWidget(self._statusLabel)
 
+        # 렌더마다 새 maroPointCloud 노드를 만드는 대신 이걸 재사용/갱신한다
+        # (updatePointCloudNode()가 None/유효하지 않은 이름을 만나면 알아서
+        # 새로 만들어 준다 -- 최초 렌더 전이나 노드가 씬에서 지워진 뒤에도
+        # 안전).
+        self._pointCloudNode = None
+
         self._refreshCameraList()
         self._refreshFrameLabel()
 
@@ -108,6 +115,13 @@ class MaroSyntheticDataPanel(QtWidgets.QWidget):
             self._outputDirField.setText(result[0])
 
     def _onRenderNow(self):
+        # 사용자가 렌더 버튼을 누르기 전에 타임라인을 스크럽했을 수 있다 --
+        # __init__에서만 채워진 라벨은 그동안 낡은 값을 보여준다. 실제로
+        # 렌더되는 프레임은 언제나 cmds.currentTime()의 라이브 값이므로(이
+        # 갱신이 그 자체를 바꾸지는 않는다), 여기서 다시 그려 라벨을 최신
+        # 상태로 맞춘다.
+        self._refreshFrameLabel()
+
         camera = self._cameraCombo.currentText()
         outputDir = self._outputDirField.text()
         if not camera:
@@ -125,37 +139,53 @@ class MaroSyntheticDataPanel(QtWidgets.QWidget):
             self._statusLabel.setText("Depth 역투영 중...")
             QtWidgets.QApplication.processEvents()
 
-            width = cmds.getAttr(camera + ".outputResolutionWidth")
-            height = cmds.getAttr(camera + ".outputResolutionHeight")
-            cameraShape = cmds.listRelatives(camera, shapes=True, fullPath=True)[0]
+            # renderSyntheticFrame()이 이미 써 둔 calibration JSON을 다시
+            # 읽어 그 값을 그대로 쓴다 -- 렌더 직후 여기까지 오는 사이의
+            # processEvents() 호출이 사용자에게 씬(카메라 포함)을 건드릴
+            # 여지를 주므로, 여기서 카메라를 다시 조회해 외부 파라미터를
+            # 재유도하면 실제로 렌더된 프레임과 어긋나는 값을 쓸 위험이
+            # 있다(레이스 컨디션). calibration JSON은 이 기능 자신이 이미
+            # 만들어 둔 문서화된 출력물이므로 그것을 그대로 소비하는 것이
+            # 맞다(설계 스펙 §7 "다시 유도하지 않고 그대로 씀" 원칙과 동일).
+            with open(paths["calibration"]) as f:
+                calibration = json.load(f)
+
             intrinsics = sdpc.computeCameraIntrinsics(
-                focalLengthMm=cmds.getAttr(cameraShape + ".focalLength"),
-                horizontalFilmApertureIn=cmds.getAttr(cameraShape + ".horizontalFilmAperture"),
-                verticalFilmApertureIn=cmds.getAttr(cameraShape + ".verticalFilmAperture"),
-                widthPx=width, heightPx=height)
+                focalLengthMm=calibration["focalLength"],
+                horizontalFilmApertureIn=calibration["horizontalFilmAperture"],
+                verticalFilmApertureIn=calibration["verticalFilmAperture"],
+                widthPx=calibration["resolutionWidth"],
+                heightPx=calibration["resolutionHeight"])
 
             pfmPath = os.path.splitext(paths["depth"])[0] + ".pfm"
             sdpc.convertExrToPfm(paths["depth"], pfmPath)
-            _w, _h, depthData = sdpc.parsePfm(pfmPath)
+            renderedWidth, renderedHeight, depthData = sdpc.parsePfm(pfmPath)
 
-            import maya.api.OpenMaya as om2
-            sel = om2.MSelectionList()
-            sel.add(camera)
-            worldMatrix = sel.getDagPath(0).inclusiveMatrix()
-            # MMatrix isn't callable as matrix(r, c) on this Maya version's
-            # API 2.0 (verified in maroSyntheticDataRender.buildCalibrationDict:
-            # TypeError: 'OpenMaya.MMatrix' object is not callable) -- it's
-            # iterable/indexable instead, yielding its 16 elements in
-            # row-major order. The brief's original code used the callable
-            # form; fixed here to match the verified-working pattern.
-            matrixFlat = list(worldMatrix)
+            # parsePfm()이 실제로 읽어 온 이미지 크기가 렌더에 실제로 쓰인
+            # (calibration에 기록된) 해상도와 다르면, unprojectDepthToPoints()가
+            # depthData[row*width+col]을 다른 모양의 버퍼에 대고 읽어 조용히
+            # 스크램블된 포인트클라우드를 만들 수 있다 -- 둘 중 아무 값이나
+            # 골라 쓰지 않고 불일치 자체를 에러로 드러낸다.
+            if (renderedWidth != calibration["resolutionWidth"] or
+                    renderedHeight != calibration["resolutionHeight"]):
+                raise RuntimeError(
+                    "렌더된 depth 이미지 크기({}x{})가 캘리브레이션에 기록된 "
+                    "해상도({}x{})와 다릅니다.".format(
+                        renderedWidth, renderedHeight,
+                        calibration["resolutionWidth"],
+                        calibration["resolutionHeight"]))
 
             points = sdpc.unprojectDepthToPoints(
-                depthData, width, height, intrinsics, matrixFlat)
+                depthData, renderedWidth, renderedHeight, intrinsics,
+                calibration["worldMatrix"])
 
             plyPath = os.path.splitext(paths["depth"])[0] + "_points.ply"
             sdpc.writePly(points, plyPath)
-            sdpc.updatePointCloudNode(points)
+            # 매번 새 maroPointCloud 노드를 만드는 대신 이전 렌더의 노드를
+            # 재사용/갱신한다 -- updatePointCloudNode()는 self._pointCloudNode가
+            # None이거나 씬에서 지워졌으면 알아서 새로 만든다.
+            self._pointCloudNode = sdpc.updatePointCloudNode(
+                points, pointCloudNode=self._pointCloudNode)
 
             self._statusLabel.setText(
                 "완료: {}개 점, {}".format(len(points), plyPath))
