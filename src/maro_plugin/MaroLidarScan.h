@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <maya/MDagPath.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 
@@ -51,6 +52,17 @@ SceneUnit currentSceneUnit();
 // 생성 실패, getPoints/getTriangles 실패)하면 false, vertices/indices는
 // 그대로 둔다.
 bool extractMeshBuffers(const MObject& meshNode, std::vector<float>& vertices,
+                        std::vector<std::uint32_t>& indices);
+
+// meshPath가 이미 확정된 DAG 경로일 때(예: 인스턴스/다중 부모를 가진
+// 노드에서 특정 인스턴스를 가리키는 경로) 이 오버로드를 쓴다 -- 위
+// MObject 버전은 내부적으로 MDagPath::getAPathTo()를 호출하는데, 그
+// 함수는 다중 인스턴스 노드에 대해 "첫 번째" 경로만 돌려줘서 호출부가
+// 실제로 가리키려던 인스턴스와 다른 인스턴스의 지오메트리를 조용히
+// 평가하게 만들 수 있다(이 파일의 다른 곳에 문서화된 것과 같은 함정,
+// 최종 리뷰 Important-4). MaroCheckMeshCollisionCommand가 selection
+// list에서 직접 얻은 MDagPath를 여기로 넘긴다.
+bool extractMeshBuffers(const MDagPath& meshPath, std::vector<float>& vertices,
                         std::vector<std::uint32_t>& indices);
 
 // scanLidarNode()가 실제 레이 원점/방향 계산에 쓰는 지오메트리를 호출부에

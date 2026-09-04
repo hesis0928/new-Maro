@@ -48,6 +48,12 @@ bool extractMeshBuffers(const MObject& meshNode, std::vector<float>& vertices,
                         std::vector<std::uint32_t>& indices) {
     MDagPath meshPath;
     if (MDagPath::getAPathTo(meshNode, meshPath) != MS::kSuccess) return false;
+    return extractMeshBuffers(meshPath, vertices, indices);
+}
+
+bool extractMeshBuffers(const MDagPath& meshPathIn, std::vector<float>& vertices,
+                        std::vector<std::uint32_t>& indices) {
+    MDagPath meshPath = meshPathIn;
     if (!meshPath.hasFn(MFn::kMesh)) {
         // [최종 리뷰 C-1 검증 중 실측으로 발견] 예전에는 여기서
         // `meshPath.extendToShape()`만 불렀다. 그 API는 **셰이프가 정확히

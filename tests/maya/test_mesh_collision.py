@@ -63,6 +63,59 @@ assert cmds.maroCheckMeshCollision(cubeA, locatorTransform) == "unknown", (
     "a non-mesh argument must report unknown, not crash or silently say false")
 print("non-mesh argument -> unknown OK")
 
+# --- 최종 리뷰 Important-4: 다중 인스턴스 노드에서 정확한 DAG 경로를
+# 쓰는지 (getDependNode()+getAPathTo() 함정 회귀) ---
+#
+# 예전 구현은 selection.getDependNode()로 bare MObject를 얻은 뒤
+# extractMeshBuffers(MObject)가 내부적으로 MDagPath::getAPathTo()를 불렀다.
+# 그 함수는 다중 인스턴스 노드에 대해 "첫 번째" 경로만 돌려준다.
+#
+# 중요: Maya에서 인스턴싱은 **셰이프**에 걸리지, 트랜스폼에는 걸리지 않는다
+# -- 각 인스턴스는 자기만의 유일한 트랜스폼을 갖지만, 그 밑의 셰이프
+# 노드(MObject) 자체는 모든 인스턴스가 공유한다. 그래서 이 함정을 실제로
+# 재현하려면 **트랜스폼 이름이 아니라 공유되는 셰이프의 정확한 인스턴스
+# 경로**를 커맨드 인자로 넘겨야 한다 -- 트랜스폼 이름을 넘기면 트랜스폼
+# 자체는 인스턴싱되지 않으므로 getAPathTo()가 항상 유일한 정답을 준다
+# (실측으로 확인: 트랜스폼 이름으로는 이 버그가 재현되지 않았다).
+#
+# 원본 셰이프 경로(월드 원점)와 그 인스턴스 셰이프 경로(x=5로 옮김)가 서로
+# 다른 위치에 있게 만들고, 딱 그 인스턴스 위치에만 겹치는 프로브 메쉬로
+# 실제 어느 경로가 평가됐는지 구분한다.
+cmds.file(new=True, force=True)
+
+instSource = cmds.polyCube(name="instSourceCube")[0]  # world origin
+instancePath = cmds.instance(instSource)[0]
+cmds.setAttr(instancePath + ".translateX", 5.0)
+
+origShapePath = cmds.listRelatives(instSource, shapes=True, fullPath=True)[0]
+instShapePath = cmds.listRelatives(instancePath, shapes=True, fullPath=True)[0]
+assert origShapePath != instShapePath, (origShapePath, instShapePath)
+
+probeMesh = cmds.polyCube(name="instProbeMesh")[0]
+cmds.setAttr(probeMesh + ".translateX", 5.0)  # overlaps only the moved instance
+
+# Sanity check: confirm the two instance shape paths really sit in
+# different, non-overlapping places -- otherwise this test cannot
+# distinguish them at all.
+assert cmds.maroCheckMeshCollision(probeMesh, origShapePath) == "false", (
+    "test setup error: the original (unmoved) instance shape path must NOT "
+    "collide with a probe mesh placed 5 units away -- otherwise this test "
+    "can't tell the two instances apart")
+print("instance test setup: original instance shape path does not collide with the probe OK")
+
+# The exact instance shape path named in the command (moved to x=5,
+# overlapping the probe) must be the one evaluated -- not whichever
+# instance MDagPath::getAPathTo() happens to consider "first" (empirically
+# confirmed to be the original, unmoved instance).
+result = cmds.maroCheckMeshCollision(probeMesh, instShapePath)
+assert result == "true", (
+    "expected the exact instance shape path passed ({}) -- which sits at "
+    "x=5, overlapping the probe mesh -- to be evaluated; a 'false' here "
+    "means the command silently fell back to a different instance (the "
+    "original, at x=0, which does not overlap the probe): got {}".format(
+        instShapePath, result))
+print("maroCheckMeshCollision resolves the exact named instance path OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
