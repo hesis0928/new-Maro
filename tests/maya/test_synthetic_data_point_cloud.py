@@ -54,6 +54,33 @@ try:
 except RuntimeError:
     print("convertExrToPfm raises RuntimeError on failure OK")
 
+# --- findOiiotool() + convertExrToPfm's NEW default resolver (final-review Fix 1) ---
+# This is the shipped default the panel's _onRenderNow() actually calls
+# (convertExrToPfm(exrPath, pfmPath) with no oiiotoolPath) -- the previous
+# bare "oiiotool" default relied on PATH order and, verified empirically,
+# resolved to MayaUSD's bundled OpenImageIO (no PFM writer) instead of
+# Arnold's, because both mayausd.mod and mtoa.mod prepend their own bin/ to
+# PATH and MayaUSD's wins. findOiiotool() resolves Arnold's actual
+# oiiotool.exe via the loaded mtoa plugin's own path instead of trusting
+# PATH. This test exercises that NEW default end-to-end -- it must not use
+# the hardcoded _OIIOTOOL absolute path the tests above use, since the
+# whole point is to catch a regression in the resolver itself.
+resolvedOiiotool = sdpc.findOiiotool()
+assert os.path.isfile(resolvedOiiotool), resolvedOiiotool
+assert "arnold" in resolvedOiiotool.lower(), (
+    "findOiiotool() must resolve Arnold's oiiotool.exe, not MayaUSD's or "
+    "anything else on PATH, got {}".format(resolvedOiiotool))
+print("findOiiotool resolves Arnold's oiiotool.exe OK:", resolvedOiiotool)
+
+defaultResolverPfmPath = os.path.join(tmpDir, "known_depth_default_resolver.pfm")
+sdpc.convertExrToPfm(exrPath, defaultResolverPfmPath)  # no oiiotoolPath -- the real shipped default
+defaultWidth, defaultHeight, defaultData = sdpc.parsePfm(defaultResolverPfmPath)
+assert defaultWidth == 8 and defaultHeight == 8, (defaultWidth, defaultHeight)
+assert all(abs(v - 10.0) < 1e-3 for v in defaultData), (
+    "expected every pixel to be ~10.0 via the default resolver, got a range "
+    "of {} to {}".format(min(defaultData), max(defaultData)))
+print("convertExrToPfm with the NEW default resolver (no oiiotoolPath) succeeds OK")
+
 # --- parsePfm: row order must be top->bottom, not reversed/scrambled ---
 # A uniform-value image (as above) can't distinguish correct row order from
 # a reversed, doubled-reversed, or omitted row-flip -- every row looks the
@@ -80,6 +107,23 @@ for r in range(rowHeight):
         "row {} expected all values ~{} (top->bottom order), got {}".format(
             r, expected, rowValues))
 print("parsePfm returns rows in top->bottom order OK")
+
+# --- parsePfm rejects 3-channel (color, "PF" header) PFM (final-review Fix 7.2) ---
+# Every current caller wants single-channel depth data -- a 3-channel PFM's
+# interleaved RGB would otherwise be silently misinterpreted as scrambled
+# single-channel data (no channel count in the (width, height, data) return).
+colorExrPath = os.path.join(tmpDir, "color.exr")
+colorPfmPath = os.path.join(tmpDir, "color.pfm")
+subprocess.run(
+    [_OIIOTOOL, "--pattern", "constant:color=1,2,3", "8x8", "3", "-d", "float",
+     "-o", colorExrPath],
+    check=True)
+subprocess.run([_OIIOTOOL, colorExrPath, "-o", colorPfmPath], check=True)
+try:
+    sdpc.parsePfm(colorPfmPath)
+    raise AssertionError("expected ValueError for a 3-channel (PF) PFM")
+except ValueError:
+    print("parsePfm rejects 3-channel PFM OK")
 
 # --- unprojectDepthToPoints: on-axis point, identity camera transform ---
 identityMatrix = list(om2.MMatrix())

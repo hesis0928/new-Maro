@@ -11,11 +11,49 @@ Arnold의 실제 Z AOV 규약이나 Maya 카메라의 실제 부호 규약과 �
 반영)만 증명한다 -- 실제 렌더 결과와의 일치 여부는 이 계획의 Task 4
 수동 체크리스트에서만 확정된다."""
 import math
+import os
+import shutil
 import struct
 import subprocess
 
 import maya.api.OpenMaya as om2
 import maya.cmds as cmds
+
+
+def findOiiotool():
+    """Arnold가 함께 설치한 oiiotool.exe를 찾는다.
+
+    PATH의 'oiiotool'을 그냥 믿으면 안 된다 -- 실측 확인(2026-09-04):
+    MayaUSD(`mayausd.mod`)와 Arnold(`mtoa.mod`) 둘 다 자기 `bin` 디렉터리를
+    PATH 앞에 붙이는데, 모듈이 처리되는 순서상 MayaUSD의 bin이 Arnold의
+    bin보다 PATH에서 앞에 온다 -- 그 결과 `shutil.which("oiiotool")`/bare
+    `"oiiotool"` subprocess 호출은 MayaUSD가 번들한 OpenImageIO 빌드
+    (PFM writer 없음, "OpenImageIO could not find a format writer for
+    ...pfm" 에러로 실측 확인됨)를 잡고, Arnold의 실제 oiiotool.exe(PFM
+    writer 포함)는 잡히지 않는다.
+
+    대신 Arnold의 실제 설치 위치를 mtoa 플러그인 경로 기준으로 찾는다 --
+    `cmds.pluginInfo("mtoa", query=True, path=True)`는 mtoa가 아직
+    로드/등록되지 않은 상태에서 부르면 (None이 아니라) 예외를 던진다(실측
+    확인) -- 로드를 시도한 뒤 조회한다."""
+    try:
+        if not cmds.pluginInfo("mtoa", query=True, registered=True):
+            cmds.loadPlugin("mtoa")
+        mtoaPluginPath = cmds.pluginInfo("mtoa", query=True, path=True)
+    except RuntimeError:
+        mtoaPluginPath = None
+    if mtoaPluginPath:
+        # mtoaPluginPath는 .../Arnold/Maya2026/plug-ins/mtoa.mll 형태 --
+        # 두 단계 위(plug-ins의 부모)가 Arnold 설치 루트이고, 그 밑의
+        # bin/oiiotool.exe가 실제로 PFM을 지원하는 바이너리다(실측 확인).
+        arnoldRoot = os.path.dirname(os.path.dirname(mtoaPluginPath))
+        candidate = os.path.join(arnoldRoot, "bin", "oiiotool.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    found = shutil.which("oiiotool")
+    if found:
+        return found
+    raise RuntimeError("oiiotool.exe를 찾을 수 없습니다 (Arnold 설치를 확인하세요).")
 
 
 def computeCameraIntrinsics(focalLengthMm, horizontalFilmApertureIn,
@@ -29,34 +67,57 @@ def computeCameraIntrinsics(focalLengthMm, horizontalFilmApertureIn,
     (Fill/Fit/Overscan/Horizontal/Vertical)는 필름 백 종횡비와 렌더 해상도의
     종횡비가 일치하지 않을 때 화각을 조정하는데, 이 함수는 그 보정을 반영하지
     않는다. 따라서:
-    - 필름 종횡비 ≠ 렌더 해상도 종횡비인 경우(매우 흔함 — 예: 기본 35mm 필름 백
-      `~1.499` vs 1920x1080 해상도 `~1.778`), 두 방향(x, y) 중 한 방향에서
-      ~11-12% 기하학적 오차가 발생한다(실제 Arnold 렌더로 측정됨, 2026-09-04).
-      Maya의 기본 Film Fit 모드는 "Fill"로, 렌더 해상도의 더 넓은 차원을 우선
-      보존하므로, 보통 세로(Y/fy) 방향이 이 오차를 "흡수"한다.
-    - 필름 종횡비 = 렌더 해상도 종횡비인 경우(테스트용 임의의 해상도 선택 시
-      우연히 일치하는 경우)는 오차가 거의 없다.
+    - 필름 종횡비 ≠ 렌더 해상도 종횡비인 경우(매우 흔함), 오차 배율은
+      `max(filmAspect/deviceAspect, deviceAspect/filmAspect)`로 일반화된다
+      (filmAspect = horizontalFilmApertureIn/verticalFilmApertureIn,
+      deviceAspect = widthPx/heightPx). **이 배율은 해상도마다 다르다** —
+      아래 두 실측 사례가 서로 다른 크기/방향을 보이는 이유가 바로 이것이다:
+      - 320x240(테스트 해상도, deviceAspect `~1.333` < filmAspect `~1.499`):
+        배율 `~1.124` → **~12% 오차, 실제 Arnold 렌더로 측정 결과 세로(Y/fy)
+        방향이 흡수함**(2026-09-04, `arnold-task-4-report.md`).
+      - 1920x1080(이 모듈의 실제 기본 해상도, `maroSyntheticDataCamera.
+        createSyntheticDataCamera()`, deviceAspect `~1.778` > filmAspect
+        `~1.499` — 320x240과 부등호 방향이 뒤집힘): 배율 `~1.186` → **~19%
+        오차**. 320x240과 종횡비 부등호가 반대이므로 Fill 모드가 오차를
+        흡수하는 축도 뒤집힐 가능성이 높다(가로/X가 흡수) — 하지만 **이
+        축 판정은 320x240에서만 실측됐고 1920x1080에서 직접 렌더로
+        확인된 적은 없다**. "Y가 흡수한다"는 일반 사실이 아니라 320x240
+        한정 관측이므로, 다른 해상도에서 어느 축이 오차를 흡수하는지는
+        매번 실측해야 한다.
+    - 필름 종횡비 = 렌더 해상도 종횡비인 경우(우연히 일치하는 경우)는 오차가
+      거의 없다.
 
     향후 고정을 위해서는 카메라의 `filmFit` 속성(Fill/Fit/Overscan/Horizontal/
     Vertical 중 하나)을 읽고, 필름 종횡비 ≠ 렌더 종횡비인 경우 Maya의 카메라
-    모델(또는 MtoA) 문서에 따라 fx/fy 중 하나를 scale하는 로직이 필요하다.
-    현재로선 이 계산 로직을 독립적으로 검증하기 위해(픽셀 부호 규약 검증처럼)
-    배치 mayapy + Arnold 실측을 통해 Film Fit 보정을 적용했을 때의 개선을 수량화
-    할 필요가 있다. 자세한 배경과 측정 결과는
-    `.superpowers/sdd/arnold-task-4-report.md` (2026-09-04 Precision caveat 섹션)
-    참고.
+    모델(또는 MtoA) 문서에 따라 fx/fy 중 하나를 scale하는 로직이 필요하다 —
+    이 함수는 의도적으로 그 보정을 구현하지 않는다(범위 밖). 자세한 배경과
+    측정 결과는 `.superpowers/sdd/arnold-task-4-report.md`(2026-09-04
+    Precision caveat 섹션) 및 최종 리뷰 수정 보고서
+    (`.superpowers/sdd/arnold-final-review-fix-report.md`, Fix 5) 참고.
     """
     fx = (focalLengthMm / (horizontalFilmApertureIn * 25.4)) * widthPx
     fy = (focalLengthMm / (verticalFilmApertureIn * 25.4)) * heightPx
     return {"fx": fx, "fy": fy, "cx": widthPx / 2.0, "cy": heightPx / 2.0}
 
 
-def convertExrToPfm(exrPath, pfmPath, oiiotoolPath="oiiotool"):
+def convertExrToPfm(exrPath, pfmPath, oiiotoolPath=None):
     """oiiotool로 exrPath(단일 채널 float EXR)를 pfmPath로 변환한다.
-    oiiotool이 실패하거나 입력 파일이 없으면 RuntimeError."""
-    result = subprocess.run(
-        [oiiotoolPath, exrPath, "-o", pfmPath],
-        capture_output=True, text=True)
+    oiiotool이 실패하거나 입력 파일이 없으면 RuntimeError.
+
+    oiiotoolPath를 안 주면 findOiiotool()로 Arnold의 실제 oiiotool.exe를
+    찾는다 -- bare "oiiotool"에 기대 PATH 순서에 맡기면 MayaUSD가 번들한
+    (PFM writer 없는) OpenImageIO가 먼저 잡힐 수 있다(findOiiotool()
+    도크스트링 참고)."""
+    if oiiotoolPath is None:
+        oiiotoolPath = findOiiotool()
+    try:
+        result = subprocess.run(
+            [oiiotoolPath, exrPath, "-o", pfmPath],
+            capture_output=True, text=True)
+    except OSError as exc:
+        raise RuntimeError(
+            "oiiotool을 실행할 수 없습니다 (경로: {!r}): {}".format(
+                oiiotoolPath, exc))
     if result.returncode != 0:
         raise RuntimeError(
             "oiiotool failed converting {} -> {}: {}".format(
@@ -66,12 +127,22 @@ def convertExrToPfm(exrPath, pfmPath, oiiotoolPath="oiiotool"):
 def parsePfm(path):
     """PFM(Portable Float Map) 파일을 (width, height, data) 튜플로 읽는다.
     data는 위->아래(일반적인 래스터 순서) row-major float 리스트다 --
-    PFM 자체는 아래->위 순서로 저장하므로 여기서 뒤집어 보정한다."""
+    PFM 자체는 아래->위 순서로 저장하므로 여기서 뒤집어 보정한다.
+
+    단일 채널("Pf") PFM만 지원한다 -- 이 모듈의 모든 호출자가 단일 채널
+    depth 데이터를 기대하므로, 컬러("PF", 3채널) PFM을 받으면 그 인터리브된
+    RGB 데이터가 조용히 스크램블된 단일 채널 depth처럼 오인될 위험이 있다.
+    그런 오인을 만들지 않기 위해 3채널 PFM은 명시적으로 거부한다."""
     with open(path, "rb") as f:
         header = f.readline().decode("ascii").strip()
         if header not in ("Pf", "PF"):
             raise ValueError("not a PFM file (header: {!r})".format(header))
-        channels = 1 if header == "Pf" else 3
+        if header != "Pf":
+            raise ValueError(
+                "parsePfm은 단일 채널(Pf) PFM만 지원합니다 -- {!r}는 3채널"
+                " 컬러 PFM이라 depth 데이터로 쓸 수 없습니다: {}".format(
+                    header, path))
+        channels = 1
         width, height = (int(v) for v in f.readline().decode("ascii").split())
         scale = float(f.readline().decode("ascii").strip())
         endian = "<" if scale < 0 else ">"
