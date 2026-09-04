@@ -54,6 +54,33 @@ try:
 except RuntimeError:
     print("convertExrToPfm raises RuntimeError on failure OK")
 
+# --- parsePfm: row order must be top->bottom, not reversed/scrambled ---
+# A uniform-value image (as above) can't distinguish correct row order from
+# a reversed, doubled-reversed, or omitted row-flip -- every row looks the
+# same. Build a row-dependent image instead: a constant base of 5.0 with the
+# bottom half (oiiotool's y=4..7, raster convention: y=0 is the top row)
+# overwritten to 15.0 via --fill. If parsePfm's rows.reverse() were removed
+# or the flip logic were otherwise broken, the returned top-to-bottom data
+# would report the top rows as ~15.0 instead of ~5.0 (or some other
+# non-top/bottom split), so the per-row assertions below would fail.
+rowExrPath = os.path.join(tmpDir, "row_gradient.exr")
+rowPfmPath = os.path.join(tmpDir, "row_gradient.pfm")
+subprocess.run(
+    [_OIIOTOOL, "--pattern", "constant:color=5.0", "8x8", "1", "-d", "float",
+     "--fill:color=15.0", "8x4+0+4", "-o", rowExrPath],
+    check=True)
+sdpc.convertExrToPfm(rowExrPath, rowPfmPath, oiiotoolPath=_OIIOTOOL)
+rowWidth, rowHeight, rowData = sdpc.parsePfm(rowPfmPath)
+assert rowWidth == 8 and rowHeight == 8, (rowWidth, rowHeight)
+assert len(rowData) == 64, len(rowData)
+for r in range(rowHeight):
+    rowValues = rowData[r * rowWidth:(r + 1) * rowWidth]
+    expected = 5.0 if r < 4 else 15.0
+    assert all(abs(v - expected) < 1e-3 for v in rowValues), (
+        "row {} expected all values ~{} (top->bottom order), got {}".format(
+            r, expected, rowValues))
+print("parsePfm returns rows in top->bottom order OK")
+
 # --- unprojectDepthToPoints: on-axis point, identity camera transform ---
 identityMatrix = list(om2.MMatrix())
 onAxisIntrinsics = {"fx": 500.0, "fy": 500.0, "cx": 4.0, "cy": 4.0}
