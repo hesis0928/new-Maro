@@ -1119,14 +1119,23 @@ Arnold가 라이선스된 인터랙티브 Maya 2026에서, `maro.mll`을 로드�
 - [ ] **[정보성 · 알려진 제한 사항 확인] `computeCameraIntrinsics()` Film Fit
       모드 미지원** — 카메라의 필름 백 종횡비와 렌더 해상도 종횡비가 일치하지
       않는 경우(매우 흔한 상황) `computeCameraIntrinsics()`는 Maya의 Film Fit
-      모드를 반영하지 않아 기하학적 오차(~11-12%, 한 방향만 영향)가 발생한다는
-      알려진 제한 사항을 인지하고 있는가. 이 기능이 default 카메라 설정(현재
-      테스트된 설정)이 아닌 다른 필름 백/해상도로 쓰일 때는 이 오차가 발생할
-      수 있음을 인지하고, 필요 시 역투영 결과의 기하학적 정확도를 재검증해야
-      한다는 점을 염두에 두어야 한다. (자세한 배경은
-      `python/maroSyntheticDataPointCloud.py` `computeCameraIntrinsics()` 함수
-      주석 및 `.superpowers/sdd/arnold-task-4-report.md` 2026-09-04 Precision
-      caveat 섹션 참고.)
+      모드를 반영하지 않아 기하학적 오차가 발생한다는 알려진 제한 사항을
+      인지하고 있는가. **오차 배율은 해상도에 따라 달라진다**(최종 리뷰
+      Fix 5, 2026-09-04) — 일반식은
+      `max(filmAspect/deviceAspect, deviceAspect/filmAspect)`이고, 320x240
+      테스트 해상도에서는 `~1.124`(~12%, 세로/Y가 흡수, 실측 확인)이지만, 이
+      기능의 실제 기본 해상도인 1920x1080에서는 종횡비 부등호 방향이
+      뒤집혀(`deviceAspect > filmAspect`, 320x240과 반대) `~1.186`(~19%)로
+      다르고, 오차를 흡수하는 축도 가로/X로 뒤집힐 가능성이 높다 — **단,
+      이 축 판정 자체는 320x240에서만 실측됐고 1920x1080에서 직접 렌더로
+      확인된 적은 없다.** 이 기능이 default 카메라/해상도로 쓰이는 한
+      ~19%(X 또는 Y 중 하나, 미확정) 오차가 존재한다는 뜻이므로, 필요 시
+      역투영 결과의 기하학적 정확도를 재검증해야 한다는 점을 염두에 두어야
+      한다. (자세한 배경은 `python/maroSyntheticDataPointCloud.py`
+      `computeCameraIntrinsics()` 함수 주석,
+      `.superpowers/sdd/arnold-task-4-report.md` 2026-09-04 Precision
+      caveat 섹션, `.superpowers/sdd/arnold-final-review-fix-report.md`
+      Fix 5 참고.)
 - [ ] **`maroPointCloud` 미리보기** — 렌더 완료 후 씬에 `maroPointCloud`
       노드가 생기고(또는 갱신되고), 뷰포트에 포인트가 실제로 그려지는가
       (Phase 5 LiDAR 시각화의 드로우 오버라이드를 그대로 재사용).
@@ -1155,3 +1164,26 @@ Arnold가 라이선스된 인터랙티브 Maya 2026에서, `maro.mll`을 로드�
 > mayapy로는 원리적으로 확인 불가능하다 — 이 환경에는 대화형 GUI Maya가
 > 없어 직접 재현하지 못했다. 이 절을 처음 수행하는 사람이 나머지 항목을
 > 확인해 달라.
+>
+> **추가 검증(최종 리뷰 Fix 1, 2026-09-04):** Task 4까지의 모든 실측
+> 검증(위 두 go/no-go 항목 포함)은 `renderSyntheticFrame()`/
+> `unprojectDepthToPoints()` 등 하부 모듈을 직접 호출한 것이었지,
+> `_onRenderNow()`(패널의 "렌더 지금" 버튼이 실제로 실행하는 오케스트레이션
+> 함수) 자체는 이 기능이 나온 이후 단 한 번도 실행된 적이 없었다 --
+> 그래서 `convertExrToPfm()`의 원래 기본값(`oiiotoolPath="oiiotool"`)이
+> 이 환경에서 MayaUSD가 번들한(PFM writer 없는) OpenImageIO를 PATH
+> 우선순위로 먼저 잡아 조용히 실패하는 버그가 최종 리뷰 전까지 한 번도
+> 발견되지 않은 채 남아 있었다(최종 리뷰 Fix 1). 이 버그를 고치면서
+> (`findOiiotool()` 추가, Arnold의 실제 `oiiotool.exe`를 mtoa 플러그인
+> 경로 기준으로 찾음) `_onRenderNow()`가 실행하는 것과 정확히 같은
+> 순서(`renderSyntheticFrame()` → calibration JSON 재로드 →
+> `convertExrToPfm()`(기본 리졸버) → `parsePfm()` → 해상도 일치 검사 →
+> `unprojectDepthToPoints()` → `writePly()`/`updatePointCloudNode()`)를
+> 배치 `mayapy` + 실제 라이선스된 Arnold로 모듈 레벨에서 재현해 처음으로
+> 실제 실행해 봤고, 성공적으로 완료됨을 확인했다(PLY 파일 생성,
+> `maroPointCloud` 노드 갱신까지 전부 확인됨 — 자세한 로그는
+> `.superpowers/sdd/arnold-final-review-fix-report.md` Fix 1 섹션 참고).
+> 다만 이것은 여전히 `_onRenderNow()`의 로직을 모듈 레벨에서 그대로 재현한
+> 것이지 실제 Qt 버튼 클릭을 통한 것은 아니다 — 버튼 클릭 자체는
+> 여전히 PySide6/GUI가 필요해 이 환경(대화형 GUI Maya 없음)에서는
+> 검증할 수 없다.
