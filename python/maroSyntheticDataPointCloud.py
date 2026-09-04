@@ -97,14 +97,35 @@ def computeCameraIntrinsics(focalLengthMm, horizontalFilmApertureIn, verticalFil
 
     Fill: 두 종횡비 중 필름 쪽이 더 좁으면(`filmAspect < deviceAspect`)
     가로를 그대로 쓰고 세로를 다시 계산, 반대면 대칭. Horizontal/Vertical은
-    그 중 한쪽을 종횡비 관계와 무관하게 항상 그대로 쓴다. Overscan은 아직
-    지원하지 않는다(`NotImplementedError`) -- 정확한 동작이 실측으로
-    확정되지 않은 채 추측으로 구현하지 않는다(계획 문서 Task 2)."""
+    그 중 한쪽을 종횡비 관계와 무관하게 항상 그대로 쓴다.
+
+    Overscan(2026-09-05, Task 2에서 실측 확정): Fill과 **정반대** 분기를
+    고른다 -- `filmAspect < deviceAspect`면 Fill은 가로를 그대로 쓰지만
+    Overscan은 세로를 그대로 쓰고 가로를 (더 넓게) 다시 계산하며, 반대
+    조건이면 그 반대로 동작한다. 즉 Fill이 "두 후보(가로기준/세로기준) 중
+    화각이 더 좁아지는 쪽"을 고르는 데 비해 Overscan은 "더 넓어지는 쪽"을
+    고른다 -- Maya 카메라 문서의 kOverscanFilmFit 설명("액션 안무를 위해
+    프러스텀 바깥까지 볼 수 있게 화각을 넓힌다")과 일치하고,
+    `maya.api.OpenMaya.MFnCamera.getViewParameters()`를 독립 오라클로 교차
+    검증해 확인했다(`tests/maya/test_synthetic_data_point_cloud.py`의
+    회귀 테스트 참고).
+
+    **`overscan` 파라미터(카메라의 `.overscan` 어트리뷰트, 기본 1.0)는 이
+    계산에 영향을 주지 않는다** -- 처음 가설("가로/세로 필름 백 양쪽에
+    오버스캔 배율을 곱한다")은 실측으로 반증됐다.
+    `MFnCamera.getViewParameters(..., applyOverscan=True)`는 실제로 그
+    배율을 적용하지만, 이는 **뷰포트 표시 전용**이다(Maya 공식 문서:
+    "Overscan 어트리뷰트는 카메라 뷰에서만 장면 크기를 조정하고, 렌더된
+    이미지에는 영향을 주지 않는다") -- `filmFit=Overscan`을 골라도 마찬가지
+    라는 것까지 실측 확인했다: 이 모듈이 실제로 호출하는
+    `MFnCamera.getRenderingFrustum()`(렌더 프러스텀 전용 API, overscan
+    인자 자체가 없음)은 overscan 값을 절대 반영하지 않고, 같은 장면을
+    `filmFit="overscan"`으로 두고 `overscan=1.0`과 `overscan=2.0` 각각
+    실제 Arnold로 렌더한 결과의 depth AOV가 픽셀 단위로 완전히 동일했다
+    (2026-09-05, `.superpowers/sdd/filmfit-task-2-report.md`). 파라미터
+    자체는 (기존 시그니처와의 호환을 위해, 그리고 카메라가 실제로 이
+    어트리뷰트를 갖고 있다는 사실을 반영하기 위해) 계속 받지만 무시한다."""
     mode = _normalizeFilmFit(filmFit)
-    if mode == "overscan":
-        raise NotImplementedError(
-            "filmFit='overscan'은 아직 지원되지 않습니다 -- 정확한 보정 공식이 "
-            "실측으로 확정된 뒤 추가될 예정입니다.")
 
     filmAspect = horizontalFilmApertureIn / verticalFilmApertureIn
     deviceAspect = (widthPx / float(heightPx)) * pixelAspectRatio
@@ -116,6 +137,12 @@ def computeCameraIntrinsics(focalLengthMm, horizontalFilmApertureIn, verticalFil
         vEff = hEff / deviceAspect
     elif mode == "vertical":
         hEff = vEff * deviceAspect
+    elif mode == "overscan":
+        # Fill의 정반대 분기 -- 자세한 근거는 위 docstring 참고.
+        if filmAspect < deviceAspect:
+            hEff = vEff * deviceAspect
+        else:
+            vEff = hEff / deviceAspect
     else:  # fill
         if filmAspect < deviceAspect:
             vEff = hEff / deviceAspect

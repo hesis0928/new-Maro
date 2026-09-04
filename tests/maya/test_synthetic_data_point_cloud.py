@@ -111,12 +111,46 @@ assert abs(fillPA["fy"] - expectedFyRawPA) < 1e-6, fillPA
 assert abs(fillPA["fx"] - expectedFxCorrectedPA) < 1e-6, fillPA
 print("computeCameraIntrinsics pixelAspectRatio affects the Fill branch decision OK")
 
-# Overscan: not implemented yet in this task -- must raise, not guess.
-try:
-    sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="overscan")
-    raise AssertionError("expected NotImplementedError for filmFit='overscan' in this task")
-except NotImplementedError:
-    print("computeCameraIntrinsics overscan raises NotImplementedError (Task 2 will implement) OK")
+# Overscan (2026-09-05, Task 2): the exact MIRROR of Fill's branch choice --
+# where Fill picks whichever of {keep-H-raw, keep-V-raw} SHRINKS the other
+# side, Overscan picks whichever ENLARGES it (confirmed against the
+# independent MFnCamera.getViewParameters() oracle below and a real Arnold
+# render -- see .superpowers/sdd/filmfit-task-2-report.md). Use the SAME two
+# aspect regimes as the Fill tests above to prove Overscan takes the
+# opposite branch in each.
+# 1920x1080 (filmAspect<deviceAspect): Fill kept H raw (shrinking V).
+# Overscan must instead keep V raw and enlarge H.
+overscanWide = sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="overscan")
+expectedHEffOvWide = vAp * deviceAspect
+expectedFxOvWide = (35.0 / (expectedHEffOvWide * 25.4)) * w
+expectedFyOvWide = (35.0 / (vAp * 25.4)) * h  # V raw
+assert abs(overscanWide["fy"] - expectedFyOvWide) < 1e-6, overscanWide
+assert abs(overscanWide["fx"] - expectedFxOvWide) < 1e-6, overscanWide
+assert abs(overscanWide["fx"] - fillWide["fx"]) > 1.0, (
+    "sanity: Overscan must genuinely differ from Fill here (opposite branch)")
+print("computeCameraIntrinsics Overscan (filmAspect<deviceAspect, mirrors Fill) OK")
+
+# 320x240 (filmAspect>deviceAspect): Fill kept V raw (shrinking H).
+# Overscan must instead keep H raw and enlarge V.
+overscanNarrow = sdpc.computeCameraIntrinsics(35.0, hAp2, vAp2, w2, h2, filmFit="overscan")
+expectedVEffOvNarrow = hAp2 / deviceAspect2
+expectedFyOvNarrow = (35.0 / (expectedVEffOvNarrow * 25.4)) * h2
+expectedFxOvNarrow = (35.0 / (hAp2 * 25.4)) * w2  # H raw
+assert abs(overscanNarrow["fx"] - expectedFxOvNarrow) < 1e-6, overscanNarrow
+assert abs(overscanNarrow["fy"] - expectedFyOvNarrow) < 1e-6, overscanNarrow
+assert abs(overscanNarrow["fy"] - fillNarrow["fy"]) > 1.0, (
+    "sanity: Overscan must genuinely differ from Fill here (opposite branch)")
+print("computeCameraIntrinsics Overscan (filmAspect>deviceAspect, mirrors Fill) OK")
+
+# The `overscan` scalar attribute itself must NOT affect fx/fy in any mode --
+# empirically confirmed (real Arnold render, byte-identical depth AOVs for
+# overscan=1.0 vs overscan=3.0 with filmFit="overscan") that Maya's
+# `.overscan` camera attribute only affects the VIEWPORT display gate, never
+# the actual rendered/ray-traced geometry, even when filmFit IS Overscan.
+overscanScaled = sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="overscan", overscan=5.0)
+assert abs(overscanScaled["fx"] - overscanWide["fx"]) < 1e-9, overscanScaled
+assert abs(overscanScaled["fy"] - overscanWide["fy"]) < 1e-9, overscanScaled
+print("computeCameraIntrinsics overscan scalar has no effect on fx/fy (matches real render) OK")
 
 # Unrecognized filmFit value.
 try:
@@ -134,6 +168,76 @@ horizFromInt = sdpc.computeCameraIntrinsics(35.0, hAp2, vAp2, w2, h2, filmFit=1)
 assert abs(horizFromInt["fx"] - horiz["fx"]) < 1e-6
 assert abs(horizFromInt["fy"] - horiz["fy"]) < 1e-6
 print("computeCameraIntrinsics integer filmFit enum form OK")
+
+# --- computeCameraIntrinsics: independent MFnCamera oracle cross-check
+# (2026-09-05, Task 2) ---
+# Maya's own MFnCamera already implements Film Fit/pixelAspectRatio/overscan
+# internally -- this is a genuinely independent authority (not a hand-derived
+# expected value written by the same person implementing the formula), so a
+# real mismatch here means computeCameraIntrinsics() itself is wrong.
+#
+# `MFnCamera.horizontalFieldOfView()`/`verticalFieldOfView()` (combined with
+# `setAspectRatio()`) were tried FIRST and found to be the WRONG mechanism --
+# empirically, they ignore `filmFit` entirely (always compute as if in
+# Vertical fit, regardless of what `filmFit` is set to), so cross-checking
+# against them silently "confirmed" a wrong formula. The correct,
+# filmFit-aware oracle is `MFnCamera.getViewParameters(windowAspect,
+# applyOverscan, applySqueeze, applyPanZoom) -> (apertureX, apertureY,
+# offsetX, offsetY)` -- this returns the actual EFFECTIVE film-back
+# dimensions (in inches) Maya's own camera model uses for the given device
+# aspect, from which fx/fy follow via the same pinhole relation
+# computeCameraIntrinsics() itself uses. `applyOverscan=False` matches this
+# module's contract (overscan the scalar attribute is confirmed, via a real
+# Arnold render -- see above and the task report -- to affect only the
+# viewport display gate, never the rendered/ray-traced image).
+_oracleCam = cmds.camera()[1]
+_oracleFn = om2.MFnCamera(om2.MSelectionList().add(_oracleCam).getDagPath(0))
+_oracleFocalLength = 35.0
+_oracleHAp, _oracleVAp = 1.417323, 0.945512
+cmds.setAttr(_oracleCam + ".focalLength", _oracleFocalLength)
+cmds.setAttr(_oracleCam + ".horizontalFilmAperture", _oracleHAp)
+cmds.setAttr(_oracleCam + ".verticalFilmAperture", _oracleVAp)
+
+_oracleModeMap = {
+    "fill": om2.MFnCamera.kFillFilmFit,
+    "horizontal": om2.MFnCamera.kHorizontalFilmFit,
+    "vertical": om2.MFnCamera.kVerticalFilmFit,
+    "overscan": om2.MFnCamera.kOverscanFilmFit,
+}
+# At least 3-4 distinct (filmFit, resolution, pixelAspectRatio) combinations
+# per mode, including pixelAspectRatio != 1.0, per the task brief.
+_oracleCases = [
+    (1920, 1080, 1.0),
+    (320, 240, 1.0),
+    (1280, 720, 1.0),
+    (1920, 1080, 0.7),
+    (640, 480, 1.5),
+]
+_oracleMismatches = []
+for _mode in ("fill", "horizontal", "vertical", "overscan"):
+    for _w, _h, _pa in _oracleCases:
+        for _overscanVal in (1.0, 2.5):  # overscan value must never matter
+            _deviceAspect = (_w / float(_h)) * _pa
+            _oracleFn.filmFit = _oracleModeMap[_mode]
+            _oracleFn.overscan = _overscanVal
+            _apX, _apY, _offX, _offY = _oracleFn.getViewParameters(_deviceAspect, False, False, False)
+            _oracleFx = _oracleFocalLength / (_apX * 25.4) * _w
+            _oracleFy = _oracleFocalLength / (_apY * 25.4) * _h
+            _codeResult = sdpc.computeCameraIntrinsics(
+                _oracleFocalLength, _oracleHAp, _oracleVAp, _w, _h,
+                filmFit=_mode, pixelAspectRatio=_pa, overscan=_overscanVal)
+            if (abs(_oracleFx - _codeResult["fx"]) > 0.05 or
+                    abs(_oracleFy - _codeResult["fy"]) > 0.05):
+                _oracleMismatches.append(
+                    (_mode, _w, _h, _pa, _overscanVal,
+                     (_oracleFx, _oracleFy), (_codeResult["fx"], _codeResult["fy"])))
+assert not _oracleMismatches, (
+    "computeCameraIntrinsics() disagrees with the independent MFnCamera "
+    "oracle for: {}".format(_oracleMismatches))
+print("computeCameraIntrinsics matches the independent MFnCamera oracle "
+      "across {} mode x resolution x pixelAspectRatio x overscan combinations OK"
+      .format(4 * len(_oracleCases) * 2))
+cmds.delete(cmds.listRelatives(_oracleCam, parent=True, fullPath=True)[0])
 
 # --- convertExrToPfm + parsePfm round trip (real oiiotool, no Arnold needed) ---
 tmpDir = tempfile.mkdtemp(prefix="maro_synth_")
