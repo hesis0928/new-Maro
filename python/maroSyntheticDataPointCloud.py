@@ -56,47 +56,74 @@ def findOiiotool():
     raise RuntimeError("oiiotool.exe를 찾을 수 없습니다 (Arnold 설치를 확인하세요).")
 
 
-def computeCameraIntrinsics(focalLengthMm, horizontalFilmApertureIn,
-                             verticalFilmApertureIn, widthPx, heightPx):
-    """Maya 카메라의 초점거리(mm)/필름 백(inch)과 렌더 해상도로 핀홀
-    카메라 내부 파라미터(fx, fy, cx, cy, 전부 픽셀 단위)를 계산한다.
+# Maya의 filmFit enum 순서(정수 attribute 값과 대응) -- 문서화된 Maya 카메라
+# 관례, cmds.attributeQuery("filmFit", node=<camera>, listEnum=True)로도
+# 확인 가능.
+_FILM_FIT_MODES = ("fill", "horizontal", "vertical", "overscan")
 
-    **제한 사항 — Film Fit 모드 미지원**: 이 함수는 카메라의 raw 필름 백 크기
-    (horizontalFilmApertureIn, verticalFilmApertureIn)를 렌더 해상도(widthPx,
-    heightPx)와 직접 대응시켜 fx/fy를 계산한다. Maya의 카메라 Film Fit 모드
-    (Fill/Fit/Overscan/Horizontal/Vertical)는 필름 백 종횡비와 렌더 해상도의
-    종횡비가 일치하지 않을 때 화각을 조정하는데, 이 함수는 그 보정을 반영하지
-    않는다. 따라서:
-    - 필름 종횡비 ≠ 렌더 해상도 종횡비인 경우(매우 흔함), 오차 배율은
-      `max(filmAspect/deviceAspect, deviceAspect/filmAspect)`로 일반화된다
-      (filmAspect = horizontalFilmApertureIn/verticalFilmApertureIn,
-      deviceAspect = widthPx/heightPx). **이 배율은 해상도마다 다르다** —
-      아래 두 실측 사례가 서로 다른 크기/방향을 보이는 이유가 바로 이것이다:
-      - 320x240(테스트 해상도, deviceAspect `~1.333` < filmAspect `~1.499`):
-        배율 `~1.124` → **~12% 오차, 실제 Arnold 렌더로 측정 결과 세로(Y/fy)
-        방향이 흡수함**(2026-09-04, `arnold-task-4-report.md`).
-      - 1920x1080(이 모듈의 실제 기본 해상도, `maroSyntheticDataCamera.
-        createSyntheticDataCamera()`, deviceAspect `~1.778` > filmAspect
-        `~1.499` — 320x240과 부등호 방향이 뒤집힘): 배율 `~1.186` → **~19%
-        오차**. 320x240과 종횡비 부등호가 반대이므로 Fill 모드가 오차를
-        흡수하는 축도 뒤집힐 가능성이 높다(가로/X가 흡수) — 하지만 **이
-        축 판정은 320x240에서만 실측됐고 1920x1080에서 직접 렌더로
-        확인된 적은 없다**. "Y가 흡수한다"는 일반 사실이 아니라 320x240
-        한정 관측이므로, 다른 해상도에서 어느 축이 오차를 흡수하는지는
-        매번 실측해야 한다.
-    - 필름 종횡비 = 렌더 해상도 종횡비인 경우(우연히 일치하는 경우)는 오차가
-      거의 없다.
 
-    향후 고정을 위해서는 카메라의 `filmFit` 속성(Fill/Fit/Overscan/Horizontal/
-    Vertical 중 하나)을 읽고, 필름 종횡비 ≠ 렌더 종횡비인 경우 Maya의 카메라
-    모델(또는 MtoA) 문서에 따라 fx/fy 중 하나를 scale하는 로직이 필요하다 —
-    이 함수는 의도적으로 그 보정을 구현하지 않는다(범위 밖). 자세한 배경과
-    측정 결과는 `.superpowers/sdd/arnold-task-4-report.md`(2026-09-04
-    Precision caveat 섹션) 및 최종 리뷰 수정 보고서
-    (`.superpowers/sdd/arnold-final-review-fix-report.md`, Fix 5) 참고.
-    """
-    fx = (focalLengthMm / (horizontalFilmApertureIn * 25.4)) * widthPx
-    fy = (focalLengthMm / (verticalFilmApertureIn * 25.4)) * heightPx
+def _normalizeFilmFit(filmFit):
+    """filmFit을 정규화된 소문자 문자열로 바꾼다. 문자열(대소문자 무관)이나
+    Maya의 원시 정수 enum 값(0-3) 둘 다 받는다."""
+    if isinstance(filmFit, str):
+        normalized = filmFit.strip().lower()
+    else:
+        try:
+            normalized = _FILM_FIT_MODES[int(filmFit)]
+        except (ValueError, IndexError, TypeError):
+            normalized = None
+    if normalized not in _FILM_FIT_MODES:
+        raise ValueError(
+            "알 수 없는 filmFit 값: {!r} (지원: {})".format(filmFit, _FILM_FIT_MODES))
+    return normalized
+
+
+def computeCameraIntrinsics(focalLengthMm, horizontalFilmApertureIn, verticalFilmApertureIn,
+                             widthPx, heightPx, filmFit="fill", pixelAspectRatio=1.0, overscan=1.0):
+    """Maya 카메라의 초점거리(mm)/필름 백(inch)/Film Fit 모드/픽셀종횡비/
+    오버스캔과 렌더 해상도로 핀홀 카메라 내부 파라미터(fx, fy, cx, cy, 전부
+    픽셀 단위)를 계산한다.
+
+    Film Fit 모드가 필름 백 종횡비와 렌더 해상도 종횡비의 불일치를 어떻게
+    보정하는지 반영한다(설계 스펙 2026-09-05-maro-arnold-film-fit-correction-
+    design.md §3) -- 2026-09-04 최종 리뷰가 발견한 ~11-19% 기하 오차의
+    원인이었던 부분. `filmFit="fill"`(기본값)이 Maya 카메라의 기본 설정과
+    일치한다.
+
+    - `filmAspect = horizontalFilmApertureIn / verticalFilmApertureIn`
+    - `deviceAspect = (widthPx / heightPx) * pixelAspectRatio` (Maya가 Film
+      Fit 판정에 실제로 쓰는 정의 -- 정사각 픽셀이 아니면 단순
+      widthPx/heightPx와 다르다)
+
+    Fill: 두 종횡비 중 필름 쪽이 더 좁으면(`filmAspect < deviceAspect`)
+    가로를 그대로 쓰고 세로를 다시 계산, 반대면 대칭. Horizontal/Vertical은
+    그 중 한쪽을 종횡비 관계와 무관하게 항상 그대로 쓴다. Overscan은 아직
+    지원하지 않는다(`NotImplementedError`) -- 정확한 동작이 실측으로
+    확정되지 않은 채 추측으로 구현하지 않는다(계획 문서 Task 2)."""
+    mode = _normalizeFilmFit(filmFit)
+    if mode == "overscan":
+        raise NotImplementedError(
+            "filmFit='overscan'은 아직 지원되지 않습니다 -- 정확한 보정 공식이 "
+            "실측으로 확정된 뒤 추가될 예정입니다.")
+
+    filmAspect = horizontalFilmApertureIn / verticalFilmApertureIn
+    deviceAspect = (widthPx / float(heightPx)) * pixelAspectRatio
+
+    hEff = horizontalFilmApertureIn
+    vEff = verticalFilmApertureIn
+
+    if mode == "horizontal":
+        vEff = hEff / deviceAspect
+    elif mode == "vertical":
+        hEff = vEff * deviceAspect
+    else:  # fill
+        if filmAspect < deviceAspect:
+            vEff = hEff / deviceAspect
+        else:
+            hEff = vEff * deviceAspect
+
+    fx = (focalLengthMm / (hEff * 25.4)) * widthPx
+    fy = (focalLengthMm / (vEff * 25.4)) * heightPx
     return {"fx": fx, "fy": fy, "cx": widthPx / 2.0, "cy": heightPx / 2.0}
 
 

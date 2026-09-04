@@ -31,6 +31,110 @@ assert abs(intrinsics["fx"] - (35.0 / (1.417323 * 25.4)) * 1920) < 1e-6
 assert intrinsics["cx"] == 960.0 and intrinsics["cy"] == 540.0
 print("computeCameraIntrinsics OK")
 
+# --- computeCameraIntrinsics: Film Fit modes (2026-09-05 follow-up) ---
+import math as _math  # noqa: E402
+
+# Fill, filmAspect < deviceAspect (the 1920x1080 default case, pixelAspectRatio=1):
+# horizontal is the "narrower" side and stays raw; vertical is recomputed.
+hAp, vAp, w, h = 1.417323, 0.945512, 1920, 1080
+filmAspect = hAp / vAp
+deviceAspect = w / float(h)
+assert filmAspect < deviceAspect, "test premise: expected filmAspect < deviceAspect here"
+fillWide = sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="fill")
+expectedFxRaw = (35.0 / (hAp * 25.4)) * w
+expectedVEff = hAp / deviceAspect
+expectedFyCorrected = (35.0 / (expectedVEff * 25.4)) * h
+assert abs(fillWide["fx"] - expectedFxRaw) < 1e-6, fillWide
+assert abs(fillWide["fy"] - expectedFyCorrected) < 1e-6, fillWide
+assert abs(fillWide["fy"] - ((35.0 / (vAp * 25.4)) * h)) > 1.0, (
+    "sanity: the corrected fy must differ meaningfully from the naive "
+    "(uncorrected) formula, or this test can't tell a real fix from a no-op")
+print("computeCameraIntrinsics Fill (filmAspect<deviceAspect) OK")
+
+# Fill, filmAspect > deviceAspect (the original 320x240 bug-report case):
+# vertical is the "narrower" side and stays raw; horizontal is recomputed.
+hAp2, vAp2, w2, h2 = 1.417323, 0.945512, 320, 240
+filmAspect2 = hAp2 / vAp2
+deviceAspect2 = w2 / float(h2)
+assert filmAspect2 > deviceAspect2, "test premise: expected filmAspect > deviceAspect here"
+fillNarrow = sdpc.computeCameraIntrinsics(35.0, hAp2, vAp2, w2, h2, filmFit="fill")
+expectedFyRaw2 = (35.0 / (vAp2 * 25.4)) * h2
+expectedHEff2 = vAp2 * deviceAspect2
+expectedFxCorrected2 = (35.0 / (expectedHEff2 * 25.4)) * w2
+assert abs(fillNarrow["fy"] - expectedFyRaw2) < 1e-6, fillNarrow
+assert abs(fillNarrow["fx"] - expectedFxCorrected2) < 1e-6, fillNarrow
+print("computeCameraIntrinsics Fill (filmAspect>deviceAspect) OK")
+
+# Horizontal: horizontal aperture is ALWAYS kept raw, regardless of which
+# way the aspect ratio comparison goes -- use the SAME inputs as the
+# filmAspect>deviceAspect Fill case above (320x240), where Fill would have
+# corrected fx (not fy). Horizontal must behave differently from Fill here:
+# fx stays raw, fy gets corrected instead.
+horiz = sdpc.computeCameraIntrinsics(35.0, hAp2, vAp2, w2, h2, filmFit="horizontal")
+expectedFxRawH = (35.0 / (hAp2 * 25.4)) * w2
+expectedVEffH = hAp2 / deviceAspect2
+expectedFyCorrectedH = (35.0 / (expectedVEffH * 25.4)) * h2
+assert abs(horiz["fx"] - expectedFxRawH) < 1e-6, horiz
+assert abs(horiz["fy"] - expectedFyCorrectedH) < 1e-6, horiz
+assert abs(horiz["fx"] - fillNarrow["fx"]) > 1.0, (
+    "sanity: Horizontal must genuinely differ from Fill for these inputs, "
+    "since Fill corrected fx here but Horizontal must keep fx raw instead")
+print("computeCameraIntrinsics Horizontal OK")
+
+# Vertical: mirror of Horizontal -- vertical aperture always kept raw. Use
+# the filmAspect<deviceAspect inputs (1920x1080), where Fill kept fx raw;
+# Vertical must instead keep fy raw and correct fx.
+vert = sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="vertical")
+expectedFyRawV = (35.0 / (vAp * 25.4)) * h
+expectedHEffV = vAp * deviceAspect
+expectedFxCorrectedV = (35.0 / (expectedHEffV * 25.4)) * w
+assert abs(vert["fy"] - expectedFyRawV) < 1e-6, vert
+assert abs(vert["fx"] - expectedFxCorrectedV) < 1e-6, vert
+assert abs(vert["fx"] - fillWide["fx"]) > 1.0, (
+    "sanity: Vertical must genuinely differ from Fill for these inputs")
+print("computeCameraIntrinsics Vertical OK")
+
+# pixelAspectRatio: a non-1.0 value changes deviceAspect and can flip which
+# branch Fill takes. At 1920x1080 with pixelAspectRatio=1.0, deviceAspect
+# (~1.778) > filmAspect (~1.499) -- Fill's "if" branch. Pick a
+# pixelAspectRatio that pushes deviceAspect below filmAspect instead, and
+# confirm Fill's OTHER branch fires (proving pixelAspectRatio is actually
+# read, not ignored).
+paRatio = 0.7  # deviceAspect = (1920/1080)*0.7 ~= 1.244, now < filmAspect ~1.499
+deviceAspectPA = (w / float(h)) * paRatio
+assert deviceAspectPA < filmAspect, "test premise: pixelAspectRatio must flip the comparison here"
+fillPA = sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="fill", pixelAspectRatio=paRatio)
+expectedFyRawPA = (35.0 / (vAp * 25.4)) * h
+expectedHEffPA = vAp * deviceAspectPA
+expectedFxCorrectedPA = (35.0 / (expectedHEffPA * 25.4)) * w
+assert abs(fillPA["fy"] - expectedFyRawPA) < 1e-6, fillPA
+assert abs(fillPA["fx"] - expectedFxCorrectedPA) < 1e-6, fillPA
+print("computeCameraIntrinsics pixelAspectRatio affects the Fill branch decision OK")
+
+# Overscan: not implemented yet in this task -- must raise, not guess.
+try:
+    sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="overscan")
+    raise AssertionError("expected NotImplementedError for filmFit='overscan' in this task")
+except NotImplementedError:
+    print("computeCameraIntrinsics overscan raises NotImplementedError (Task 2 will implement) OK")
+
+# Unrecognized filmFit value.
+try:
+    sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit="diagonal")
+    raise AssertionError("expected ValueError for an unrecognized filmFit value")
+except ValueError:
+    print("computeCameraIntrinsics rejects an unrecognized filmFit value OK")
+
+# Integer enum form (Maya's raw attribute value) must work the same as the
+# string form -- 0=Fill, 1=Horizontal, 2=Vertical, 3=Overscan.
+fillFromInt = sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit=0)
+assert abs(fillFromInt["fx"] - fillWide["fx"]) < 1e-6
+assert abs(fillFromInt["fy"] - fillWide["fy"]) < 1e-6
+horizFromInt = sdpc.computeCameraIntrinsics(35.0, hAp2, vAp2, w2, h2, filmFit=1)
+assert abs(horizFromInt["fx"] - horiz["fx"]) < 1e-6
+assert abs(horizFromInt["fy"] - horiz["fy"]) < 1e-6
+print("computeCameraIntrinsics integer filmFit enum form OK")
+
 # --- convertExrToPfm + parsePfm round trip (real oiiotool, no Arnold needed) ---
 tmpDir = tempfile.mkdtemp(prefix="maro_synth_")
 exrPath = os.path.join(tmpDir, "known_depth.exr")
