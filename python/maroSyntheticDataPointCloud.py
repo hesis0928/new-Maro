@@ -21,7 +21,31 @@ import maya.cmds as cmds
 def computeCameraIntrinsics(focalLengthMm, horizontalFilmApertureIn,
                              verticalFilmApertureIn, widthPx, heightPx):
     """Maya 카메라의 초점거리(mm)/필름 백(inch)과 렌더 해상도로 핀홀
-    카메라 내부 파라미터(fx, fy, cx, cy, 전부 픽셀 단위)를 계산한다."""
+    카메라 내부 파라미터(fx, fy, cx, cy, 전부 픽셀 단위)를 계산한다.
+
+    **제한 사항 — Film Fit 모드 미지원**: 이 함수는 카메라의 raw 필름 백 크기
+    (horizontalFilmApertureIn, verticalFilmApertureIn)를 렌더 해상도(widthPx,
+    heightPx)와 직접 대응시켜 fx/fy를 계산한다. Maya의 카메라 Film Fit 모드
+    (Fill/Fit/Overscan/Horizontal/Vertical)는 필름 백 종횡비와 렌더 해상도의
+    종횡비가 일치하지 않을 때 화각을 조정하는데, 이 함수는 그 보정을 반영하지
+    않는다. 따라서:
+    - 필름 종횡비 ≠ 렌더 해상도 종횡비인 경우(매우 흔함 — 예: 기본 35mm 필름 백
+      `~1.499` vs 1920x1080 해상도 `~1.778`), 두 방향(x, y) 중 한 방향에서
+      ~11-12% 기하학적 오차가 발생한다(실제 Arnold 렌더로 측정됨, 2026-09-04).
+      Maya의 기본 Film Fit 모드는 "Fill"로, 렌더 해상도의 더 넓은 차원을 우선
+      보존하므로, 보통 세로(Y/fy) 방향이 이 오차를 "흡수"한다.
+    - 필름 종횡비 = 렌더 해상도 종횡비인 경우(테스트용 임의의 해상도 선택 시
+      우연히 일치하는 경우)는 오차가 거의 없다.
+
+    향후 고정을 위해서는 카메라의 `filmFit` 속성(Fill/Fit/Overscan/Horizontal/
+    Vertical 중 하나)을 읽고, 필름 종횡비 ≠ 렌더 종횡비인 경우 Maya의 카메라
+    모델(또는 MtoA) 문서에 따라 fx/fy 중 하나를 scale하는 로직이 필요하다.
+    현재로선 이 계산 로직을 독립적으로 검증하기 위해(픽셀 부호 규약 검증처럼)
+    배치 mayapy + Arnold 실측을 통해 Film Fit 보정을 적용했을 때의 개선을 수량화
+    할 필요가 있다. 자세한 배경과 측정 결과는
+    `.superpowers/sdd/arnold-task-4-report.md` (2026-09-04 Precision caveat 섹션)
+    참고.
+    """
     fx = (focalLengthMm / (horizontalFilmApertureIn * 25.4)) * widthPx
     fy = (focalLengthMm / (verticalFilmApertureIn * 25.4)) * heightPx
     return {"fx": fx, "fy": fy, "cx": widthPx / 2.0, "cy": heightPx / 2.0}

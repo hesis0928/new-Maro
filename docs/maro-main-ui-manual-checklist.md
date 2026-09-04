@@ -1116,6 +1116,17 @@ Arnold가 라이선스된 인터랙티브 Maya 2026에서, `maro.mll`을 로드�
       오브젝트를 두고 렌더 → 역투영된 포인트클라우드에서 그 오브젝트가
       실제로 같은 쪽에 나타나는지 확인한다. 좌우/상하가 뒤집혀 나오면
       `unprojectDepthToPoints()`의 `xCam`/`yCam` 부호를 실측에 맞게 고친다.
+- [ ] **[정보성 · 알려진 제한 사항 확인] `computeCameraIntrinsics()` Film Fit
+      모드 미지원** — 카메라의 필름 백 종횡비와 렌더 해상도 종횡비가 일치하지
+      않는 경우(매우 흔한 상황) `computeCameraIntrinsics()`는 Maya의 Film Fit
+      모드를 반영하지 않아 기하학적 오차(~11-12%, 한 방향만 영향)가 발생한다는
+      알려진 제한 사항을 인지하고 있는가. 이 기능이 default 카메라 설정(현재
+      테스트된 설정)이 아닌 다른 필름 백/해상도로 쓰일 때는 이 오차가 발생할
+      수 있음을 인지하고, 필요 시 역투영 결과의 기하학적 정확도를 재검증해야
+      한다는 점을 염두에 두어야 한다. (자세한 배경은
+      `python/maroSyntheticDataPointCloud.py` `computeCameraIntrinsics()` 함수
+      주석 및 `.superpowers/sdd/arnold-task-4-report.md` 2026-09-04 Precision
+      caveat 섹션 참고.)
 - [ ] **`maroPointCloud` 미리보기** — 렌더 완료 후 씬에 `maroPointCloud`
       노드가 생기고(또는 갱신되고), 뷰포트에 포인트가 실제로 그려지는가
       (Phase 5 LiDAR 시각화의 드로우 오버라이드를 그대로 재사용).
