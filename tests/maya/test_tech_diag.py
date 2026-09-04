@@ -635,6 +635,36 @@ assert "lidarZeroHits" in categories, categories
 assert "lidarOutOfRange" in categories, categories
 print("_runMayaSideChecks surfaces lidarZeroHits + lidarOutOfRange OK")
 
+# --- refineMeshCollisions: confirmed collision kept ---
+overlapA = cmds.polyCube(name="refineOverlapA")[0]
+overlapB = cmds.polyCube(name="refineOverlapB")[0]
+candidateConfirmed = [{"category": "meshCollision", "severity": "warning",
+                       "summary": "{} and {} bounding boxes overlap".format(overlapA, overlapB),
+                       "axis": None, "meshes": (overlapA, overlapB), "remedy": None}]
+refined = diag.refineMeshCollisions(candidateConfirmed)
+assert len(refined) == 1 and refined[0]["summary"] == candidateConfirmed[0]["summary"], refined
+print("refineMeshCollisions keeps a confirmed polygon collision OK")
+
+# --- refineMeshCollisions: AABB-only overlap dropped ---
+separateA = cmds.polyCube(name="refineSeparateA")[0]
+separateB = cmds.polyCube(name="refineSeparateB")[0]
+cmds.setAttr(separateB + ".translate", 100, 100, 100, type="double3")
+candidateFalse = [{"category": "meshCollision", "severity": "warning",
+                   "summary": "irrelevant", "axis": None,
+                   "meshes": (separateA, separateB), "remedy": None}]
+assert diag.refineMeshCollisions(candidateFalse) == [], (
+    "an AABB candidate with no real polygon contact must be dropped")
+print("refineMeshCollisions drops a false-positive AABB-only pair OK")
+
+# --- refineMeshCollisions: non-mesh geometry falls back to the AABB finding ---
+nonMeshLoc = cmds.spaceLocator(name="refineNonMeshLoc")[0]
+candidateUnknown = [{"category": "meshCollision", "severity": "warning",
+                     "summary": "{} and {} bounding boxes overlap".format(overlapA, nonMeshLoc),
+                     "axis": None, "meshes": (overlapA, nonMeshLoc), "remedy": None}]
+refined = diag.refineMeshCollisions(candidateUnknown)
+assert len(refined) == 1 and "정밀 확인 불가" in refined[0]["summary"], refined
+print("refineMeshCollisions falls back to the AABB finding for non-mesh geometry OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()

@@ -449,6 +449,25 @@ def filterAdjacentMeshCollisions(findings, pairs):
     return [f for f in findings if frozenset(f["meshes"]) not in pairs]
 
 
+def refineMeshCollisions(candidateFindings):
+    """AABB 1차 필터를 통과한 충돌 후보를 maroCheckMeshCollision으로 정밀
+    재검사한다(설계 스펙 §6.4). 실제 폴리곤 교차가 확인된 쌍만 남기고,
+    폴리곤이 아니라 판정 불가("unknown")면 AABB 결과를 그대로 유지하되
+    메시지에 표시를 덧붙인다. AABB만 겹치고 실제로는 안 닿는("false") 쌍은
+    버린다."""
+    refined = []
+    for finding in candidateFindings:
+        meshA, meshB = finding["meshes"]
+        result = cmds.maroCheckMeshCollision(meshA, meshB)
+        if result == "true":
+            refined.append(finding)
+        elif result == "unknown":
+            degraded = dict(finding)
+            degraded["summary"] = finding["summary"] + " (정밀 확인 불가, 바운딩박스 겹침만 확인됨)"
+            refined.append(degraded)
+    return refined
+
+
 def suggestDisambiguatedJointName(jointName, taken=None):
     """중복된 jointName에 붙일 접미사 제안. `taken`(이미 쓰이는 이름들)이
     주어지면 거기에 없는 이름이 나올 때까지 `_2`, `_3`, ... 로 올린다 --
@@ -697,8 +716,9 @@ def _runMayaSideChecks():
         bbox = cmds.exactWorldBoundingBox(mesh)
         boxes[mesh] = tuple(bbox)
     # 부모-자식 축에 물린 메쉬끼리의 겹침은 뺀다(adjacentMeshPairs 도크스트링).
-    findings += filterAdjacentMeshCollisions(checkMeshCollisions(boxes),
-                                             adjacentMeshPairs(axisRows))
+    candidateCollisions = filterAdjacentMeshCollisions(checkMeshCollisions(boxes),
+                                                        adjacentMeshPairs(axisRows))
+    findings += refineMeshCollisions(candidateCollisions)
 
     lidarRows = _collectLidarRows()
     findings += checkLidarTargetMeshes(lidarRows)
