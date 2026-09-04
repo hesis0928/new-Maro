@@ -701,16 +701,19 @@ def _collectLidarScans(lidarRows):
     이름 해석 단계에서 실패하면(예: 이 함수가 lidarRows를 모은 시점과 실제
     조회 시점 사이에 그 LiDAR 노드가 삭제된 레이스 컨디션) maya.cmds는
     ValueError를 낸다 -- 실측으로 확인했다(둘 다 "이 항목 하나만 건너뛰고
-    계속"이어야 하는 같은 종류의 실패다)."""
+    계속"이어야 하는 같은 종류의 실패다). 다만 parseLidarScanQuery()의
+    ValueError는 Python 파싱 계약 위반(flat 배열이 예상 구조와 맞지 않음)을
+    나타내고, 이건 Maya 명령 실패가 아니라 C++/Python 경계 프로토콜 드리프트를
+    의미하므로 조용히 삼키지 않고 밖으로 전파해 눈에 띄게 실패해야 한다."""
     scans = {}
     for row in lidarRows:
         if not row["enabled"]:
             continue
         try:
-            scans[row["lidarFullPath"]] = parseLidarScanQuery(
-                cmds.maroQueryLidarScan(row["lidarFullPath"]))
+            flat = cmds.maroQueryLidarScan(row["lidarFullPath"])
         except (RuntimeError, ValueError):
             continue
+        scans[row["lidarFullPath"]] = parseLidarScanQuery(flat)
     return scans
 
 
