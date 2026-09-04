@@ -56,6 +56,55 @@ for i, expected in enumerate(expectedMatrix):
     assert abs(calib["worldMatrix"][i] - expected) < 1e-9, (i, calib["worldMatrix"][i], expected)
 print("buildCalibrationDict OK")
 
+# --- buildCalibrationDict: Film Fit fields (2026-09-05 follow-up) ---
+# NOTE: the task brief assumed `pixelAspectRatio` was a camera-SHAPE
+# attribute like `filmFit`/`overscan` -- empirically verified (mayapy,
+# 2026-09-05) that it is NOT: `cmds.attributeQuery("pixelAspectRatio",
+# node=camShape, exists=True)` is False. The actual Maya attribute is the
+# global `defaultResolution.pixelAspect` (which is what
+# `defaultResolution.deviceAspectRatio` is itself derived from), so that's
+# what's set/read here instead.
+camShape = cmds.listRelatives(cam, shapes=True, fullPath=True)[0]
+cmds.setAttr(camShape + ".filmFit", 1)  # Horizontal, per Maya's documented enum order
+cmds.setAttr("defaultResolution.pixelAspect", 1.5)
+cmds.setAttr(camShape + ".overscan", 1.2)
+calibFilmFit = sdr.buildCalibrationDict(cam, cmds.currentTime(query=True))
+assert calibFilmFit["filmFit"] in ("horizontal", 1), calibFilmFit["filmFit"]
+assert abs(calibFilmFit["pixelAspectRatio"] - 1.5) < 1e-9, calibFilmFit
+assert abs(calibFilmFit["overscan"] - 1.2) < 1e-9, calibFilmFit
+print("buildCalibrationDict Film Fit fields OK")
+
+# --- defaultResolution sync/restore helpers (2026-09-05, Film Fit real-render
+# fix; see .superpowers/sdd/filmfit-task-2-report.md "Important
+# side-finding") ---
+# Empirically confirmed (see filmfit-task-3-report.md) that
+# defaultResolution.deviceAspectRatio does NOT auto-recompute when
+# width/height are set -- Arnold/MtoA reads deviceAspectRatio (not the
+# width/height passed to cmds.arnoldRender()) to pick the Film-Fit-dependent
+# effective aperture, so renderSyntheticFrame() must set all three
+# explicitly and restore all three afterward.
+cmds.setAttr("defaultResolution.width", 960)
+cmds.setAttr("defaultResolution.height", 540)
+cmds.setAttr("defaultResolution.deviceAspectRatio", 960.0 / 540.0)
+
+snapshot = sdr._snapshotDefaultResolution()
+assert snapshot["width"] == 960, snapshot
+assert snapshot["height"] == 540, snapshot
+assert abs(snapshot["deviceAspectRatio"] - (960.0 / 540.0)) < 1e-5, snapshot
+
+sdr._applyDefaultResolution(320, 240, 320.0 / 240.0)
+assert cmds.getAttr("defaultResolution.width") == 320
+assert cmds.getAttr("defaultResolution.height") == 240
+assert abs(cmds.getAttr("defaultResolution.deviceAspectRatio") - (320.0 / 240.0)) < 1e-5, (
+    "deviceAspectRatio must be set explicitly -- it does not auto-recompute "
+    "from width/height (실측 확인됨, filmfit-task-2-report.md)")
+
+sdr._applyDefaultResolution(**snapshot)
+assert cmds.getAttr("defaultResolution.width") == 960
+assert cmds.getAttr("defaultResolution.height") == 540
+assert abs(cmds.getAttr("defaultResolution.deviceAspectRatio") - (960.0 / 540.0)) < 1e-5
+print("defaultResolution snapshot/apply OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()

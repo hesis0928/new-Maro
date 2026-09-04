@@ -1116,26 +1116,32 @@ Arnold가 라이선스된 인터랙티브 Maya 2026에서, `maro.mll`을 로드�
       오브젝트를 두고 렌더 → 역투영된 포인트클라우드에서 그 오브젝트가
       실제로 같은 쪽에 나타나는지 확인한다. 좌우/상하가 뒤집혀 나오면
       `unprojectDepthToPoints()`의 `xCam`/`yCam` 부호를 실측에 맞게 고친다.
-- [ ] **[정보성 · 알려진 제한 사항 확인] `computeCameraIntrinsics()` Film Fit
-      모드 미지원** — 카메라의 필름 백 종횡비와 렌더 해상도 종횡비가 일치하지
-      않는 경우(매우 흔한 상황) `computeCameraIntrinsics()`는 Maya의 Film Fit
-      모드를 반영하지 않아 기하학적 오차가 발생한다는 알려진 제한 사항을
-      인지하고 있는가. **오차 배율은 해상도에 따라 달라진다**(최종 리뷰
-      Fix 5, 2026-09-04) — 일반식은
-      `max(filmAspect/deviceAspect, deviceAspect/filmAspect)`이고, 320x240
-      테스트 해상도에서는 `~1.124`(~12%, 세로/Y가 흡수, 실측 확인)이지만, 이
-      기능의 실제 기본 해상도인 1920x1080에서는 종횡비 부등호 방향이
-      뒤집혀(`deviceAspect > filmAspect`, 320x240과 반대) `~1.186`(~19%)로
-      다르고, 오차를 흡수하는 축도 가로/X로 뒤집힐 가능성이 높다 — **단,
-      이 축 판정 자체는 320x240에서만 실측됐고 1920x1080에서 직접 렌더로
-      확인된 적은 없다.** 이 기능이 default 카메라/해상도로 쓰이는 한
-      ~19%(X 또는 Y 중 하나, 미확정) 오차가 존재한다는 뜻이므로, 필요 시
-      역투영 결과의 기하학적 정확도를 재검증해야 한다는 점을 염두에 두어야
-      한다. (자세한 배경은 `python/maroSyntheticDataPointCloud.py`
-      `computeCameraIntrinsics()` 함수 주석,
-      `.superpowers/sdd/arnold-task-4-report.md` 2026-09-04 Precision
-      caveat 섹션, `.superpowers/sdd/arnold-final-review-fix-report.md`
-      Fix 5 참고.)
+- [ ] **[정보성 · 과거 알려진 제한 사항, 2026-09-05에 수정 완료]
+      `computeCameraIntrinsics()` Film Fit 모드 지원** — 카메라의 필름 백
+      종횡비와 렌더 해상도 종횡비가 일치하지 않는 경우(매우 흔한 상황)
+      `computeCameraIntrinsics()`가 Maya의 Film Fit 모드를 반영하지 않아
+      기하학적 오차(해상도에 따라 ~12%~19%, 최종 리뷰 Fix 5, 2026-09-04)가
+      발생하던 것이 **알려진 제한 사항이었으나, 2026-09-05
+      `2026-09-05-maro-arnold-film-fit-correction.md` 계획(Task 1-3)으로
+      수정 완료됐다** — `filmFit`/`pixelAspectRatio`/`overscan`을 실제로
+      반영하고(Fill/Horizontal/Vertical: Task 1, Overscan: Task 2),
+      `buildCalibrationDict()`/패널의 `_onRenderNow()`까지 값이 흘러가도록
+      배선했다(Task 3). `MFnCamera.getViewParameters()` 독립 오라클
+      교차검증(40 조합) + 실제 Arnold 렌더 확인까지 마쳤다(자세한 근거는
+      `.superpowers/sdd/filmfit-task-1-report.md`,
+      `.superpowers/sdd/filmfit-task-2-report.md`,
+      `.superpowers/sdd/filmfit-task-3-report.md` 참고). 이 항목은
+      과거 제한 사항이 실제로 사라졌는지 인터랙티브 세션에서 재확인하는
+      회귀 확인용으로 남겨 둔다 — 바로 아래 새 go/no-go 항목이 그 구체적인
+      확인 절차다.
+- [ ] **[go/no-go] Film Fit 모드 4종 + 오버스캔 실측 확정** — 합성 데이터
+      카메라의 `filmFit`을 Fill/Horizontal/Vertical/Overscan 각각으로
+      바꿔가며(오버스캔은 `overscan` 값도 1.0이 아닌 값으로) 알려진 위치의
+      평면/오브젝트를 렌더 → 역투영 결과가 실제 거리/위치와 일치하는지
+      확인한다. 2026-09-05에 `MFnCamera` 교차 검증과 최소 1회 실제 렌더로
+      이미 확인됐지만(계획: `2026-09-05-maro-arnold-film-fit-correction.md`),
+      이 항목은 그 결과를 인터랙티브 세션에서 다시 한번 사람이 눈으로
+      확인하는 자리다.
 - [ ] **`maroPointCloud` 미리보기** — 렌더 완료 후 씬에 `maroPointCloud`
       노드가 생기고(또는 갱신되고), 뷰포트에 포인트가 실제로 그려지는가
       (Phase 5 LiDAR 시각화의 드로우 오버라이드를 그대로 재사용).

@@ -33,6 +33,17 @@ def buildCalibrationDict(cameraTransform, frame):
     focalLength = cmds.getAttr(cameraShape + ".focalLength")
     hFilmAperture = cmds.getAttr(cameraShape + ".horizontalFilmAperture")
     vFilmAperture = cmds.getAttr(cameraShape + ".verticalFilmAperture")
+    filmFit = cmds.getAttr(cameraShape + ".filmFit")
+    overscan = cmds.getAttr(cameraShape + ".overscan")
+    # pixelAspectRatio is NOT a camera-shape attribute (verified empirically,
+    # 2026-09-05, Task 3 -- `cmds.attributeQuery("pixelAspectRatio",
+    # node=cameraShape, exists=True)` returns False; the task brief's
+    # assumption otherwise didn't match Maya's actual data model). It's a
+    # global render-settings value on the `defaultResolution` node
+    # (`.pixelAspect`), which is what `defaultResolution.deviceAspectRatio`
+    # is itself derived from ((width/height) * pixelAspect) and matches this
+    # module's `deviceAspect` formula in `computeCameraIntrinsics()`.
+    pixelAspectRatio = cmds.getAttr("defaultResolution.pixelAspect")
 
     sel = om2.MSelectionList()
     sel.add(cameraTransform)
@@ -51,6 +62,9 @@ def buildCalibrationDict(cameraTransform, frame):
         "focalLength": focalLength,
         "horizontalFilmAperture": hFilmAperture,
         "verticalFilmAperture": vFilmAperture,
+        "filmFit": filmFit,
+        "pixelAspectRatio": pixelAspectRatio,
+        "overscan": overscan,
         "worldMatrix": matrixFlat,
     }
 
@@ -96,6 +110,35 @@ def _wireAovToDedicatedDriver(aovInterface, aovName, driverName, filePath, fileF
     prefixNoExt = os.path.splitext(filePath)[0]
     cmds.setAttr(driver + ".prefix", prefixNoExt, type="string")
     cmds.connectAttr(driver + ".message", node + ".outputs[0].driver", force=True)
+
+
+def _snapshotDefaultResolution():
+    """`defaultResolution` 노드의 width/height/deviceAspectRatio 현재 값을
+    딕셔너리로 돌려준다(나중에 `_applyDefaultResolution(**snapshot)`으로
+    복원하기 위한 스냅샷). `defaultResolution`은 Arnold와 무관한 Maya 코어
+    노드라 Arnold 없이도(mayapy 배치로도) 안전하게 테스트할 수 있다."""
+    return {
+        "width": cmds.getAttr("defaultResolution.width"),
+        "height": cmds.getAttr("defaultResolution.height"),
+        "deviceAspectRatio": cmds.getAttr("defaultResolution.deviceAspectRatio"),
+    }
+
+
+def _applyDefaultResolution(width, height, deviceAspectRatio):
+    """`defaultResolution` 노드의 width/height/deviceAspectRatio를 명시적으로
+    설정한다(세 값 모두 -- `.deviceAspectRatio`는 width/height를 바꿔도
+    자동으로 재계산되지 않는다는 것을 실측으로 확인했다, 2026-09-05).
+
+    Arnold/MtoA는 `cmds.arnoldRender()`에 전달된 width/height 인자가 아니라
+    이 노드의 `.deviceAspectRatio`를 읽어 Film-Fit에 의존하는 유효 조리개를
+    결정한다(`.superpowers/sdd/filmfit-task-2-report.md`의 "Important
+    side-finding" 참고, 실제 렌더로 확인됨). `renderSyntheticFrame()`이
+    렌더 대상 해상도와 이 노드를 맞추지 않으면, `computeCameraIntrinsics()`가
+    계산한(Task 1+2로 이제 올바른) 값과 Arnold가 실제로 렌더한 이미지가
+    조용히 어긋난다."""
+    cmds.setAttr("defaultResolution.width", width)
+    cmds.setAttr("defaultResolution.height", height)
+    cmds.setAttr("defaultResolution.deviceAspectRatio", deviceAspectRatio)
 
 
 def renderSyntheticFrame(cameraTransform, outputDir):
@@ -147,7 +190,27 @@ def renderSyntheticFrame(cameraTransform, outputDir):
     previousAiTranslator = cmds.getAttr("defaultArnoldDriver.aiTranslator")
     previousMergeAOVs = cmds.getAttr("defaultArnoldDriver.mergeAOVs")
     previousPrefix = cmds.getAttr("defaultArnoldDriver.prefix")
+    # defaultResolution is likewise shared, session-wide Maya state (not
+    # Arnold-specific, but still not scoped to this render) -- Arnold/MtoA
+    # reads defaultResolution.deviceAspectRatio (not the width/height passed
+    # to cmds.arnoldRender() below) to pick the Film-Fit-dependent effective
+    # aperture, so it must be synced to this render's actual target
+    # resolution beforehand and restored afterward for the same reason the
+    # defaultArnoldDriver attributes are (see _applyDefaultResolution()'s
+    # docstring for the real-render evidence).
+    previousResolution = _snapshotDefaultResolution()
     try:
+        # deviceAspectRatio must fold in the scene's existing pixelAspect
+        # (defaultResolution.pixelAspect, left untouched here -- it's the
+        # same value buildCalibrationDict() reads as "pixelAspectRatio"
+        # below), not just raw width/height -- otherwise a non-1.0
+        # pixelAspect would make the aperture Arnold actually renders with
+        # disagree with the deviceAspect computeCameraIntrinsics() computes
+        # from the calibration JSON.
+        pixelAspectRatio = cmds.getAttr("defaultResolution.pixelAspect")
+        _applyDefaultResolution(
+            width, height, (float(width) / float(height)) * pixelAspectRatio)
+
         cmds.setAttr("defaultArnoldDriver.aiTranslator", "png", type="string")
         cmds.setAttr("defaultArnoldDriver.mergeAOVs", 0)
         cmds.setAttr("defaultArnoldDriver.prefix",
@@ -155,6 +218,7 @@ def renderSyntheticFrame(cameraTransform, outputDir):
 
         cmds.arnoldRender(width=width, height=height, camera=cameraTransform)
     finally:
+        _applyDefaultResolution(**previousResolution)
         cmds.setAttr("defaultArnoldDriver.aiTranslator", previousAiTranslator, type="string")
         cmds.setAttr("defaultArnoldDriver.mergeAOVs", previousMergeAOVs)
         cmds.setAttr("defaultArnoldDriver.prefix",

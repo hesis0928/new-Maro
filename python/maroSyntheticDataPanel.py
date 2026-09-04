@@ -155,7 +155,10 @@ class MaroSyntheticDataPanel(QtWidgets.QWidget):
                 horizontalFilmApertureIn=calibration["horizontalFilmAperture"],
                 verticalFilmApertureIn=calibration["verticalFilmAperture"],
                 widthPx=calibration["resolutionWidth"],
-                heightPx=calibration["resolutionHeight"])
+                heightPx=calibration["resolutionHeight"],
+                filmFit=calibration["filmFit"],
+                pixelAspectRatio=calibration["pixelAspectRatio"],
+                overscan=calibration["overscan"])
 
             pfmPath = os.path.splitext(paths["depth"])[0] + ".pfm"
             sdpc.convertExrToPfm(paths["depth"], pfmPath)
