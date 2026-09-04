@@ -172,6 +172,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroSingleObjectNodeEditor
     maroSyntheticDataCamera
     maroSyntheticDataPointCloud
+    maroSyntheticDataRender
     maroTechDiag
     maroUrdfExport
 )
