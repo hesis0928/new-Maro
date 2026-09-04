@@ -32,8 +32,6 @@ assert intrinsics["cx"] == 960.0 and intrinsics["cy"] == 540.0
 print("computeCameraIntrinsics OK")
 
 # --- computeCameraIntrinsics: Film Fit modes (2026-09-05 follow-up) ---
-import math as _math  # noqa: E402
-
 # Fill, filmAspect < deviceAspect (the 1920x1080 default case, pixelAspectRatio=1):
 # horizontal is the "narrower" side and stays raw; vertical is recomputed.
 hAp, vAp, w, h = 1.417323, 0.945512, 1920, 1080
@@ -158,6 +156,42 @@ try:
     raise AssertionError("expected ValueError for an unrecognized filmFit value")
 except ValueError:
     print("computeCameraIntrinsics rejects an unrecognized filmFit value OK")
+
+# A float filmFit (even one with no fractional part) must be rejected, not
+# silently truncated via int() -- final-review Fix M-1/carried Task-1 finding.
+# The plan's own Global Constraints cite "don't accept filmFit as a float" as
+# exactly the kind of unwanted speculative generality this project rejects.
+for _floatFilmFit in (1.9, 1.0):
+    try:
+        sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit=_floatFilmFit)
+        raise AssertionError(
+            "expected ValueError for a float filmFit value ({!r}), got a "
+            "silent int() truncation instead".format(_floatFilmFit))
+    except ValueError:
+        pass
+print("computeCameraIntrinsics rejects a float filmFit value OK")
+
+# A negative int filmFit must be rejected, not silently wrapped by Python's
+# negative-index semantics -- filmFit=-1 would otherwise resolve to
+# _FILM_FIT_MODES[-1] == "overscan", Fill's exact geometric opposite, with no
+# error at all (final-review Fix M-1).
+try:
+    sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit=-1)
+    raise AssertionError(
+        "expected ValueError for filmFit=-1, got silent negative-index "
+        "wraparound to _FILM_FIT_MODES[-1] instead")
+except ValueError:
+    print("computeCameraIntrinsics rejects a negative int filmFit value OK")
+
+# An out-of-range positive int filmFit must be rejected (not an IndexError).
+for _outOfRangeFilmFit in (4, 99):
+    try:
+        sdpc.computeCameraIntrinsics(35.0, hAp, vAp, w, h, filmFit=_outOfRangeFilmFit)
+        raise AssertionError(
+            "expected ValueError for filmFit={!r}".format(_outOfRangeFilmFit))
+    except ValueError:
+        pass
+print("computeCameraIntrinsics rejects an out-of-range int filmFit value OK")
 
 # Integer enum form (Maya's raw attribute value) must work the same as the
 # string form -- 0=Fill, 1=Horizontal, 2=Vertical, 3=Overscan.

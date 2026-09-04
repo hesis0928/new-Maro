@@ -64,14 +64,22 @@ _FILM_FIT_MODES = ("fill", "horizontal", "vertical", "overscan")
 
 def _normalizeFilmFit(filmFit):
     """filmFit을 정규화된 소문자 문자열로 바꾼다. 문자열(대소문자 무관)이나
-    Maya의 원시 정수 enum 값(0-3) 둘 다 받는다."""
+    Maya의 원시 정수 enum 값(0-3) 둘 다 받는다.
+
+    정수 분기는 진짜 `int`만 받는다 -- `float`(예: `1.9`)를 예전처럼
+    `int(filmFit)`로 조용히 잘라 받으면(계획의 Global Constraints가 명시적
+    으로 금지하는 종류의 불필요한 일반화) 잘못된 입력이 들키지 않고 엉뚱한
+    모드로 해석된다. 범위를 벗어난 정수(음수 포함, 예: `-1`)도 명시적으로
+    거부한다 -- 그냥 `_FILM_FIT_MODES[int(filmFit)]`에 맡기면 Python의 음수
+    인덱스 wraparound 때문에 `filmFit=-1`이 `_FILM_FIT_MODES[-1]`
+    (`"overscan"`, Fill의 정반대 기하)로 에러 없이 조용히 풀린다."""
     if isinstance(filmFit, str):
         normalized = filmFit.strip().lower()
+    elif isinstance(filmFit, int):
+        normalized = (_FILM_FIT_MODES[filmFit]
+                      if 0 <= filmFit < len(_FILM_FIT_MODES) else None)
     else:
-        try:
-            normalized = _FILM_FIT_MODES[int(filmFit)]
-        except (ValueError, IndexError, TypeError):
-            normalized = None
+        normalized = None
     if normalized not in _FILM_FIT_MODES:
         raise ValueError(
             "알 수 없는 filmFit 값: {!r} (지원: {})".format(filmFit, _FILM_FIT_MODES))
