@@ -171,6 +171,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroSkeletonUpload
     maroSingleObjectNodeEditor
     maroSyntheticDataCamera
+    maroSyntheticDataPanel
     maroSyntheticDataPointCloud
     maroSyntheticDataRender
     maroTechDiag

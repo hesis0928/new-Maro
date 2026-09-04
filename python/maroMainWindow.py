@@ -385,6 +385,13 @@ def teardown():
         import traceback
         traceback.print_exc()
 
+    try:
+        import maroSyntheticDataPanel
+        maroSyntheticDataPanel.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
+        import traceback
+        traceback.print_exc()
+
     # Skeleton Upload(Phase 6) 다이얼로그도 SONE/LiDAR 팝업과 같은 이유로
     # MaroUI와 무관한 독립 최상위 창이다. 열린 채로 언로드되면 등록된
     # kAfterImport 콜백이 이미 사라진 파이썬 모듈을 계속 가리키게 되므로,

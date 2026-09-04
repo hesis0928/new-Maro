@@ -56,3 +56,7 @@ def build():
     cmds.menuItem(label="환경설정...",
                   command="import maroSettingsPanel\nmaroSettingsPanel.show()",
                   parent=MENU_NAME)
+    cmds.menuItem(divider=True, parent=MENU_NAME)
+    cmds.menuItem(label="합성 데이터 렌더...",
+                  command="import maroSyntheticDataPanel\nmaroSyntheticDataPanel.show()",
+                  parent=MENU_NAME)
