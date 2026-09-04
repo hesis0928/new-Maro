@@ -133,7 +133,15 @@ Embree 4를 재사용하고, Tech Diag의 같은 사이드 패널 파이프라�
 - 스캔 상태 코드(`kOk`/`kNoTargetMesh`/`kMeshExtractFailed`/`kInvalidConfig`/
   `kRayCountExceeded`에 대응하는 정수 또는 문자열).
 - 이미 Maya 단위로 환산된 `rangeMin`/`rangeMax`(§3.4의 순서 변경 덕분에
-  `kNoTargetMesh`여도 계산 가능).
+  `kNoTargetMesh`여도 계산 가능). **여기서 "Maya 단위"는 항상 Maya의
+  내부 단위(센티미터, `MDistance::internalUnit()`)를 말하며, 씬의 현재 UI
+  선형 단위(사용자가 `cmds.currentUnit(linear=...)`로 바꿀 수 있는 값,
+  기본은 cm이 아닐 수 있다)와는 다르다.** `effectiveWorldMatrix`도 마찬가지로
+  항상 내부 단위 기준이다. 이 데이터를 `cmds.exactWorldBoundingBox()`처럼
+  **UI 단위로 값을 돌려주는 API**의 결과와 비교하는 코드는 반드시 먼저
+  단위를 맞춰야 한다 -- 안 그러면 씬이 cm이 아닌 단위(예: 미터)로
+  작성됐을 때 100배 어긋난다(최종 리뷰 Critical-1, §5 구현에서 실제로
+  이 실수가 있었다).
 - 수직/수평 FOV 경계 4개, 라디안 그대로(도 단위 변환 없음).
 - LiDAR의 **유효 월드 행렬**(마운트 트랜스폼 + `offsetTranslate`/`offsetRotate`
   까지 반영된, `scanLidarNode`가 실제 레이 원점/방향 계산에 쓰는 바로 그 행렬)
@@ -154,7 +162,12 @@ Python 쪽에서 다시 도출할 필요가 없다.
 
 `enabled`인 각 `maroLidar`에 대해 `maroQueryLidarScan`을 한 번 호출하고, 연결된
 각 타겟 메쉬의 월드 AABB(`cmds.exactWorldBoundingBox`, 기존 메쉬 충돌 검사와
-같은 API)를 가져온다.
+같은 API)를 가져온다. **주의**: `maroQueryLidarScan`이 돌려주는 `rangeMax`/
+`effectiveWorldMatrix`는 §4.2에서 밝힌 대로 항상 Maya 내부 단위(센티미터)인
+반면 `cmds.exactWorldBoundingBox()`는 씬의 현재 UI 선형 단위로 값을 준다 --
+이 둘을 같은 좌표계에서 비교하려면(검사 2/3이 하는 일이 정확히 이것이다)
+AABB 쪽을 내부 단위(cm)로 먼저 변환해야 한다. 이 변환을 빠뜨리면 cm이 아닌
+단위로 작성된 씬(미터 등)에서 검사 2/3이 100배 어긋난 값을 비교하게 된다.
 
 | # | 검사 | 조건 | 비고 |
 |---|---|---|---|
@@ -263,8 +276,17 @@ C-1에서 실측으로 발견된 함정까지 반영된 코드)를 공개 헤더
     `kRayCountExceeded`(레이 수 상한 초과로 실제 캐스팅 자체를 건너뜀):
     두 경우 다 행렬/range/FOV는 여전히 유효하게 계산되므로 검사 2/3은
     정상 수행하고, 검사 1/4만 스킵(히트점 자체가 없음).
-  - `kNoTargetMesh`: 연결된 타겟 메쉬가 없으므로 검사 2/3/4가 순회할 행이
-    애초에 없다 — "스킵"이 아니라 자연스럽게 findings가 비는 것.
+  - `kNoTargetMesh`: 검사 4는 `status == "kOk"`만 보므로 자연스럽게
+    findings가 비고, 검사 1(제로-히트)은 `targetMeshCount == 0` 게이트로
+    걸러진다. **검사 2/3은 다르다** — 실제 구현(`_LIDAR_GEOMETRY_VALID_STATUSES`
+    튜플, `("kOk", "kMeshExtractFailed", "kRayCountExceeded")`)이
+    `kNoTargetMesh`를 이 튜플에서 의도적으로 제외해 두 검사 모두 명시적으로
+    스킵한다 — 연결된 메쉬가 없으니 `targetMeshBoxesByLidar`를 순회해도
+    항목이 없어 어차피 결과는 같겠지만(빈 순회), 실제 코드는 "순회할 게
+    없어서 자연히 비는 것"이 아니라 상태값 자체로 명시적으로 걸러낸다.
+    (이 문단은 원래 "스킵이 아니라 자연스럽게 findings가 비는 것"이라고
+    적었는데, 그건 검사 1/4에만 맞는 설명이었다 — 최종 리뷰가 지적한
+    스펙-코드 드리프트를 여기서 바로잡는다.)
   이 스킵/공백은 findings 리스트가 비는 것으로만 나타나며, `_CheckSidePanel`의
   "검사 실패" 경로(예외 발생 시 "검사 실패 -- 스크립트 에디터 참조")와는
   다르다 — 이 둘을 같은 화면으로 절대 섞지 않는다는 기존 원칙 그대로.
@@ -287,6 +309,14 @@ C-1에서 실측으로 발견된 함정까지 반영된 코드)를 공개 헤더
 
 - FOV 밖 검사는 메쉬 AABB **중심** 하나만 본다 — 큰 메쉬가 일부만 FOV에 걸쳐
   있으면 "안 걸림"으로 오판할 수 있다.
+- FOV 밖 검사(`checkLidarOutOfFov`)는 `atan2()`가 돌려주는 `(-π, π]` 범위의
+  각도를 `horizontalMinAngle`/`horizontalMaxAngle` 경계와 각도 랩(wrap)
+  정규화 없이 그대로 비교한다. 경계가 `-π..π` 안에 들어오는 보통의 설정
+  (이 프로젝트가 배포하는 기본값 포함)에서는 문제가 없지만, 사용자가
+  전체 360도 또는 `-π..π` 경계를 넘나드는(wrap-spanning) FOV를 설정하면
+  (`RayPattern.cpp`의 레이 생성 자체는 이런 설정을 지원한다) 실제로는
+  FOV 안에 있는 타겟이 각도 랩 때문에 밖으로 오판돼 스퓨리어스(허위)
+  경고가 날 수 있다. 지금 범위 밖 — 필요해지면 별도로 다룬다.
 - 정밀 충돌은 폴리곤 메쉬 쌍에만 적용된다(NURBS 등은 AABB 폴백 유지).
 - 여전히 씬의 한 "순간"만 검사한다 — 애니메이션 전체 구간에 대한 검증은
   범위 밖(기존 Tech Diag와 동일한 기존 한계).

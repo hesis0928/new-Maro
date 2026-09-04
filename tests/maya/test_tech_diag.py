@@ -437,6 +437,14 @@ findings = diag.checkLidarOutOfFov(lidarRowsDisabled, scanNarrowFov, boxesOutOfF
 assert findings == [], "disabled lidar must not produce an out-of-FOV finding: {}".format(findings)
 print("checkLidarOutOfFov with enabled=False produces no finding OK")
 
+# --- checkLidarHitBoundsConsistency: enabled=False gate test (최종 리뷰
+# Minor-1 -- 이 검사만 다른 세 검사와 달리 enabled 게이트가 없었다) ---
+findings = diag.checkLidarHitBoundsConsistency(lidarRowsDisabled, scanBadHit)
+assert findings == [], (
+    "disabled lidar must not produce a hit-out-of-bounds finding even if the "
+    "(stale/hypothetical) scan data would otherwise trigger one: {}".format(findings))
+print("checkLidarHitBoundsConsistency with enabled=False produces no finding OK")
+
 # --- suggestDisambiguatedJointName (pure) ---
 assert diag.suggestDisambiguatedJointName("shoulder") == "shoulder_2"
 # 최종 리뷰 Important-4: 이미 쓰이는 이름을 알려주면 충돌을 옮기지 않고 피한다.
@@ -634,6 +642,159 @@ categories = {f["category"] for f in allFindings}
 assert "lidarZeroHits" in categories, categories
 assert "lidarOutOfRange" in categories, categories
 print("_runMayaSideChecks surfaces lidarZeroHits + lidarOutOfRange OK")
+
+# --- 최종 리뷰 Critical-1(이 리뷰 웨이브): LiDAR 타겟 메쉬 AABB의 UI 단위 vs
+# 내부(cm) 단위 계약 -- 미터 씬 ---
+#
+# _collectLidarTargetMeshBoxes()는 cmds.exactWorldBoundingBox()를 그대로
+# 쓰는데, 그 값은 "현재 UI 선형 단위"로 나온다. 반면 checkLidarOutOfRange/
+# checkLidarOutOfFov가 비교하는 scan["rangeMaxMaya"]/scan["effectiveWorldMatrix"]는
+# maroQueryLidarScan()이 항상 Maya 내부 단위(센티미터, MDistance::internalUnit())
+# 로 돌려준다. 씬이 미터로 작성되면 둘이 100배 어긋난다.
+#
+# 여기서는 실제로 rangeMax(5m) 밖(10m 거리)에 있는 타겟을 미터 씬에 두고,
+# 그게 정말로 lidarOutOfRange로 잡히는지 확인한다. 수정 전 코드는 UI 단위
+# (미터, 숫자로 10)를 내부 단위(센티미터, rangeMaxMaya=500) 그대로 비교해
+# 10 < 500이라 통과시켜(false negative) 이 검사를 완전히 무력화했다.
+cmds.file(new=True, force=True)
+prevLinearUnit = cmds.currentUnit(query=True, linear=True)
+cmds.currentUnit(linear="m")
+
+meterFarMesh = cmds.polyPlane(name="techDiagMeterFarMesh", width=1, height=1,
+                               subdivisionsX=1, subdivisionsY=1)[0]
+cmds.setAttr(meterFarMesh + ".translateX", 10.0)  # 10 meters away
+meterLidar = cmds.createNode("maroLidar", name="techDiagMeterLidar")
+meterLidar = cmds.ls(meterLidar, long=True)[0]
+cmds.setAttr(meterLidar + ".verticalSamples", 1)
+cmds.setAttr(meterLidar + ".horizontalSamples", 1)
+cmds.setAttr(meterLidar + ".rangeMax", 5.0)  # meters -- real target is 2x further than this
+cmds.connectAttr(meterFarMesh + ".message", meterLidar + ".targetMeshes[0]")
+
+meterFindings = diag._runMayaSideChecks()
+meterCategories = {f["category"] for f in meterFindings}
+assert "lidarOutOfRange" in meterCategories, (
+    "a target mesh 10m away with rangeMax=5m in a meters-authored scene must be "
+    "flagged lidarOutOfRange -- got {} (this is the UI-unit vs internal-cm bug: "
+    "exactWorldBoundingBox() returns meters, rangeMaxMaya is always internal cm, "
+    "and comparing them unconverted makes a real 10m-away target look like it's "
+    "well within a 500 'unit' range)".format(meterCategories))
+print("checkLidarOutOfRange meters-scene unit contract OK")
+
+# 대조군: 같은 미터 씬에서 실제로 range 안에 있는 타겟은 여전히 안 걸려야
+# 한다 -- 단위 변환이 방향만 맞고 계수가 틀리면(예: 1/100 대신 100을 두
+# 번 곱하는 등) 이 대조군이 잡아낸다.
+meterNearMesh = cmds.polyPlane(name="techDiagMeterNearMesh", width=1, height=1,
+                                subdivisionsX=1, subdivisionsY=1)[0]
+cmds.setAttr(meterNearMesh + ".translateX", 2.0)  # 2 meters away, well inside rangeMax=5m
+cmds.disconnectAttr(meterFarMesh + ".message", meterLidar + ".targetMeshes[0]")
+cmds.connectAttr(meterNearMesh + ".message", meterLidar + ".targetMeshes[0]")
+meterNearFindings = diag._runMayaSideChecks()
+meterNearCategories = {f["category"] for f in meterNearFindings}
+assert "lidarOutOfRange" not in meterNearCategories, (
+    "a target mesh 2m away with rangeMax=5m in a meters-authored scene must NOT be "
+    "flagged lidarOutOfRange -- got {}".format(meterNearCategories))
+print("checkLidarOutOfRange meters-scene in-range control OK")
+
+cmds.currentUnit(linear=prevLinearUnit)
+assert cmds.currentUnit(query=True, linear=True) == prevLinearUnit
+print("linear unit restored OK")
+
+# --- 최종 리뷰 Important-3a: _collectLidarTargetMeshBoxes()의 메쉬 단위
+# 부분 실패 격리 (한 LiDAR 안에서) ---
+#
+# targetMeshes[] 중 하나가 exactWorldBoundingBox()에서 실패해도 그 메쉬
+# 하나만 빠지고 같은 LiDAR의 나머지 유효한 메쉬는 그대로 박스가 수집돼야
+# 한다. 실측 결과 cmds.exactWorldBoundingBox()는 놀랍게도 폴리곤이 아닌
+# 살아있는 노드(예: multiplyDivide)에는 예외를 던지지 않고 그냥 퇴화된
+# 박스([1e20,...,-1e20,...])를 돌려준다 -- 실제로 예외가 나는 경우는
+# 이름 해석 실패(대상이 이미 삭제됨 등)뿐이고, listConnections()가 돌려준
+# 이름은 정의상 그 시점엔 존재했던 노드다. 그래서 이 실패 모드를 자연스러운
+# Maya 조작만으로는 결정론적으로 재현할 수 없다 -- cmds.exactWorldBoundingBox
+# 를 감싸서 특정 메쉬 이름 하나만 실패를 시뮬레이션한다(아래 Important-3b와
+# 같은 기법).
+cmds.file(new=True, force=True)
+partialLidar = cmds.createNode("maroLidar", name="techDiagPartialLidar")
+partialLidar = cmds.ls(partialLidar, long=True)[0]
+cmds.setAttr(partialLidar + ".enabled", True)
+goodMesh = cmds.polyCube(name="techDiagPartialGoodMesh")[0]
+badMesh = cmds.polyCube(name="techDiagPartialBadMesh")[0]
+cmds.connectAttr(goodMesh + ".message", partialLidar + ".targetMeshes[0]")
+cmds.connectAttr(badMesh + ".message", partialLidar + ".targetMeshes[1]")
+
+_origExactWorldBoundingBox = cmds.exactWorldBoundingBox
+
+def _fakeExactWorldBoundingBox(node, *args, **kwargs):
+    if node == badMesh:
+        raise ValueError("simulated exactWorldBoundingBox failure for {}".format(node))
+    return _origExactWorldBoundingBox(node, *args, **kwargs)
+
+cmds.exactWorldBoundingBox = _fakeExactWorldBoundingBox
+try:
+    partialLidarRows = diag._collectLidarRows()
+    partialBoxes = diag._collectLidarTargetMeshBoxes(partialLidarRows)
+finally:
+    cmds.exactWorldBoundingBox = _origExactWorldBoundingBox
+
+# _collectLidarTargetMeshBoxes() keys its per-mesh dict with whatever
+# cmds.listConnections() returned -- in this fresh scene that's the short,
+# still-unique name, matching `goodMesh`/`badMesh` as returned by polyCube().
+lidarBoxes = partialBoxes[partialLidar]
+assert len(lidarBoxes) == 1, (
+    "the failing target-mesh entry must be dropped, leaving only the good "
+    "mesh's box: {}".format(lidarBoxes))
+assert goodMesh in lidarBoxes, lidarBoxes
+print("_collectLidarTargetMeshBoxes drops one bad mesh, keeps the rest OK")
+
+# --- 최종 리뷰 Important-3b: _collectLidarScans()의 개별 LiDAR 조회 실패
+# 격리 (LiDAR 간) ---
+#
+# maroQueryLidarScan() 호출 하나가 실패해도(RuntimeError -- 실측 확인:
+# 노드 타입이 맞지 않는 인자를 주면 실제로 이 예외가 난다. ValueError는
+# 이름 해석 실패(예: 조회 시점 직전에 그 LiDAR가 삭제되는 레이스
+# 컨디션)에서 실측으로 확인했다 -- _collectLidarScans()는 두 종류를 다
+# 잡는다) 그 LiDAR만 결과 dict에서 빠지고, 씬의 다른 정상 LiDAR는 계속
+# 조회되어 자기 findings를 내야 한다. 이 두 실패 모두 "정상 maroLidar
+# 행에 대해 파이프라인이 한창 도는 도중" 결정론적으로 재현하기 어려워서
+# (레이스 컨디션이거나, 애초에 lidarRows에 정상 maroLidar만 들어온다),
+# cmds.maroQueryLidarScan을 감싸 특정 LiDAR 하나만 실패를 시뮬레이션한다
+# -- 그 외에는 실제 커맨드를 그대로 호출한다.
+cmds.file(new=True, force=True)
+
+healthyLidar = cmds.createNode("maroLidar", name="techDiagHealthyLidar")
+healthyLidar = cmds.ls(healthyLidar, long=True)[0]
+cmds.setAttr(healthyLidar + ".enabled", True)
+cmds.setAttr(healthyLidar + ".verticalSamples", 1)
+cmds.setAttr(healthyLidar + ".horizontalSamples", 1)
+cmds.setAttr(healthyLidar + ".rangeMax", 5.0)
+healthyFarMesh = cmds.polyPlane(name="techDiagHealthyFarMesh", width=1, height=1,
+                                 subdivisionsX=1, subdivisionsY=1)[0]
+cmds.setAttr(healthyFarMesh + ".translateX", 10000.0)
+cmds.connectAttr(healthyFarMesh + ".message", healthyLidar + ".targetMeshes[0]")
+
+brokenLidar = cmds.createNode("maroLidar", name="techDiagBrokenLidar")
+brokenLidar = cmds.ls(brokenLidar, long=True)[0]
+cmds.setAttr(brokenLidar + ".enabled", True)
+brokenMesh = cmds.polyCube(name="techDiagBrokenMesh")[0]
+cmds.connectAttr(brokenMesh + ".message", brokenLidar + ".targetMeshes[0]")
+
+_origMaroQueryLidarScan = cmds.maroQueryLidarScan
+
+def _fakeMaroQueryLidarScan(lidarPath, *args, **kwargs):
+    if lidarPath == brokenLidar:
+        raise RuntimeError("simulated maroQueryLidarScan failure for {}".format(lidarPath))
+    return _origMaroQueryLidarScan(lidarPath, *args, **kwargs)
+
+cmds.maroQueryLidarScan = _fakeMaroQueryLidarScan
+try:
+    isolationFindings = diag._runMayaSideChecks()
+finally:
+    cmds.maroQueryLidarScan = _origMaroQueryLidarScan
+
+isolationCategories = {f["category"] for f in isolationFindings}
+assert "lidarOutOfRange" in isolationCategories, (
+    "the healthy lidar's own finding must still surface even though the other "
+    "lidar's maroQueryLidarScan call raised: {}".format(isolationCategories))
+print("_collectLidarScans isolates one failing lidar, keeps the healthy one's findings OK")
 
 # --- refineMeshCollisions: confirmed collision kept ---
 overlapA = cmds.polyCube(name="refineOverlapA")[0]

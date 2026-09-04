@@ -315,11 +315,13 @@ def checkLidarOutOfRange(lidarRows, scanByLidar, targetMeshBoxesByLidar):
     return findings
 
 
-def _localAngles(worldPoint, effectiveWorldMatrix):
+def _localAngles(worldPoint, inverseWorldMatrix):
     """worldPoint를 LiDAR의 로컬(센서) 프레임으로 옮긴 뒤 RayPattern.cpp와
     같은 각도 규약(vertical=asin(y/|.|), horizontal=atan2(x,z))으로 각도를
-    구한다."""
-    local = om2.MPoint(worldPoint[0], worldPoint[1], worldPoint[2]) * effectiveWorldMatrix.inverse()
+    구한다. effectiveWorldMatrix 자체가 아니라 그 역행렬을 받는다 -- 이
+    행렬은 LiDAR 하나당 한 번만 구하면 되는데(호출부가 타겟 메쉬 개수만큼
+    반복 호출한다), 매번 새로 invert()하는 건 낭비다(최종 리뷰 Minor)."""
+    local = om2.MPoint(worldPoint[0], worldPoint[1], worldPoint[2]) * inverseWorldMatrix
     length = math.sqrt(local.x * local.x + local.y * local.y + local.z * local.z)
     if length < 1e-9:
         return 0.0, 0.0
@@ -338,9 +340,12 @@ def checkLidarOutOfFov(lidarRows, scanByLidar, targetMeshBoxesByLidar):
         scan = scanByLidar.get(row["lidarFullPath"])
         if scan is None or scan["status"] not in _LIDAR_GEOMETRY_VALID_STATUSES:
             continue
+        # LiDAR당 한 번만 invert한다 -- 타겟 메쉬 개수만큼 반복해서 다시
+        # invert하던 것을 호이스트했다(최종 리뷰 Minor, _localAngles 참고).
+        inverseWorldMatrix = scan["effectiveWorldMatrix"].inverse()
         for mesh, box in targetMeshBoxesByLidar.get(row["lidarFullPath"], {}).items():
             center = ((box[0] + box[3]) / 2.0, (box[1] + box[4]) / 2.0, (box[2] + box[5]) / 2.0)
-            vertical, horizontal = _localAngles(center, scan["effectiveWorldMatrix"])
+            vertical, horizontal = _localAngles(center, inverseWorldMatrix)
             outOfVertical = not (scan["verticalMinAngle"] <= vertical <= scan["verticalMaxAngle"])
             outOfHorizontal = not (
                 scan["horizontalMinAngle"] <= horizontal <= scan["horizontalMaxAngle"])
@@ -362,6 +367,8 @@ def checkLidarHitBoundsConsistency(lidarRows, scanByLidar):
     castRay의 tnear/tfar 클리핑이 이미 이걸 보장한다)."""
     findings = []
     for row in lidarRows:
+        if not row["enabled"]:
+            continue
         scan = scanByLidar.get(row["lidarFullPath"])
         if scan is None or scan["status"] != "kOk":
             continue
@@ -454,17 +461,35 @@ def refineMeshCollisions(candidateFindings):
     재검사한다(설계 스펙 §6.4). 실제 폴리곤 교차가 확인된 쌍만 남기고,
     폴리곤이 아니라 판정 불가("unknown")면 AABB 결과를 그대로 유지하되
     메시지에 표시를 덧붙인다. AABB만 겹치고 실제로는 안 닿는("false") 쌍은
-    버린다."""
+    버린다.
+
+    정밀 충돌 커맨드가 예외를 던지면(Embree 초기화 실패 등, 설계 스펙 §8이
+    명시적으로 약속한 폴백) "unknown"과 완전히 같게 취급해 AABB 결과를
+    그대로 유지한다 -- 그렇게 하지 않으면 그 쌍 하나 때문에 예외가
+    _runMayaSideChecks() 밖까지 전파돼, 이 충돌 검사와 무관한 리밋 근접/
+    조인트 상태 findings까지 전부 사라지고 "검사 실패" 패널로 떨어진다
+    (최종 리뷰 Important-2). RuntimeError뿐 아니라 ValueError도 잡는다 --
+    커맨드 자체의 거부(예: 폴리곤이 아님)는 RuntimeError지만, 이 함수가
+    받는 mesh 이름이 AABB 수집 시점과 이 호출 시점 사이에 씬에서 사라지면
+    (레이스 컨디션) maya.cmds의 이름 해석 단계가 ValueError를 낸다(실측
+    확인) -- 둘 다 이 쌍 하나만 열화시키고 계속 진행해야 하는 같은 부류의
+    실패다."""
     refined = []
     for finding in candidateFindings:
         meshA, meshB = finding["meshes"]
-        result = cmds.maroCheckMeshCollision(meshA, meshB)
+        try:
+            result = cmds.maroCheckMeshCollision(meshA, meshB)
+        except (RuntimeError, ValueError):
+            result = "unknown"
         if result == "true":
             refined.append(finding)
         elif result == "unknown":
             degraded = dict(finding)
             degraded["summary"] = finding["summary"] + " (정밀 확인 불가, 바운딩박스 겹침만 확인됨)"
             refined.append(degraded)
+        # "false"이거나 그 외 인식 못 하는 값이면 의도적으로 버린다(최종
+        # 리뷰가 이미 낮은 리스크로 범위 밖 처리한 항목 -- 지금 세 값
+        # (true/unknown/false) 외의 결과는 실제로 절대 나오지 않는다).
     return refined
 
 
@@ -663,21 +688,58 @@ def _limitProximityThreshold():
 
 
 def _collectLidarScans(lidarRows):
-    """각 maroLidar를 maroQueryLidarScan으로 조회해 parseLidarScanQuery()
-    결과를 lidarFullPath별로 모은다. 씬을 바꾸지 않는다."""
-    return {row["lidarFullPath"]: parseLidarScanQuery(cmds.maroQueryLidarScan(row["lidarFullPath"]))
-            for row in lidarRows}
+    """각 enabled인 maroLidar를 maroQueryLidarScan으로 조회해
+    parseLidarScanQuery() 결과를 lidarFullPath별로 모은다. 씬을 바꾸지
+    않는다. disabled LiDAR는 애초에 스캔하지 않는다(최종 리뷰 Minor) --
+    네 검사 함수 모두 enabled가 아닌 LiDAR의 결과는 걸러내므로, 매번 도는
+    동기 레이캐스트를 결과가 어차피 버려질 LiDAR에 낭비하지 않는다.
+    한 LiDAR의 조회가 실패해도 전체 실행을 죽이지 않고 그 LiDAR만 결과에서
+    빠뜨린다(최종 리뷰 Important-3) -- 아래 네 검사 함수는 전부
+    `scanByLidar.get(...)`으로 없는/None 항목을 "이 LiDAR는 스킵"으로 이미
+    처리한다. RuntimeError뿐 아니라 ValueError도 잡는다: 커맨드 자체가
+    거부하면(예: 노드 타입이 안 맞음) maya.cmds가 RuntimeError를 내지만,
+    이름 해석 단계에서 실패하면(예: 이 함수가 lidarRows를 모은 시점과 실제
+    조회 시점 사이에 그 LiDAR 노드가 삭제된 레이스 컨디션) maya.cmds는
+    ValueError를 낸다 -- 실측으로 확인했다(둘 다 "이 항목 하나만 건너뛰고
+    계속"이어야 하는 같은 종류의 실패다)."""
+    scans = {}
+    for row in lidarRows:
+        if not row["enabled"]:
+            continue
+        try:
+            scans[row["lidarFullPath"]] = parseLidarScanQuery(
+                cmds.maroQueryLidarScan(row["lidarFullPath"]))
+        except (RuntimeError, ValueError):
+            continue
+    return scans
 
 
 def _collectLidarTargetMeshBoxes(lidarRows):
-    """각 maroLidar가 연결한 타겟 메쉬들의 월드 AABB를 모은다."""
+    """각 maroLidar가 연결한 타겟 메쉬들의 월드 AABB를 모은다. maroQueryLidarScan()이
+    돌려주는 range/effectiveWorldMatrix는 항상 Maya 내부 단위(센티미터, via
+    MDistance::internalUnit())인데, cmds.exactWorldBoundingBox()는 현재 UI
+    선형 단위로 값을 준다 -- 씬이 미터 단위로 작성됐으면 그대로 비교할 경우
+    100배 어긋난다(최종 리뷰 Critical-1). UI->내부(cm) 변환을 여기서
+    명시적으로 한다(_readCurrentValue()와 같은 원칙). 메쉬 하나의
+    exactWorldBoundingBox()가 실패해도(예: 연결된 이름이 씬 안에서 더 이상
+    유일하게 가리켜지지 않거나, 조회 시점에 이미 삭제된 경우) 그 메쉬만
+    건너뛰고, 같은 LiDAR의 나머지 메쉬로 계속 진행한다(최종 리뷰
+    Important-3). RuntimeError뿐 아니라 ValueError도 잡는다 --
+    exactWorldBoundingBox()의 이름 해석 실패(대상이 없어짐/이름이 더 이상
+    유일하지 않음)는 실측으로 확인한 결과 ValueError로 온다."""
+    uiToInternalCm = om2.MDistance(1.0, om2.MDistance.uiUnit()).asCentimeters()
     boxesByLidar = {}
     for row in lidarRows:
         meshes = cmds.listConnections(
             row["lidarFullPath"] + ".targetMeshes", source=True, destination=False) or []
-        boxesByLidar[row["lidarFullPath"]] = {
-            mesh: tuple(cmds.exactWorldBoundingBox(mesh)) for mesh in meshes
-        }
+        boxes = {}
+        for mesh in meshes:
+            try:
+                rawBox = cmds.exactWorldBoundingBox(mesh)
+            except (RuntimeError, ValueError):
+                continue
+            boxes[mesh] = tuple(v * uiToInternalCm for v in rawBox)
+        boxesByLidar[row["lidarFullPath"]] = boxes
     return boxesByLidar
 
 
