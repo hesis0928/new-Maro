@@ -170,6 +170,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroSettingsPanel
     maroSkeletonUpload
     maroSingleObjectNodeEditor
+    maroSyntheticDataCamera
     maroTechDiag
     maroUrdfExport
 )
