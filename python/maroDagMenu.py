@@ -39,6 +39,7 @@ Maya가 제공하는 **공식** 확장 훅도 확인했다: `optionalDagMenuProc
 import os
 import re
 import tempfile
+import time
 
 import maya.cmds as cmds
 import maya.mel as mel
@@ -117,20 +118,38 @@ _BACKUP_TEMP_FILE = None
 _INSTALLED_WHATIS = None
 
 # [2026-09-06 실측] MayaUSD가 로드된 세션에서 실제 우클릭으로 오브젝트
-# 마킹 메뉴가 처음 완전히 빌드될 때(정확히는 그 이후에 도는 LookdevX/
-# mayaUsd 콜백 어딘가에서), `dagMenuProc`가 우리 래퍼에서 Maya 원본으로
-# 조용히 되돌아가는 것이 확인됐다 -- 우리 코드를 직접 호출하는 합성
-# 테스트로는 재현되지 않고 실제 UI 우클릭에서만 재현되므로, 우리 쪽
-# 로직의 결함이 아니라 외부(Autodesk 컴파일 바이너리, 문자열 참조가
-# DataModel.dll 안에서만 발견됨)가 되돌리는 것으로 결론지었다. 정확한
-# 트리거는 폐쇄 소스라 알 수 없고, 실측상 세션당 한 번(첫 실제 메뉴
-# 빌드 시점)만 일어난다.
+# 마킹 메뉴가 완전히 빌드될 때(정확히는 그 이후에 도는 LookdevX/mayaUsd
+# 콜백 어딘가에서), `dagMenuProc`가 우리 래퍼에서 Maya 원본으로 조용히
+# 되돌아가는 것이 확인됐다 -- 우리 코드를 직접 호출하는 합성 테스트로는
+# 재현되지 않고 실제 UI 우클릭에서만 재현되므로, 우리 쪽 로직의 결함이
+# 아니라 외부(Autodesk 컴파일 바이너리, 문자열 참조가 DataModel.dll
+# 안에서만 발견됨)가 되돌리는 것으로 결론지었다. 정확한 트리거는 폐쇄
+# 소스라 알 수 없다.
+#
+# **첫 구현은 "세션당 한 번만 일어난다"고 가정하고 매 idle 틱마다 즉시
+# 재설치했는데, 대화형 세션 실측(2026-09-06)에서 이 가정이 틀렸다는 게
+# 드러났다** -- 재설치 자체가 다시 되돌림을 유발하는 것으로 보이는 핑퐁이
+# 실제로 관찰됐다: 매 틱(초당 수백 번) `dagMenuProc.mel` 전체(2900줄)를
+# 다시 source하고 새 임시 파일을 만드는 짓이 반복돼 CPU를 거의 다 먹고
+# (하드웨어 팬이 급가속) 스크립트 에디터 로그 갱신이 멎을 정도로 Maya의
+# 메인 스레드를 굶겼다. 아래 쿨다운 + 연속-재설치 상한은 `maroRosProxy.
+# _onIdle()`이 이미 정해 둔 자가 방어 규율(연속 실패 시 첫 틱에만 경고
+# 후 스스로 멈춤)을 그대로 따른 것이다 -- 처음 이 워치독을 쓸 때
+# 빠뜨렸던 게 바로 이 규율이었다.
 #
 # `dagMenuProc` 자체가 그 순간 우리 체인에서 빠지므로, 그 이후 우클릭에서
 # 우리 코드는 아예 안 불린다 -- 즉 "이 되돌림을 감지해서 스스로 복구하는
 # 로직"은 dagMenuProc 체인 **바깥**에 있어야만 동작한다. idle scriptJob
 # 워치독을 쓴다(maroRosProxy.py의 idle 콜백과 동일한 패턴/보수성).
 _WATCHDOG_JOB_ID = None
+# 마지막으로 재설치를 시도한 시각(time.time()). 이 값 이후
+# _WATCHDOG_COOLDOWN_SECONDS가 지나기 전에는 재설치를 시도하지 않는다.
+_WATCHDOG_LAST_REPAIR_TIME = 0.0
+_WATCHDOG_COOLDOWN_SECONDS = 2.0
+# 쿨다운 간격을 두고도 연속으로 재설치가 필요했던 횟수. 매 성공적인
+# "이미 우리 것"(재설치 불필요) 틱에서 0으로 리셋된다.
+_WATCHDOG_CONSECUTIVE_REPAIRS = 0
+_WATCHDOG_MAX_CONSECUTIVE_REPAIRS = 5
 
 
 def _originalProcSourceFile():
@@ -258,22 +277,64 @@ def install():
 
 
 def _watchdogTick():
-    """idle scriptJob의 본체 -- 매 틱, `dagMenuProc`가 여전히 우리 래퍼인지
-    확인하고 아니면 조용히 재설치한다. 위 `_WATCHDOG_JOB_ID` 주석에 적은
-    MayaUSD/UFE 쪽 되돌림에 대한 방어다.
+    """idle scriptJob의 본체 -- `dagMenuProc`가 여전히 우리 래퍼인지 확인하고
+    아니면 재설치한다. 위 `_WATCHDOG_JOB_ID` 주석에 적은 MayaUSD/UFE 쪽
+    되돌림에 대한 방어다.
 
-    `maroRosProxy._onIdle()`과 같은 규율을 따른다: 이 함수에서 예외가 새어
-    나가면 idle이 초당 여러 번 오므로 스크립트 에디터가 도배된다. 재설치
-    자체가 실패해도(`install()`이 이미 경고를 내고 `False`를 돌려주므로)
-    여기서는 조용히 다음 틱을 기다린다 -- 매 틱 재시도이므로 일시적 실패는
-    스스로 회복된다.
+    두 가지 자가 방어를 둔다(`maroRosProxy._onIdle()`과 같은 규율,
+    위 모듈 상단 주석에 그 규율을 빠뜨렸던 첫 구현의 실제 사고 경위를
+    적어 뒀다):
+      1. **쿨다운** -- 재설치는 `_WATCHDOG_COOLDOWN_SECONDS`에 한 번보다
+         자주 시도하지 않는다. 되돌림이 재설치 자체 때문에 다시 일어나는
+         핑퐁이라도, 매 틱(초당 수백 번)이 아니라 몇 초에 한 번으로
+         비용을 묶어 둔다.
+      2. **연속 실패 상한** -- 쿨다운을 두고도 계속 재설치가 필요하면
+         (즉 dagMenuProc가 우리 손을 벗어난 채 계속 되돌아오면)
+         `_WATCHDOG_MAX_CONSECUTIVE_REPAIRS`번째에 경고를 한 번 내고
+         스스로 멈춘다. 조용히 영원히 도는 것보다, 사람이 볼 수 있게
+         멈추는 쪽이 낫다 -- `stop()`을 idle 콜백 한복판에서 직접
+         부르지 않고 `cmds.evalDeferred`로 미루는 것도 `maroRosProxy`와
+         같은 이유다(자기 자신을 -force -kill하는 콜백을 Maya 자신도
+         쓰지 않는 패턴).
+
+    이 함수에서 예외가 새어 나가면 안 된다 -- idle은 초당 여러 번 오므로
+    한 번 깨지면 스크립트 에디터가 같은 트레이스백으로 도배된다.
+
+    **`_INSTALLED`로 게이트하지 않는다.** 이 잡 자체가 `install()`의 성공
+    경로에서만 시작되고 `uninstall()`이 잡까지 함께 죽이므로, 잡이 살아
+    있는 한 "감시할 필요가 없다"는 뜻의 `_INSTALLED == False`는 있을 수
+    없다 -- 있을 수 있는 유일한 `_INSTALLED == False`는 **재설치 시도가
+    막 실패한 직후**뿐이다. 첫 버전은 여기서 `if not _INSTALLED: return`으로
+    막았는데, 그러면 실패한 재설치 이후 이 워치독이 **영원히 아무것도 안
+    하는** 조용한 고아가 된다(실패 → `_INSTALLED=False` → 다음 틱이 그걸
+    보고 바로 리턴 → 다시는 재시도 안 함) -- 쿨다운을 두고 계속 재시도하려는
+    설계 의도 자체를 무력화하는 것이었다. 대화형 세션에서 재현되진 않았지만
+    (실측 사고는 재시도가 계속 "성공"해서 핑퐁이 난 경우였다) 배치 테스트로
+    이 경로를 직접 짚어보다가 발견했다.
     """
-    global _INSTALLED
+    global _INSTALLED, _WATCHDOG_LAST_REPAIR_TIME, _WATCHDOG_CONSECUTIVE_REPAIRS
     try:
-        if not _INSTALLED:
-            return
         if _wrapperStillOurs():
+            _WATCHDOG_CONSECUTIVE_REPAIRS = 0
             return
+
+        now = time.time()
+        if now - _WATCHDOG_LAST_REPAIR_TIME < _WATCHDOG_COOLDOWN_SECONDS:
+            return
+
+        _WATCHDOG_LAST_REPAIR_TIME = now
+        _WATCHDOG_CONSECUTIVE_REPAIRS += 1
+        if _WATCHDOG_CONSECUTIVE_REPAIRS > _WATCHDOG_MAX_CONSECUTIVE_REPAIRS:
+            cmds.warning(
+                "Maro: dagMenuProc keeps being reset even after {} repair attempts "
+                "{} seconds apart -- something keeps overwriting it faster than the "
+                "watchdog can fix it. Stopping the watchdog instead of retrying "
+                "forever; the 'Maro node editor' item may be missing until Maya "
+                "restarts.".format(_WATCHDOG_MAX_CONSECUTIVE_REPAIRS,
+                                    _WATCHDOG_COOLDOWN_SECONDS))
+            cmds.evalDeferred(_stopWatchdog)
+            return
+
         _INSTALLED = False
         install()
     except Exception:  # noqa: BLE001 -- idle 콜백 경계, 절대 새어나가면 안 됨
@@ -306,8 +367,16 @@ def _stopWatchdog():
     `maroRosProxy.stop()`과 같은 이유로, kill이 실제로 성공했을 때에만
     `_WATCHDOG_JOB_ID`를 지운다 -- 실패한 채로 지우면 이 잡은 `protected=True`
     라 다시는 못 찾고 영원히 남는다.
+
+    쿨다운/연속-재설치 카운터는 **`_WATCHDOG_JOB_ID`의 존재 여부와 무관하게**
+    항상 리셋한다 -- 배치 mayapy에서는 scriptJob이 아예 안 만들어져서
+    `_WATCHDOG_JOB_ID`가 항상 `None`이지만(`_startWatchdog()` 참고), 그래도
+    다음 `install()`이 이전 uninstall() 이전의 낡은 카운터 값을 이어받지
+    않아야 한다는 사실은 배치든 대화형이든 똑같다.
     """
-    global _WATCHDOG_JOB_ID
+    global _WATCHDOG_JOB_ID, _WATCHDOG_LAST_REPAIR_TIME, _WATCHDOG_CONSECUTIVE_REPAIRS
+    _WATCHDOG_LAST_REPAIR_TIME = 0.0
+    _WATCHDOG_CONSECUTIVE_REPAIRS = 0
     if _WATCHDOG_JOB_ID is None:
         return
     try:
