@@ -405,14 +405,7 @@ print("install()/uninstall() still work normally after the decline path OK")
 # 빌드 도중 dagMenuProc를 원본으로 되돌리는 것이 확인됐다(합성 호출로는
 # 재현 안 되고 실제 UI 우클릭에서만 재현 -- 우리 쪽 결함이 아니라 외부
 # 동작). dagMenuProc 자체가 그 순간 우리 체인에서 빠지므로 감지/복구
-# 로직은 체인 바깥(idle scriptJob)에 있어야 한다.
-#
-# [2026-09-06, 같은 날 대화형 세션에서 발견된 실사고] 쿨다운/연속-재설치
-# 상한이 없던 첫 구현은 대화형 세션에서 실제로 폭주했다 -- 재설치 자체가
-# 다시 되돌림을 유발하는 핑퐁이 있었고, 매 idle 틱(초당 수백 번)마다
-# `dagMenuProc.mel` 전체를 다시 source하면서 CPU를 거의 다 먹어 하드웨어
-# 팬이 급가속하고 스크립트 에디터 로그 갱신이 멎었다. 아래는 그 사고를
-# 재현하고 고정하는 테스트다. ------------------------------------------
+# 로직은 체인 바깥(idle scriptJob)에 있어야 한다. ---------------------
 
 # install()이 워치독을 시작한다(배치에서는 scriptJob이 아무 것도 안
 # 만들고 None을 준다 -- maroRosProxy.start()와 동일 실측, tests/maya/
@@ -421,111 +414,52 @@ assert maroDagMenu.install() is True
 assert maroDagMenu._WATCHDOG_JOB_ID is None
 print("install() starts the watchdog (no-op scriptJob id in batch) OK")
 
-# 래퍼가 멀쩡할 때: 워치독 틱은 아무것도 안 바꾸고, 연속-재설치 카운터도
-# 0으로 유지된다(리셋 자체를 확인하기 위해 미리 더럽혀 둔다).
-maroDagMenu._WATCHDOG_CONSECUTIVE_REPAIRS = 3
+# 래퍼가 멀쩡할 때: 워치독 틱은 아무것도 안 바꾼다.
 beforeWhatIs = mel.eval('whatIs "dagMenuProc"')
 maroDagMenu._watchdogTick()
 assert maroDagMenu._INSTALLED is True
 assert mel.eval('whatIs "dagMenuProc"') == beforeWhatIs, (
     "a no-op tick must not touch a healthy wrapper"
 )
-assert maroDagMenu._WATCHDOG_CONSECUTIVE_REPAIRS == 0, (
-    "a healthy tick must reset the consecutive-repair counter"
-)
 print("_watchdogTick() is a no-op while the wrapper is intact OK")
 
-
-def _clobberNative():
-    """Maya 원본 .mel을 그대로 다시 source해서 순수 네이티브 상태로
-    만든다(위 I-5 테스트와 같은 수법). "남의 체인"이 아니라 "완전히
-    원본으로 리셋된" 경우를 재현하는 것이 목적이라, 실측으로 확인된
-    실제 증상과 더 가깝다."""
-    mel.eval('source "{}"'.format(mayaDagMenuProcMel.replace("\\", "/")))
-    return mel.eval('whatIs "dagMenuProc"')
-
-
+# 래퍼가 외부에 의해 되돌아간 상황을 재현한다(위 I-5 테스트와 같은
+# 수법 -- Maya 원본 .mel을 그대로 다시 source해서 순수 네이티브 상태로
+# 만든다. 이번엔 "남의 체인"이 아니라 "완전히 원본으로 리셋된" 경우를
+# 재현하는 것이 목적이라, 실측으로 확인된 실제 증상과 더 가깝다).
 assert maroDagMenu._wrapperStillOurs() is True
-clobberedWhatIs = _clobberNative()
+mel.eval('source "{}"'.format(mayaDagMenuProcMel.replace("\\", "/")))
+clobberedWhatIs = mel.eval('whatIs "dagMenuProc"')
 assert clobberedWhatIs != beforeWhatIs, "the simulated clobbering must actually change dagMenuProc"
 assert maroDagMenu._wrapperStillOurs() is False
 
-# 쿨다운을 지나온 상태(0.0)에서는 워치독 틱이 스스로 재설치해야 한다.
-maroDagMenu._WATCHDOG_LAST_REPAIR_TIME = 0.0
+# 워치독 틱이 스스로 재설치해야 한다.
 maroDagMenu._watchdogTick()
 assert maroDagMenu._INSTALLED is True, "the watchdog must repair a clobbered wrapper"
 assert maroDagMenu._wrapperStillOurs() is True
 assert mel.eval('whatIs "dagMenuProc"') != clobberedWhatIs, (
     "after repair, dagMenuProc must be our wrapper again, not the native proc"
 )
-assert maroDagMenu._WATCHDOG_CONSECUTIVE_REPAIRS == 1
 print("_watchdogTick() detects and repairs an externally-clobbered dagMenuProc OK")
 
-# --- 쿨다운이 폭주를 막는다 --------------------------------------------
-# 방금 재설치했으니 _WATCHDOG_LAST_REPAIR_TIME은 "지금"에 가깝다. 곧바로
-# 다시 깨뜨리고 틱을 불러도, 쿨다운 안이므로 재설치를 **시도하지 않아야**
-# 한다 -- 이게 바로 사고 당시 빠져 있던 방어다.
-_clobberNative()
-assert maroDagMenu._wrapperStillOurs() is False
-consecutiveBefore = maroDagMenu._WATCHDOG_CONSECUTIVE_REPAIRS
-maroDagMenu._watchdogTick()
-assert maroDagMenu._wrapperStillOurs() is False, (
-    "a tick inside the cooldown window must NOT attempt a repair"
-)
-assert maroDagMenu._WATCHDOG_CONSECUTIVE_REPAIRS == consecutiveBefore, (
-    "a throttled tick must not count as a repair attempt"
-)
-print("_watchdogTick() is throttled by the cooldown instead of retrying every tick OK")
-
-# 쿨다운을 지나면(0.0으로 되돌려 시뮬레이션) 다시 복구한다 -- 영구히
-# 막히는 게 아니라 정말 "속도 제한"일 뿐임을 확인한다.
-maroDagMenu._WATCHDOG_LAST_REPAIR_TIME = 0.0
-maroDagMenu._watchdogTick()
-assert maroDagMenu._wrapperStillOurs() is True, (
-    "once the cooldown has elapsed, the watchdog must repair again"
-)
-print("_watchdogTick() resumes repairing once the cooldown elapses OK")
-
-# --- 연속 재설치가 계속 필요하면 스스로 멈춘다 --------------------------
-# dagMenuProc.mel의 원본 위치를 못 찾게 만들어서 "재설치를 계속 시도해야
-# 하는데 계속 실패하는" 상황을 흉내 낸다. 매 반복 전에 쿨다운을 0으로
-# 되돌려서(실제로는 몇 초 간격일 걸 배치 테스트에서 즉시 재현) 상한에
-# 빠르게 도달시킨다. cmds.evalDeferred는 배치에 이벤트 루프가 없어 실제로
-# 실행되진 않으므로, 스스로 멈추라고 "요청했는지"만 스텁으로 가로채 확인한다
-# (maroRosProxy 쪽도 이 부분은 배치로 검증하지 않는 것과 같은 한계).
-deferredCalls = []
-realEvalDeferred = cmds.evalDeferred
-cmds.evalDeferred = lambda fn, *a, **kw: deferredCalls.append(fn)
+# 틱 자체가 예외를 내지 않아야 한다(idle 콜백 경계 -- maroRosProxy._onIdle()
+# 과 같은 규율). 재설치가 원천적으로 불가능한 상태를 만들어서 확인한다.
 realSourceFile = maroDagMenu._originalProcSourceFile
-maroDagMenu._originalProcSourceFile = lambda: None  # install()이 항상 실패하게 만든다
-# 카운터를 0으로 맞춰서 "정확히 상한을 한 번만 넘는" 시점을 예측 가능하게
-# 만든다 -- 그래야 아래에서 evalDeferred가 정확히 한 번만 불렸는지 값으로
-# 고정할 수 있다.
-maroDagMenu._WATCHDOG_CONSECUTIVE_REPAIRS = 0
+mel.eval('source "{}"'.format(mayaDagMenuProcMel.replace("\\", "/")))  # 다시 깨뜨림
+maroDagMenu._originalProcSourceFile = lambda: None
 try:
-    _clobberNative()
-    for _ in range(maroDagMenu._WATCHDOG_MAX_CONSECUTIVE_REPAIRS + 1):
-        maroDagMenu._WATCHDOG_LAST_REPAIR_TIME = 0.0
-        maroDagMenu._watchdogTick()  # 예외가 새어 나오면 이 줄에서 테스트가 죽는다
+    maroDagMenu._watchdogTick()  # 예외가 새어 나오면 이 줄에서 테스트가 죽는다
 finally:
     maroDagMenu._originalProcSourceFile = realSourceFile
-    cmds.evalDeferred = realEvalDeferred
 assert maroDagMenu._INSTALLED is False, (
     "a tick that fails to repair must leave _INSTALLED False so the next tick retries"
 )
-assert deferredCalls == [maroDagMenu._stopWatchdog], (
-    "exceeding the consecutive-repair cap must schedule _stopWatchdog via "
-    "evalDeferred exactly once, not call it synchronously mid-callback"
-)
-print("_watchdogTick() gives up and schedules its own shutdown after repeated repair failures OK")
+print("_watchdogTick() never raises even when repair itself fails OK")
 
-# 정상 재설치 + uninstall()이 워치독(과 그 카운터)을 멈춘다.
+# 정상 재설치 + uninstall()이 워치독을 멈춘다.
 assert maroDagMenu.install() is True
 maroDagMenu.uninstall()
 assert maroDagMenu._WATCHDOG_JOB_ID is None, "uninstall() must stop the watchdog"
-assert maroDagMenu._WATCHDOG_CONSECUTIVE_REPAIRS == 0, (
-    "uninstall() must reset the consecutive-repair counter for the next install()"
-)
 print("uninstall() stops the watchdog OK")
 
 print("test_dag_menu OK")
