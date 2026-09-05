@@ -401,67 +401,6 @@ assert maroDagMenu._melGlobalString(maroDagMenu._MEL_SENTINEL_VAR) == "", (
 )
 print("install()/uninstall() still work normally after the decline path OK")
 
-# --- [2026-09-06 실측] idle 워치독: MayaUSD/UFE 쪽이 실제 우클릭 메뉴
-# 빌드 도중 dagMenuProc를 원본으로 되돌리는 것이 확인됐다(합성 호출로는
-# 재현 안 되고 실제 UI 우클릭에서만 재현 -- 우리 쪽 결함이 아니라 외부
-# 동작). dagMenuProc 자체가 그 순간 우리 체인에서 빠지므로 감지/복구
-# 로직은 체인 바깥(idle scriptJob)에 있어야 한다. ---------------------
-
-# install()이 워치독을 시작한다(배치에서는 scriptJob이 아무 것도 안
-# 만들고 None을 준다 -- maroRosProxy.start()와 동일 실측, tests/maya/
-# test_ros_proxy_sync.py:186 참고).
-assert maroDagMenu.install() is True
-assert maroDagMenu._WATCHDOG_JOB_ID is None
-print("install() starts the watchdog (no-op scriptJob id in batch) OK")
-
-# 래퍼가 멀쩡할 때: 워치독 틱은 아무것도 안 바꾼다.
-beforeWhatIs = mel.eval('whatIs "dagMenuProc"')
-maroDagMenu._watchdogTick()
-assert maroDagMenu._INSTALLED is True
-assert mel.eval('whatIs "dagMenuProc"') == beforeWhatIs, (
-    "a no-op tick must not touch a healthy wrapper"
-)
-print("_watchdogTick() is a no-op while the wrapper is intact OK")
-
-# 래퍼가 외부에 의해 되돌아간 상황을 재현한다(위 I-5 테스트와 같은
-# 수법 -- Maya 원본 .mel을 그대로 다시 source해서 순수 네이티브 상태로
-# 만든다. 이번엔 "남의 체인"이 아니라 "완전히 원본으로 리셋된" 경우를
-# 재현하는 것이 목적이라, 실측으로 확인된 실제 증상과 더 가깝다).
-assert maroDagMenu._wrapperStillOurs() is True
-mel.eval('source "{}"'.format(mayaDagMenuProcMel.replace("\\", "/")))
-clobberedWhatIs = mel.eval('whatIs "dagMenuProc"')
-assert clobberedWhatIs != beforeWhatIs, "the simulated clobbering must actually change dagMenuProc"
-assert maroDagMenu._wrapperStillOurs() is False
-
-# 워치독 틱이 스스로 재설치해야 한다.
-maroDagMenu._watchdogTick()
-assert maroDagMenu._INSTALLED is True, "the watchdog must repair a clobbered wrapper"
-assert maroDagMenu._wrapperStillOurs() is True
-assert mel.eval('whatIs "dagMenuProc"') != clobberedWhatIs, (
-    "after repair, dagMenuProc must be our wrapper again, not the native proc"
-)
-print("_watchdogTick() detects and repairs an externally-clobbered dagMenuProc OK")
-
-# 틱 자체가 예외를 내지 않아야 한다(idle 콜백 경계 -- maroRosProxy._onIdle()
-# 과 같은 규율). 재설치가 원천적으로 불가능한 상태를 만들어서 확인한다.
-realSourceFile = maroDagMenu._originalProcSourceFile
-mel.eval('source "{}"'.format(mayaDagMenuProcMel.replace("\\", "/")))  # 다시 깨뜨림
-maroDagMenu._originalProcSourceFile = lambda: None
-try:
-    maroDagMenu._watchdogTick()  # 예외가 새어 나오면 이 줄에서 테스트가 죽는다
-finally:
-    maroDagMenu._originalProcSourceFile = realSourceFile
-assert maroDagMenu._INSTALLED is False, (
-    "a tick that fails to repair must leave _INSTALLED False so the next tick retries"
-)
-print("_watchdogTick() never raises even when repair itself fails OK")
-
-# 정상 재설치 + uninstall()이 워치독을 멈춘다.
-assert maroDagMenu.install() is True
-maroDagMenu.uninstall()
-assert maroDagMenu._WATCHDOG_JOB_ID is None, "uninstall() must stop the watchdog"
-print("uninstall() stops the watchdog OK")
-
 print("test_dag_menu OK")
 maya.standalone.uninitialize()
 print("teardown OK")

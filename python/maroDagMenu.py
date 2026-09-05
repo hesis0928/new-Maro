@@ -116,22 +116,6 @@ _BACKUP_TEMP_FILE = None
 # _MEL_SENTINEL_VAR 주석 참고.
 _INSTALLED_WHATIS = None
 
-# [2026-09-06 실측] MayaUSD가 로드된 세션에서 실제 우클릭으로 오브젝트
-# 마킹 메뉴가 처음 완전히 빌드될 때(정확히는 그 이후에 도는 LookdevX/
-# mayaUsd 콜백 어딘가에서), `dagMenuProc`가 우리 래퍼에서 Maya 원본으로
-# 조용히 되돌아가는 것이 확인됐다 -- 우리 코드를 직접 호출하는 합성
-# 테스트로는 재현되지 않고 실제 UI 우클릭에서만 재현되므로, 우리 쪽
-# 로직의 결함이 아니라 외부(Autodesk 컴파일 바이너리, 문자열 참조가
-# DataModel.dll 안에서만 발견됨)가 되돌리는 것으로 결론지었다. 정확한
-# 트리거는 폐쇄 소스라 알 수 없고, 실측상 세션당 한 번(첫 실제 메뉴
-# 빌드 시점)만 일어난다.
-#
-# `dagMenuProc` 자체가 그 순간 우리 체인에서 빠지므로, 그 이후 우클릭에서
-# 우리 코드는 아예 안 불린다 -- 즉 "이 되돌림을 감지해서 스스로 복구하는
-# 로직"은 dagMenuProc 체인 **바깥**에 있어야만 동작한다. idle scriptJob
-# 워치독을 쓴다(maroRosProxy.py의 idle 콜백과 동일한 패턴/보수성).
-_WATCHDOG_JOB_ID = None
-
 
 def _originalProcSourceFile():
     """dagMenuProc를 정의한 .mel 파일의 절대 경로. 찾지 못하면 None."""
@@ -253,70 +237,7 @@ def install():
     # 모험하지 않는다. 비용은 세션당 임시 파일 하나다.
     _BACKUP_TEMP_FILE = tempPath
     _INSTALLED = True
-    _startWatchdog()
     return True
-
-
-def _watchdogTick():
-    """idle scriptJob의 본체 -- 매 틱, `dagMenuProc`가 여전히 우리 래퍼인지
-    확인하고 아니면 조용히 재설치한다. 위 `_WATCHDOG_JOB_ID` 주석에 적은
-    MayaUSD/UFE 쪽 되돌림에 대한 방어다.
-
-    `maroRosProxy._onIdle()`과 같은 규율을 따른다: 이 함수에서 예외가 새어
-    나가면 idle이 초당 여러 번 오므로 스크립트 에디터가 도배된다. 재설치
-    자체가 실패해도(`install()`이 이미 경고를 내고 `False`를 돌려주므로)
-    여기서는 조용히 다음 틱을 기다린다 -- 매 틱 재시도이므로 일시적 실패는
-    스스로 회복된다.
-    """
-    global _INSTALLED
-    try:
-        if not _INSTALLED:
-            return
-        if _wrapperStillOurs():
-            return
-        _INSTALLED = False
-        install()
-    except Exception:  # noqa: BLE001 -- idle 콜백 경계, 절대 새어나가면 안 됨
-        import traceback
-        traceback.print_exc()
-
-
-def _startWatchdog():
-    """idle 워치독을 시작한다. 멱등 -- 이미 돌고 있으면 아무것도 안 한다."""
-    global _WATCHDOG_JOB_ID
-    if _WATCHDOG_JOB_ID is not None and cmds.scriptJob(exists=_WATCHDOG_JOB_ID):
-        return
-    jobId = cmds.scriptJob(event=["idle", _watchdogTick], protected=True)
-    if isinstance(jobId, int):
-        _WATCHDOG_JOB_ID = jobId
-    else:
-        # 배치 mayapy에서는 scriptJob이 아무것도 만들지 않고 None을 준다
-        # (maroRosProxy.start()와 동일 실측) -- 거기서는 우클릭 UI 자체가
-        #없으니 워치독이 지킬 것도 없어 정상이다.
-        _WATCHDOG_JOB_ID = None
-        if not cmds.about(batch=True):
-            print("maroDagMenu: scriptJob() did not return a job id ({!r}) -- "
-                  "the dagMenuProc watchdog will not run.".format(jobId))
-
-
-def _stopWatchdog():
-    """idle 워치독을 멈춘다. 멱등, 실패해도 예외를 밖으로 내지 않는다
-    (uninstall()의 두 종료 경로 모두에서 부르므로 그 정리를 막으면 안 됨).
-
-    `maroRosProxy.stop()`과 같은 이유로, kill이 실제로 성공했을 때에만
-    `_WATCHDOG_JOB_ID`를 지운다 -- 실패한 채로 지우면 이 잡은 `protected=True`
-    라 다시는 못 찾고 영원히 남는다.
-    """
-    global _WATCHDOG_JOB_ID
-    if _WATCHDOG_JOB_ID is None:
-        return
-    try:
-        if cmds.scriptJob(exists=_WATCHDOG_JOB_ID):
-            cmds.scriptJob(kill=_WATCHDOG_JOB_ID, force=True)
-        _WATCHDOG_JOB_ID = None
-    except Exception:  # noqa: BLE001 -- 정리 경로
-        import traceback
-        traceback.print_exc()
 
 
 def uninstall():
@@ -345,7 +266,6 @@ def uninstall():
             "Maro: dagMenuProc has been redefined by something else since Maro "
             "installed its wrapper -- leaving it alone instead of clobbering "
             "the newer chain. Maro's menu item may linger until Maya restarts.")
-        _stopWatchdog()
         if _BACKUP_TEMP_FILE:
             _removeQuietly(_BACKUP_TEMP_FILE)
             _BACKUP_TEMP_FILE = None
@@ -377,7 +297,6 @@ def uninstall():
         cmds.warning("Maro: could not restore Maya's original dagMenuProc. "
                      "Restart Maya to get the default object marking menu back.")
 
-    _stopWatchdog()
     if _BACKUP_TEMP_FILE:
         _removeQuietly(_BACKUP_TEMP_FILE)
         _BACKUP_TEMP_FILE = None
