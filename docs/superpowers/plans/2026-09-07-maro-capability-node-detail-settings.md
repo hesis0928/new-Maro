@@ -17,6 +17,7 @@
 - `MaroLimitNode`/`MaroTranslationLimitNode`: `aEnableX/Y/Z` + 6개 min/max를 **완전히** `aAxisDirection`(float3) + `aMin`/`aMax`(스칼라 2개)로 교체한다. `MaroAxisNode.cpp`는 **한 줄도 건드리지 않는다** — 새 `compute()`가 `capMin`/`capMax`/`capEnable` 컴파운드의 x/y/z 세 슬롯 모두에 똑같은 값을 broadcast하여, 기존에 `conventionAxis`로 그중 한 성분만 골라 읽던 `MaroAxisNode::compute()`(`src/maro_plugin/MaroAxisNode.cpp:296-307`)와 `maroUrdfExport.py`의 `_resolveCapabilityDetails`(`python/maroUrdfExport.py:297-314`)가 **코드 변경 없이 그대로** 올바른 값을 읽게 만든다. `capEnable`은 항상 `(1,1,1)`로 broadcast한다(새 스키마엔 "enable" 개념이 없다 — capability 슬롯이 connected면 항상 활성).
 - 커스텀 매니퍼레이터(`MPxManipContainer`)와 커스텀 `MPxDrawOverride`는 **절대 새로 만들지 않는다** — Maya 네이티브 Rotate/Move 툴과 네이티브 임시 지오메트리(폴리곤 + lambert transparency)만 쓴다. 이 프로젝트의 유일한 draw override(`maroPointCloud`)가 현재 미해결 크래시 상태이므로 그 서브시스템에 아무것도 얹지 않는다.
 - 캘리브레이션 대상 오브젝트가 이미 `maroAxis`의 capability 스택(1차 구동 타입)에 DG 커넥션으로 rotateX/Y/Z(또는 translateX/Y/Z)가 연결돼 있을 수 있다 — 캘리브레이션 시작 시 그 커넥션을 정확히 캡처해 임시로 끊고, 끝나면(정상 종료든 창을 강제로 닫든 플러그인이 언로드되든) **반드시** 원래 커넥션과 원래 부모/값으로 복원한다. 복원 실패는 조용히 삼키지 않고 `cmds.warning`으로 정확한 플러그 이름을 알린다.
+- **[2026-09-07 실행 중 발견, 계획 수정]** mayapy 배치에서 PySide6 `QApplication`은 `platformName()`이 `"minimal"`(헤드리스 폴백)로 뜨고, 그 상태에서 `QWidget()`을 만드는 것 자체가 즉시 크래시한다(`QT_QPA_PLATFORM_PLUGIN_PATH`를 Maya 자신의 `qwindows.dll` 경로로 지정해도 동일). 이 프로젝트는 원래도 이 한계를 갖고 있었다 — `maroLidarPanel.py`/`maroSingleObjectNodeEditor.py` 둘 다 실제 `QWidget`을 만드는 자동 테스트가 존재한 적이 없다. 따라서 이 플랜의 남은 태스크에서 **실제 `QWidget`/`MaroSingleObjectNodeEditor`/`MaroCapabilityPanelBase` 서브클래스 인스턴스를 생성하는 자동화 테스트는 전부 뺀다** — 그 검증은 이미 Task 8의 수동 체크리스트가 담당하도록 계획돼 있었으므로 커버리지 공백은 없다. `CalibrationSession`(Task 6/7)은 Qt에 전혀 의존하지 않으므로 이 제약과 무관하게 그대로 자동화한다.
 - 빌드/검증 커맨드(매 태스크 완료 후 실행, C++ 변경이 있으면 **Maya를 완전히 닫은 상태**에서):
   ```powershell
   cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
@@ -835,11 +836,31 @@ set(MARO_PLUGIN_PY_MODULES
 
 - [ ] **Step 7: 테스트 작성 `tests/maya/test_capability_panel.py`**
 
+**[2026-09-07 수정]** 실제 `QWidget`을 만들지 않는 부분(factory 매핑,
+위젯 생성 전에 끝나는 에러 경로)만 자동화한다 — Global Constraints의
+mayapy/PySide6 `"minimal"` 플랫폼 제약 참고. 패널을 실제로 열고 필드를
+채우고 적용하는 플로우는 Task 8 수동 체크리스트가 담당한다.
+
 ```python
-"""capability 상세 설정 패널: 5개 단순 타입의 열기/값 적용/닫기 + 팩토리
-분기. QApplication 생성은 maroLidarPanel/SONE의 mayapy 배치 테스트가 이미
-증명한 패턴(PySide6는 mayapy에서 QApplication.instance()가 None이면 직접
-만들어야 한다)을 그대로 따른다."""
+"""capability 상세 설정 패널: 실제 QWidget 생성 없이 확인 가능한 부분만
+자동화한다.
+
+[2026-09-07 실측] mayapy 표준입출력 환경에서 PySide6의 QApplication은
+platformName()이 "minimal"(헤드리스 폴백)로 뜨고, 그 상태에서는
+QWidget()을 만드는 것 자체가 즉시 크래시한다(Maya GUI가 쓰는 Qt와
+mayapy용 PySide6의 플랫폼 플러그인이 안 맞는 것으로 보임 --
+QT_QPA_PLATFORM_PLUGIN_PATH를 Maya 자신의 qwindows.dll 경로로 지정해도
+동일하게 크래시했다). 이 프로젝트는 원래도 이 한계를 갖고 있었다 --
+maroLidarPanel.py/maroSingleObjectNodeEditor.py 둘 다 실제 QWidget을
+만드는 자동 테스트가 존재한 적이 없고(test_single_object_node_editor.py는
+순수 함수만 검증), Qt 창의 실제 동작은 항상 수동 체크리스트로 확인해 왔다.
+이 파일도 그 관례를 따른다 -- 패널을 실제로 열고 필드를 채우고 적용하는
+플로우는 docs/maro-main-ui-manual-checklist.md의 수동 체크리스트가
+담당한다(Task 8).
+
+여기서 자동화하는 것은 QWidget을 전혀 만들지 않고도 검증 가능한
+factory 매핑 계약뿐이다.
+"""
 import os
 import sys
 
@@ -848,50 +869,32 @@ import maya.standalone
 maya.standalone.initialize(name="python")
 
 import maya.cmds as cmds  # noqa: E402
-from PySide6 import QtWidgets  # noqa: E402
 
 plugin = os.environ["MARO_PLUGIN_PATH"]
 cmds.loadPlugin(plugin)
 cmds.file(new=True, force=True)
 
-app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(plugin))))
 import maroCapabilityPanel  # noqa: E402
 
-# 5개 단순 타입 모두 열기/값 적용/닫기 왕복.
-rot = cmds.createNode("maroRotation", name="rotForPanel")
-panel = maroCapabilityPanel.openCapabilityPanel(rot)
-assert isinstance(panel, maroCapabilityPanel.MaroRotationPanel)
-panel._fields["angle"][0].setValue(45.0)
-panel._onApply()
-assert abs(cmds.getAttr(rot + ".angle") - 45.0) < 1e-6, "rotation angle did not apply"
-panel.close()
-assert rot not in maroCapabilityPanel._OPEN_EDITORS, "closeEvent must remove from _OPEN_EDITORS"
-print("rotation panel OK")
+# 모듈 임포트 자체(클래스 정의, PySide6 임포트)는 QApplication/QWidget을
+# 만들지 않으므로 안전하다 -- 여기까지 온 것 자체가 그 사실의 증거.
+print("module import OK")
 
-sensorDir = cmds.createNode("maroSensorDirection", name="sensorDirForPanel")
-dirPanel = maroCapabilityPanel.openCapabilityPanel(sensorDir)
-subFields = dirPanel._vecFields["direction"]
-subFields[0].setValue(1.0)
-subFields[1].setValue(2.0)
-subFields[2].setValue(3.0)
-dirPanel._onApply()
-got = cmds.getAttr(sensorDir + ".direction")[0]
-assert abs(got[0] - 1.0) < 1e-6 and abs(got[1] - 2.0) < 1e-6 and abs(got[2] - 3.0) < 1e-6, \
-    f"vec3 field did not round-trip (got {got})"
-dirPanel.close()
-print("sensorDirection vec3 field OK")
+# _PANEL_CLASSES 매핑: 이 시점(Task 5 이전)엔 5개 단순 타입만 등록.
+expectedTypes = {
+    "maroRotation": maroCapabilityPanel.MaroRotationPanel,
+    "maroTranslation": maroCapabilityPanel.MaroTranslationPanel,
+    "maroSensorDirection": maroCapabilityPanel.MaroSensorDirectionPanel,
+    "maroSensorRange": maroCapabilityPanel.MaroSensorRangePanel,
+    "maroCoupling": maroCapabilityPanel.MaroCouplingPanel,
+}
+assert maroCapabilityPanel._PANEL_CLASSES == expectedTypes, maroCapabilityPanel._PANEL_CLASSES
+print("_PANEL_CLASSES mapping OK")
 
-# 같은 노드로 두 번 열면 같은 인스턴스를 돌려준다(싱글톤).
-trans = cmds.createNode("maroTranslation", name="transForPanel")
-p1 = maroCapabilityPanel.openCapabilityPanel(trans)
-p2 = maroCapabilityPanel.openCapabilityPanel(trans)
-assert p1 is p2, "opening the same node twice must reuse the existing panel"
-p1.close()
-print("singleton reuse OK")
-
-# 아직 등록 안 된 타입(Task 5 이전)은 명확한 에러.
+# openCapabilityPanel()은 타입을 찾지 못하면 QWidget을 만들기 전에
+# ValueError를 던진다 -- 이 경로는 위젯 생성 전에 끝나므로 mayapy에서
+# 안전하게 자동 검증할 수 있다.
 lim = cmds.createNode("maroLimit", name="limForPanelFactoryCheck")
 try:
     maroCapabilityPanel.openCapabilityPanel(lim)
@@ -899,15 +902,14 @@ try:
 except ValueError:
     raised = True
 assert raised, "maroLimit must not be registered yet (Task 5 adds it)"
-print("factory rejects unregistered type OK")
+print("factory rejects unregistered type before constructing any widget OK")
 
-# stop()이 남은 창을 전부 정리한다.
-coupling = cmds.createNode("maroCoupling", name="couplingForPanel")
-maroCapabilityPanel.openCapabilityPanel(coupling)
-assert len(maroCapabilityPanel._OPEN_EDITORS) == 1
+# stop()은 _OPEN_EDITORS가 비어 있어도 안전한 무동작이어야 한다(위젯을
+# 하나도 안 만들었으므로 여기서는 그 경로만 확인).
+assert len(maroCapabilityPanel._OPEN_EDITORS) == 0
 maroCapabilityPanel.stop()
-assert len(maroCapabilityPanel._OPEN_EDITORS) == 0, "stop() must close every open panel"
-print("stop() teardown OK")
+assert len(maroCapabilityPanel._OPEN_EDITORS) == 0
+print("stop() no-op when nothing is open OK")
 
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
@@ -1046,85 +1048,18 @@ EOF
             traceback.print_exc()
 ```
 
-- [ ] **Step 2: 회귀 테스트 확장 — `tests/maya/test_single_object_node_editor.py`**
+- [ ] **Step 2: 자동화 테스트는 추가하지 않는다 — 수동 체크리스트로 커버**
 
-파일 끝(`teardown` 직전)에 추가한다. 정확한 삽입 지점은 파일을 열어 `cmds.file(new=True, force=True)`로 시작하는 teardown 블록 바로 위:
+**[2026-09-07 수정]** Global Constraints에 적은 mayapy/PySide6 `"minimal"`
+플랫폼 제약 때문에, `MaroSingleObjectNodeEditor` 인스턴스를 실제로 만들고
+`QMouseEvent`를 디스패치하는 자동화 테스트는 mayapy에서 크래시한다.
+`test_single_object_node_editor.py`는 원래도 순수 함수만 검증해 왔다(실제
+`QWidget`을 만드는 자동 테스트가 이 파일에 존재한 적이 없다) — 이 관례를
+깨지 않는다. 더블클릭 3분기(단일/펼침-행/펼침-중앙) 동작 검증은 Task 8
+수동 체크리스트의 "7-1. SONE 더블클릭 3분기" 항목이 이미 담당하도록
+계획돼 있으므로 커버리지 공백은 없다.
 
-```python
-# --- 설계 스펙 2026-09-07 §2: 더블클릭 상세 패널 통합 ---
-import maroCapabilityPanel  # noqa: E402
-
-# (a) capability 정확히 1개, 접힌 상태 -- 중앙 노드 더블클릭이 상세 패널을 연다.
-axisDblSingle = cmds.createNode("maroAxis", name="dblSingleAxis")
-rotDblSingle = cmds.createNode("maroRotation", name="dblSingleRot")
-cmds.connectAttr(rotDblSingle + ".capabilityOut", axisDblSingle + ".capabilityIn[0]")
-editorDblSingle = maroSingleObjectNodeEditor.MaroSingleObjectNodeEditor(axisDblSingle)
-editorDblSingle.resize(320, 240)
-assert editorDblSingle._expanded is False
-center = editorDblSingle._nodeRect().center()
-doubleClickEvent = QtGui.QMouseEvent(
-    QtCore.QEvent.MouseButtonDblClick, center, QtCore.Qt.LeftButton,
-    QtCore.Qt.LeftButton, QtCore.Qt.NoModifier)
-editorDblSingle.mouseDoubleClickEvent(doubleClickEvent)
-assert rotDblSingle in maroCapabilityPanel._OPEN_EDITORS, \
-    "double-clicking the sole connected capability must open its detail panel"
-maroCapabilityPanel._OPEN_EDITORS[rotDblSingle].close()
-editorDblSingle.close()
-print("SONE double-click on single capability opens detail panel OK")
-
-# (b) capability 2개 이상, 접힌 상태 -- 기존처럼 펼치기만 하고 패널은 안 연다.
-axisDblMulti = cmds.createNode("maroAxis", name="dblMultiAxis")
-rotDblMulti = cmds.createNode("maroRotation", name="dblMultiRot")
-limDblMulti = cmds.createNode("maroLimit", name="dblMultiLim")
-cmds.connectAttr(rotDblMulti + ".capabilityOut", axisDblMulti + ".capabilityIn[0]")
-cmds.connectAttr(limDblMulti + ".capabilityOut", axisDblMulti + ".capabilityIn[1]")
-editorDblMulti = maroSingleObjectNodeEditor.MaroSingleObjectNodeEditor(axisDblMulti)
-editorDblMulti.resize(320, 240)
-centerMulti = editorDblMulti._nodeRect().center()
-doubleClickMulti = QtGui.QMouseEvent(
-    QtCore.QEvent.MouseButtonDblClick, centerMulti, QtCore.Qt.LeftButton,
-    QtCore.Qt.LeftButton, QtCore.Qt.NoModifier)
-editorDblMulti.mouseDoubleClickEvent(doubleClickMulti)
-assert editorDblMulti._expanded is True, "2+ capabilities, collapsed -> must expand (unchanged)"
-assert rotDblMulti not in maroCapabilityPanel._OPEN_EDITORS
-assert limDblMulti not in maroCapabilityPanel._OPEN_EDITORS
-print("SONE double-click on collapsed multi-capability node still just expands OK")
-
-# (c) 펼친 상태에서 특정 행 더블클릭 -- 그 행의 상세 패널을 연다.
-rows = maroSingleObjectNodeEditor.sliceCapabilityRows(
-    cmds.maroListAxisNodes(capabilities=axisDblMulti))
-targetRow = next(r for r in rows if r["capabilityNodeName"] == limDblMulti)
-rowRect = None
-for logicalIndex, itemRect in editorDblMulti._expandedRowRects(rows):
-    if logicalIndex == targetRow["logicalIndex"]:
-        rowRect = itemRect
-assert rowRect is not None
-doubleClickRow = QtGui.QMouseEvent(
-    QtCore.QEvent.MouseButtonDblClick, rowRect.center(), QtCore.Qt.LeftButton,
-    QtCore.Qt.LeftButton, QtCore.Qt.NoModifier)
-editorDblMulti.mouseDoubleClickEvent(doubleClickRow)
-assert limDblMulti in maroCapabilityPanel._OPEN_EDITORS, \
-    "double-clicking an expanded row must open that row's detail panel"
-assert editorDblMulti._expanded is True, "opening a row's panel must not collapse the dropdown"
-maroCapabilityPanel._OPEN_EDITORS[limDblMulti].close()
-print("SONE double-click on expanded row opens that row's detail panel OK")
-
-# (d) 펼친 상태에서 행이 아닌 중앙 노드를 더블클릭하면 기존처럼 접는다.
-doubleClickCollapse = QtGui.QMouseEvent(
-    QtCore.QEvent.MouseButtonDblClick, editorDblMulti._nodeRect().center(),
-    QtCore.Qt.LeftButton, QtCore.Qt.LeftButton, QtCore.Qt.NoModifier)
-editorDblMulti.mouseDoubleClickEvent(doubleClickCollapse)
-assert editorDblMulti._expanded is False, \
-    "double-clicking the center node while expanded must still collapse (unchanged)"
-editorDblMulti.close()
-print("SONE double-click on center node while expanded still collapses OK")
-
-maroCapabilityPanel.stop()
-```
-
-파일 상단 import 블록에 `QtGui`가 없다면 추가한다(`from PySide6 import QtCore, QtGui, QtWidgets` — `maroSingleObjectNodeEditor.py` 자신은 이미 `QtGui`를 import하고 있으므로, 이 테스트 파일의 기존 import 줄을 확인해 없으면 추가).
-
-- [ ] **Step 3: 빌드 + 실행**
+- [ ] **Step 3: 빌드 + 실행(회귀만 확인)**
 
 ```powershell
 cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 && set' 2>$null | ForEach-Object {
@@ -1134,7 +1069,7 @@ cmake --build out/build --config Release
 ctest --test-dir out/build -C Release --output-on-failure -R maya_single_object_node_editor
 ```
 
-Expected: PASS.
+Expected: PASS (기존 순수 함수 테스트가 코드 변경 후에도 깨지지 않는지만 확인).
 
 - [ ] **Step 4: 커밋**
 
@@ -1459,12 +1394,31 @@ _PANEL_CLASSES = {
 }
 ```
 
-- [ ] **Step 2: `tests/maya/test_capability_panel.py`의 "아직 미등록" 단언 갱신**
+- [ ] **Step 2: `tests/maya/test_capability_panel.py`의 factory 매핑 단언 갱신**
+
+**[2026-09-07 수정]** Global Constraints의 mayapy/PySide6 `"minimal"`
+플랫폼 제약 때문에 이 테스트는 실제 `QWidget`을 만들지 않는다(Task 2
+Step 7 참고) — 그래서 여기서 바꿀 것은 "타입이 등록돼 있는지"를 확인하는
+`_PANEL_CLASSES` 딕셔너리 비교뿐이다. 필드 적용/ROS축 표시 같은 실제 동작
+검증은 Task 8 수동 체크리스트가 담당한다.
 
 기존에 추가했던 다음 블록(Task 2 Step 7):
 
 ```python
-# 아직 등록 안 된 타입(Task 5 이전)은 명확한 에러.
+# _PANEL_CLASSES 매핑: 이 시점(Task 5 이전)엔 5개 단순 타입만 등록.
+expectedTypes = {
+    "maroRotation": maroCapabilityPanel.MaroRotationPanel,
+    "maroTranslation": maroCapabilityPanel.MaroTranslationPanel,
+    "maroSensorDirection": maroCapabilityPanel.MaroSensorDirectionPanel,
+    "maroSensorRange": maroCapabilityPanel.MaroSensorRangePanel,
+    "maroCoupling": maroCapabilityPanel.MaroCouplingPanel,
+}
+assert maroCapabilityPanel._PANEL_CLASSES == expectedTypes, maroCapabilityPanel._PANEL_CLASSES
+print("_PANEL_CLASSES mapping OK")
+
+# openCapabilityPanel()은 타입을 찾지 못하면 QWidget을 만들기 전에
+# ValueError를 던진다 -- 이 경로는 위젯 생성 전에 끝나므로 mayapy에서
+# 안전하게 자동 검증할 수 있다.
 lim = cmds.createNode("maroLimit", name="limForPanelFactoryCheck")
 try:
     maroCapabilityPanel.openCapabilityPanel(lim)
@@ -1472,32 +1426,31 @@ try:
 except ValueError:
     raised = True
 assert raised, "maroLimit must not be registered yet (Task 5 adds it)"
-print("factory rejects unregistered type OK")
+print("factory rejects unregistered type before constructing any widget OK")
 ```
 
-를 아래로 바꾼다(이제 등록되어 있으므로 정상 동작을 검증):
+를 아래로 바꾼다(이제 7종 전부 등록되어 있으므로 매핑만 갱신하고,
+"미등록 타입 거부" 시나리오는 더 이상 재현할 방법이 없으므로 그 블록은
+제거한다 -- 7종 전부가 등록된 지금은 어떤 capability 타입으로도
+`ValueError`가 나면 안 된다):
 
 ```python
-# Task 5부터 maroLimit/maroTranslationLimit도 등록되어 있다.
-lim = cmds.createNode("maroLimit", name="limForPanelFactoryCheck")
-cmds.setAttr(lim + ".axisDirection", 0.0, 1.0, 0.0, type="double3")
-limPanel = maroCapabilityPanel.openCapabilityPanel(lim)
-assert isinstance(limPanel, maroCapabilityPanel.MaroLimitPanel)
-limPanel._fields["min"][0].setValue(-30.0)
-limPanel._fields["max"][0].setValue(30.0)
-limPanel._onApply()
-assert abs(cmds.getAttr(lim + ".min") - (-30.0)) < 1e-6
-assert abs(cmds.getAttr(lim + ".max") - 30.0) < 1e-6
-assert limPanel._rosAxisLabel.text() == "(0.0000, 0.0000, 1.0000)", limPanel._rosAxisLabel.text()
-limPanel.close()
-print("maroLimit panel + ROS axis display OK")
-
-transLim = cmds.createNode("maroTranslationLimit", name="transLimForPanelFactoryCheck")
-transLimPanel = maroCapabilityPanel.openCapabilityPanel(transLim)
-assert isinstance(transLimPanel, maroCapabilityPanel.MaroTranslationLimitPanel)
-transLimPanel.close()
-print("maroTranslationLimit panel OK")
+# Task 5부터 maroLimit/maroTranslationLimit도 등록되어 7종 전부 매핑된다.
+expectedTypes = {
+    "maroRotation": maroCapabilityPanel.MaroRotationPanel,
+    "maroTranslation": maroCapabilityPanel.MaroTranslationPanel,
+    "maroSensorDirection": maroCapabilityPanel.MaroSensorDirectionPanel,
+    "maroSensorRange": maroCapabilityPanel.MaroSensorRangePanel,
+    "maroCoupling": maroCapabilityPanel.MaroCouplingPanel,
+    "maroLimit": maroCapabilityPanel.MaroLimitPanel,
+    "maroTranslationLimit": maroCapabilityPanel.MaroTranslationLimitPanel,
+}
+assert maroCapabilityPanel._PANEL_CLASSES == expectedTypes, maroCapabilityPanel._PANEL_CLASSES
+print("_PANEL_CLASSES mapping (all 7 types) OK")
 ```
+
+파일에서 이제 존재하지 않는 "factory rejects unregistered type" 블록(위
+첫 코드 블록의 두 번째 절)은 완전히 삭제한다 — 남겨두면 항상 실패한다.
 
 - [ ] **Step 3: 빌드 + 실행**
 
@@ -2271,6 +2224,9 @@ Expected: 전체 PASS.
 - [ ] Rotation/Translation/SensorDirection/SensorRange/Coupling/Limit/
       TranslationLimit 각각을 열어 필드 값을 바꾸고 "적용"을 눌러
       Attribute Editor에서 실제로 반영됐는지 확인한다.
+- [ ] Limit/TranslationLimit 패널의 axisDirection 필드를 바꿔보고, 읽기전용
+      "ROS axis" 라벨이 `mayaDirectionToRos()`(x,-z,y 재배치) 값으로
+      실시간 갱신되는지 확인한다.
 - [ ] Coupling 패널의 "소스 축 재지정" 버튼으로 다른 축을 골라 재연결한다
       -- SONE의 기존 1회성 피커와 별개로, 언제든 다시 쓸 수 있는지 확인한다.
 - [ ] 같은 노드에 대해 패널을 두 번 열면 같은 창이 앞으로 나오는지(새
