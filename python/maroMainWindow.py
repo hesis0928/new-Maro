@@ -379,6 +379,13 @@ def teardown():
         traceback.print_exc()
 
     try:
+        import maroCapabilityPanel
+        maroCapabilityPanel.stop()
+    except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계
+        import traceback
+        traceback.print_exc()
+
+    try:
         import maroSettingsPanel
         maroSettingsPanel.stop()
     except Exception:  # noqa: BLE001 -- Maya 콜백/언로드 경계

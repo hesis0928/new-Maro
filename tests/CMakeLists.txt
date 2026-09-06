@@ -282,7 +282,7 @@ if(MARO_BUILD_PLUGIN)
     # 필요하다. TIMEOUT도 60이었는데, 콜드 머신에서 standalone 초기화 +
     # ROS2/Embree 링크 플러그인 DLL 로드가 60초 안에 끝난다는 보장이 없다 --
     # 이 그룹의 240을 그대로 쓴다.
-    foreach(maya_test load axis_node binding capability_stack delete_rules
+    foreach(maya_test load axis_node binding capability_stack capability_panel delete_rules
                       robustness diag_boad diag_onfix diag_book
                       diag_book_cross_session diag_remedy
                       diag_degraded diag_degraded_remedy diag_thread

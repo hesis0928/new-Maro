@@ -96,6 +96,31 @@ _DRAG_THRESHOLD_PX = 6.0
 # 펼친 드롭다운에서 "고른 행"을 구분하는 테두리 굵기(px).
 _SELECTION_PEN_WIDTH = 2.5
 
+
+def connectCouplingSource(couplingNodeName, sourceAxis):
+    """couplingNodeName(maroCoupling 노드)의 소스를 sourceAxis(다른 축의
+    fullPath)로 연결한다. sourceAxis의 driveIsLinear를 읽어 각도/선형 중
+    맞는 슬롯(sourceValue 또는 sourceValueLinear)에 연결하고
+    sourceIsLinear를 그에 맞춰 설정한다 -- 리뷰 Finding C-1(이 파일 위쪽
+    MaroCouplingNode 관련 주석 참고)이 요구하는 단위 안전 연결.
+
+    호출자가 이미 sourceAxis가 couplingNodeName이 붙은 축과 다르다는 것을
+    보장해야 한다(자기 자신을 소스로 고르는 것은 호출자 책임으로 막는다).
+    """
+    isLinear = cmds.getAttr(sourceAxis + ".driveIsLinear")
+    cmds.undoInfo(openChunk=True)
+    try:
+        cmds.setAttr(couplingNodeName + ".sourceIsLinear", isLinear)
+        if isLinear:
+            cmds.connectAttr(sourceAxis + ".positionLinear",
+                             couplingNodeName + ".sourceValueLinear", force=True)
+        else:
+            cmds.connectAttr(sourceAxis + ".position",
+                             couplingNodeName + ".sourceValue", force=True)
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+
 _OPEN_EDITORS = {}  # axisFullPath -> MaroSingleObjectNodeEditor
 
 
@@ -398,22 +423,12 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
                 if not sourceAxis:
                     picker.close()
                     return
-                isLinear = cmds.getAttr(sourceAxis + ".driveIsLinear")
-                cmds.undoInfo(openChunk=True)
                 try:
-                    cmds.setAttr(couplingNodeName + ".sourceIsLinear", isLinear)
-                    if isLinear:
-                        cmds.connectAttr(sourceAxis + ".positionLinear",
-                                         couplingNodeName + ".sourceValueLinear", force=True)
-                    else:
-                        cmds.connectAttr(sourceAxis + ".position",
-                                         couplingNodeName + ".sourceValue", force=True)
+                    connectCouplingSource(couplingNodeName, sourceAxis)
                 except RuntimeError as error:
                     print("Maro: coupling source connection failed -- {}".format(error))
                     picker.close()
                     return
-                finally:
-                    cmds.undoInfo(closeChunk=True)
                 picker.close()
                 self.update()
             except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
