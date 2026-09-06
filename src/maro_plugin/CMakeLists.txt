@@ -164,6 +164,7 @@ set(MARO_PLUGIN_PY_MODULES
     maroDagMenu
     maroDiagPanel
     maroLidarPanel
+    maroLimitCalibration
     maroMainWindow
     maroMenu
     maroObjectNodeEditor
