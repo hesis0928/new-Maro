@@ -8,6 +8,7 @@ stop()이 플러그인 언로드 시 전부 닫음(maroMainWindow.teardown()에 
 import maya.cmds as cmds
 from PySide6 import QtCore, QtWidgets
 
+import maroLimitCalibration
 import maroSingleObjectNodeEditor
 
 _OPEN_EDITORS = {}  # capabilityNode -> MaroCapabilityPanelBase 서브클래스 인스턴스
@@ -205,19 +206,60 @@ class MaroCouplingPanel(MaroCapabilityPanelBase):
             traceback.print_exc()
 
 
+class _AxisLimitPanelBase(MaroCapabilityPanelBase):
+    """MaroLimitPanel/MaroTranslationLimitPanel의 공통 부분 -- axisDirection
+    필드 옆에 읽기전용 ROS축 표시를 덧붙인다. 실제 _ATTRS(단위: 각도 대
+    거리)는 서브클래스가 정의한다."""
+
+    def _buildExtra(self):
+        self._rosAxisLabel = QtWidgets.QLabel("")
+        self._layout.addRow("ROS axis (read-only)", self._rosAxisLabel)
+        self._refreshRosAxisLabel()
+
+    def _refreshRosAxisLabel(self):
+        subFields = self._vecFields.get("axisDirection")
+        if subFields is None:
+            return
+        mayaDir = (subFields[0].value(), subFields[1].value(), subFields[2].value())
+        rosDir = maroLimitCalibration.mayaDirectionToRos(mayaDir)
+        self._rosAxisLabel.setText("({:.4f}, {:.4f}, {:.4f})".format(*rosDir))
+
+    def _onApply(self):
+        super()._onApply()
+        self._refreshRosAxisLabel()
+
+
+class MaroLimitPanel(_AxisLimitPanelBase):
+    _ATTRS = [
+        ("axisDirection", "Axis direction", "vec3"),
+        ("min", "Min (deg)", "float"),
+        ("max", "Max (deg)", "float"),
+    ]
+
+
+class MaroTranslationLimitPanel(_AxisLimitPanelBase):
+    _ATTRS = [
+        ("axisDirection", "Axis direction", "vec3"),
+        ("min", "Min", "float"),
+        ("max", "Max", "float"),
+    ]
+
+
 _PANEL_CLASSES = {
     "maroRotation": MaroRotationPanel,
     "maroTranslation": MaroTranslationPanel,
     "maroSensorDirection": MaroSensorDirectionPanel,
     "maroSensorRange": MaroSensorRangePanel,
     "maroCoupling": MaroCouplingPanel,
+    "maroLimit": MaroLimitPanel,
+    "maroTranslationLimit": MaroTranslationLimitPanel,
 }
 
 
 def openCapabilityPanel(capabilityNode):
     """capabilityNode(예: "maroLimit1")의 타입에 맞는 상세 설정 창을 연다.
     이미 열려 있으면 그 창을 앞으로 가져온다. 타입이 _PANEL_CLASSES에
-    없으면 ValueError(예: Task 5 이전의 maroLimit/maroTranslationLimit)."""
+    없으면 ValueError."""
     existing = _OPEN_EDITORS.get(capabilityNode)
     if existing is not None:
         try:

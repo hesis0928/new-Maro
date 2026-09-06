@@ -37,28 +37,19 @@ import maroCapabilityPanel  # noqa: E402
 # 만들지 않으므로 안전하다 -- 여기까지 온 것 자체가 그 사실의 증거.
 print("module import OK")
 
-# _PANEL_CLASSES 매핑: 이 시점(Task 5 이전)엔 5개 단순 타입만 등록.
+# _PANEL_CLASSES 매핑: Task 5부터 maroLimit/maroTranslationLimit도
+# 등록되어 7종 전부 매핑된다.
 expectedTypes = {
     "maroRotation": maroCapabilityPanel.MaroRotationPanel,
     "maroTranslation": maroCapabilityPanel.MaroTranslationPanel,
     "maroSensorDirection": maroCapabilityPanel.MaroSensorDirectionPanel,
     "maroSensorRange": maroCapabilityPanel.MaroSensorRangePanel,
     "maroCoupling": maroCapabilityPanel.MaroCouplingPanel,
+    "maroLimit": maroCapabilityPanel.MaroLimitPanel,
+    "maroTranslationLimit": maroCapabilityPanel.MaroTranslationLimitPanel,
 }
 assert maroCapabilityPanel._PANEL_CLASSES == expectedTypes, maroCapabilityPanel._PANEL_CLASSES
-print("_PANEL_CLASSES mapping OK")
-
-# openCapabilityPanel()은 타입을 찾지 못하면 QWidget을 만들기 전에
-# ValueError를 던진다 -- 이 경로는 위젯 생성 전에 끝나므로 mayapy에서
-# 안전하게 자동 검증할 수 있다.
-lim = cmds.createNode("maroLimit", name="limForPanelFactoryCheck")
-try:
-    maroCapabilityPanel.openCapabilityPanel(lim)
-    raised = False
-except ValueError:
-    raised = True
-assert raised, "maroLimit must not be registered yet (Task 5 adds it)"
-print("factory rejects unregistered type before constructing any widget OK")
+print("_PANEL_CLASSES mapping (all 7 types) OK")
 
 # stop()은 _OPEN_EDITORS가 비어 있어도 안전한 무동작이어야 한다(위젯을
 # 하나도 안 만들었으므로 여기서는 그 경로만 확인).
