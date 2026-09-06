@@ -37,9 +37,9 @@ print("rotation OK")
 
 # limit을 얹으면 클램프된다. 축 보정 기본값은 Y이므로 Y 리밋을 건다.
 lim = cmds.createNode("maroLimit", name="lim1")
-cmds.setAttr(lim + ".enableY", True)
-cmds.setAttr(lim + ".minY", -0.5)
-cmds.setAttr(lim + ".maxY", 0.5)
+cmds.setAttr(lim + ".axisDirection", 0, 1, 0, type="double3")
+cmds.setAttr(lim + ".min", -0.5)
+cmds.setAttr(lim + ".max", 0.5)
 cmds.connectAttr(lim + ".capabilityOut", axis + ".capabilityIn[1]")
 
 assert abs(cmds.getAttr(axis + ".position") - 0.5) < 1e-9, "limit did not clamp"
@@ -47,9 +47,9 @@ print("limit OK")
 
 # 두 번째 limit이 더 좁으면 그쪽이 이긴다 (순차 클램프).
 lim2 = cmds.createNode("maroLimit", name="lim2")
-cmds.setAttr(lim2 + ".enableY", True)
-cmds.setAttr(lim2 + ".minY", -0.25)
-cmds.setAttr(lim2 + ".maxY", 0.25)
+cmds.setAttr(lim2 + ".axisDirection", 0, 1, 0, type="double3")
+cmds.setAttr(lim2 + ".min", -0.25)
+cmds.setAttr(lim2 + ".max", 0.25)
 cmds.connectAttr(lim2 + ".capabilityOut", axis + ".capabilityIn[2]")
 
 assert abs(cmds.getAttr(axis + ".position") - 0.25) < 1e-9, "second limit did not clamp"
@@ -63,9 +63,9 @@ axisOrder = cmds.createNode("maroAxis", name="axisOrder")
 limFirst = cmds.createNode("maroLimit", name="limFirst")
 rotSecond = cmds.createNode("maroRotation", name="rotSecond")
 
-cmds.setAttr(limFirst + ".enableY", True)
-cmds.setAttr(limFirst + ".minY", -0.1)
-cmds.setAttr(limFirst + ".maxY", 0.1)
+cmds.setAttr(limFirst + ".axisDirection", 0, 1, 0, type="double3")
+cmds.setAttr(limFirst + ".min", -0.1)
+cmds.setAttr(limFirst + ".max", 0.1)
 
 cmds.connectAttr(limFirst + ".capabilityOut", axisOrder + ".capabilityIn[0]")
 cmds.connectAttr(rotSecond + ".capabilityOut", axisOrder + ".capabilityIn[1]")
@@ -93,9 +93,9 @@ assert abs(cmds.getAttr(axisRos + ".position") - 0.9) < 1e-9, \
 print("control mode source OK")
 
 limRos = cmds.createNode("maroLimit", name="limRos")
-cmds.setAttr(limRos + ".enableY", True)
-cmds.setAttr(limRos + ".minY", -0.5)
-cmds.setAttr(limRos + ".maxY", 0.5)
+cmds.setAttr(limRos + ".axisDirection", 0, 1, 0, type="double3")
+cmds.setAttr(limRos + ".min", -0.5)
+cmds.setAttr(limRos + ".max", 0.5)
 cmds.connectAttr(limRos + ".capabilityOut", axisRos + ".capabilityIn[1]")
 
 assert abs(cmds.getAttr(axisRos + ".position") - 0.5) < 1e-9, \
@@ -138,14 +138,14 @@ print("translation node OK")
 
 # maroTranslationLimit: maroLimit과 대칭인 직선 클램프.
 transLim = cmds.createNode("maroTranslationLimit", name="transLim1")
-cmds.setAttr(transLim + ".enableY", True)
-cmds.setAttr(transLim + ".minY", -5.0)
-cmds.setAttr(transLim + ".maxY", 5.0)
+cmds.setAttr(transLim + ".axisDirection", 0, 1, 0, type="double3")
+cmds.setAttr(transLim + ".min", -5.0)
+cmds.setAttr(transLim + ".max", 5.0)
 assert cmds.getAttr(transLim + ".capabilityOut.capType") == 5, "translationLimit capType"
-minY = cmds.getAttr(transLim + ".capabilityOut.capMin")[0][1]
-maxY = cmds.getAttr(transLim + ".capabilityOut.capMax")[0][1]
-assert abs(minY - (-5.0)) < 1e-9 and abs(maxY - 5.0) < 1e-9, \
-    f"translationLimit min/max must carry centimeters (got {minY}, {maxY})"
+minAny = cmds.getAttr(transLim + ".capabilityOut.capMin")[0][0]
+maxAny = cmds.getAttr(transLim + ".capabilityOut.capMax")[0][0]
+assert abs(minAny - (-5.0)) < 1e-9 and abs(maxAny - 5.0) < 1e-9, \
+    f"translationLimit min/max must carry centimeters, broadcast to every component (got {minAny}, {maxAny})"
 print("translationLimit node OK")
 
 # maroCoupling: ratio/offset 경로 (곡선 없음).
@@ -212,9 +212,9 @@ print("translation axis routing OK")
 
 # translationLimit이 직선 구동값을 클램프한다.
 transLimDrive = cmds.createNode("maroTranslationLimit", name="transLimDrive1")
-cmds.setAttr(transLimDrive + ".enableY", True)
-cmds.setAttr(transLimDrive + ".minY", -5.0)
-cmds.setAttr(transLimDrive + ".maxY", 5.0)
+cmds.setAttr(transLimDrive + ".axisDirection", 0, 1, 0, type="double3")
+cmds.setAttr(transLimDrive + ".min", -5.0)
+cmds.setAttr(transLimDrive + ".max", 5.0)
 cmds.connectAttr(transLimDrive + ".capabilityOut", axisTrans + ".capabilityIn[1]")
 clampedLinear = cmds.getAttr(axisTrans + ".positionLinear")
 assert abs(clampedLinear - 5.0) < 1e-9, f"translationLimit did not clamp (got {clampedLinear})"

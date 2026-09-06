@@ -214,9 +214,9 @@ try:
     # ---- 4) 리밋은 모드와 무관하게, ROS 소스 값에도 적용된다. ----
     cmds.setAttr(axis + ".rosCommand", 1.2)
     lim = cmds.createNode("maroLimit")
-    cmds.setAttr(lim + ".enableY", True)
-    cmds.setAttr(lim + ".minY", -0.5)
-    cmds.setAttr(lim + ".maxY", 0.5)
+    cmds.setAttr(lim + ".axisDirection", 0, 1, 0, type="double3")
+    cmds.setAttr(lim + ".min", -0.5)
+    cmds.setAttr(lim + ".max", 0.5)
     cmds.connectAttr(lim + ".capabilityOut", axis + ".capabilityIn[1]")
 
     limited_out = cmds.getAttr(axis + ".position")

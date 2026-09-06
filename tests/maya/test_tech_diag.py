@@ -512,10 +512,11 @@ unitRot = cmds.createNode("maroRotation", name="unitLimitRot")
 cmds.connectAttr(unitRot + ".capabilityOut", unitAxis + ".capabilityIn[0]")
 cmds.setAttr(unitRot + ".angle", 45.0)          # 도 세션 -> 데이터블록엔 pi/4 rad
 unitLim = cmds.createNode("maroLimit", name="unitLimitLim")
-# conventionAxis 기본값이 Y(1)이므로 Y 성분에 리밋을 건다.
-cmds.setAttr(unitLim + ".enableY", True)
-cmds.setAttr(unitLim + ".minY", -90.0)          # 도 -> -pi/2 rad
-cmds.setAttr(unitLim + ".maxY", 90.0)           # 도 ->  pi/2 rad
+# 2026-09-07 재설계: 어느 축인지는 이제 axisDirection이 나르고,
+# MaroAxisNode.cpp의 conventionAxis 인덱싱은 broadcast로 흡수된다.
+cmds.setAttr(unitLim + ".axisDirection", 0, 1, 0, type="double3")
+cmds.setAttr(unitLim + ".min", -90.0)          # 도 -> -pi/2 rad
+cmds.setAttr(unitLim + ".max", 90.0)           # 도 ->  pi/2 rad
 cmds.connectAttr(unitLim + ".capabilityOut", unitAxis + ".capabilityIn[1]")
 
 # 전제 고정: 두 표면이 정말로 다른 단위로 말한다.

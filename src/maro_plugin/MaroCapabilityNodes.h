@@ -46,15 +46,15 @@ public:
     MStatus compute(const MPlug& plug, MDataBlock& data) override;
     static MTypeId id;
 
-    static MObject aEnableX;
-    static MObject aEnableY;
-    static MObject aEnableZ;
-    static MObject aMinX;            // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
-    static MObject aMaxX;            // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
-    static MObject aMinY;            // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
-    static MObject aMaxY;            // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
-    static MObject aMinZ;            // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
-    static MObject aMaxZ;            // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
+    // 임의의 커스텀 축(로컬/월드 공간 정규화 방향 벡터) + 그 축 기준 단일
+    // min/max로 재설계됐다(기존 X/Y/Z 3축 독립 리밋을 완전히 대체 --
+    // 2026-09-07 설계). axisDirection은 MaroAxisNode::compute()의 클램프
+    // 수식에 관여하지 않는다(그쪽은 여전히 conventionAxis 성분 인덱싱만
+    // 본다) -- 캘리브레이션 UI가 헬퍼 로케이터를 정렬하는 데 쓰고, 장차
+    // URDF export가 <axis>를 이 값에서 뽑아 쓸 수 있도록 남겨 둔 메타데이터다.
+    static MObject aAxisDirection;   // MFnNumericAttribute::k3Float, 기본 (0,0,1)
+    static MObject aMin;             // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
+    static MObject aMax;             // MFnUnitAttribute::kAngle (AE: 도, 내부: 라디안)
     static CapabilityOutAttrs out;
 };
 
@@ -103,15 +103,10 @@ public:
     MStatus compute(const MPlug& plug, MDataBlock& data) override;
     static MTypeId id;
 
-    static MObject aEnableX;
-    static MObject aEnableY;
-    static MObject aEnableZ;
-    static MObject aMinX;            // MFnUnitAttribute::kDistance (AE: cm/in/m, 내부: 센티미터)
-    static MObject aMaxX;
-    static MObject aMinY;
-    static MObject aMaxY;
-    static MObject aMinZ;
-    static MObject aMaxZ;
+    // MaroLimitNode와 같은 재설계 -- 각도 대신 거리(센티미터)만 다르다.
+    static MObject aAxisDirection;   // MFnNumericAttribute::k3Float, 기본 (0,0,1)
+    static MObject aMin;             // MFnUnitAttribute::kDistance (AE: cm/in/m, 내부: 센티미터)
+    static MObject aMax;             // MFnUnitAttribute::kDistance (AE: cm/in/m, 내부: 센티미터)
     static CapabilityOutAttrs out;
 };
 

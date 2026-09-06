@@ -330,9 +330,9 @@ cmds.maroAddCapability(childAxis, type="rotation")
 # 통과시키는지 확인한다.
 cmds.currentUnit(angle="deg")
 limitNode = cmds.maroAddCapability(childAxis, type="limit")[0]
-cmds.setAttr(limitNode + ".enableX", True)
-cmds.setAttr(limitNode + ".minX", -57.29578)  # -1 rad in degrees
-cmds.setAttr(limitNode + ".maxX", 57.29578)   # +1 rad in degrees
+cmds.setAttr(limitNode + ".axisDirection", 1, 0, 0, type="double3")
+cmds.setAttr(limitNode + ".min", -57.29578)  # -1 rad in degrees
+cmds.setAttr(limitNode + ".max", 57.29578)   # +1 rad in degrees
 
 flatAxes = cmds.maroListAxisNodes()
 axisRows = urdf.sliceAxisRows(flatAxes)

@@ -160,28 +160,14 @@ MStatus MaroRotationNode::compute(const MPlug& plug, MDataBlock& data) {
 }
 
 MTypeId MaroLimitNode::id(0x00135102);
-MObject MaroLimitNode::aEnableX;
-MObject MaroLimitNode::aEnableY;
-MObject MaroLimitNode::aEnableZ;
-MObject MaroLimitNode::aMinX;
-MObject MaroLimitNode::aMaxX;
-MObject MaroLimitNode::aMinY;
-MObject MaroLimitNode::aMaxY;
-MObject MaroLimitNode::aMinZ;
-MObject MaroLimitNode::aMaxZ;
+MObject MaroLimitNode::aAxisDirection;
+MObject MaroLimitNode::aMin;
+MObject MaroLimitNode::aMax;
 CapabilityOutAttrs MaroLimitNode::out;
 
 void* MaroLimitNode::creator() { return new MaroLimitNode(); }
 
 namespace {
-MObject makeBool(MFnNumericAttribute& fn, const char* longName,
-                 const char* shortName) {
-    MObject attr = fn.create(longName, shortName, MFnNumericData::kBoolean, 0);
-    fn.setStorable(true);
-    fn.setKeyable(true);
-    return attr;
-}
-
 // Angle unit attributes. The default is expressed via MAngle so the
 // intent ("+/-180 degrees") reads directly in code instead of as a
 // repeated-digit radian literal.
@@ -198,31 +184,24 @@ MStatus MaroLimitNode::initialize() {
     MFnNumericAttribute numFn;
     MFnUnitAttribute angFn;
 
-    aEnableX = makeBool(numFn, "enableX", "enx");
-    addAttribute(aEnableX);
-    aEnableY = makeBool(numFn, "enableY", "eny");
-    addAttribute(aEnableY);
-    aEnableZ = makeBool(numFn, "enableZ", "enz");
-    addAttribute(aEnableZ);
+    // 2026-09-07 재설계: 캘리브레이션 UI(뷰포트 2점 클릭)가 이 방향을
+    // 채운다. 기본값 (0,0,1)은 "아직 캘리브레이션되지 않음"을 뜻하는
+    // 플레이스홀더일 뿐 어떤 특정 관례도 아니다.
+    aAxisDirection = numFn.createPoint("axisDirection", "axd");
+    numFn.setStorable(true);
+    numFn.setKeyable(true);
+    numFn.setDefault(0.0f, 0.0f, 1.0f);
+    addAttribute(aAxisDirection);
 
-    aMinX = makeAngle(angFn, "minX", "mnx", MAngle(-180.0, MAngle::kDegrees));
-    addAttribute(aMinX);
-    aMaxX = makeAngle(angFn, "maxX", "mxx", MAngle(180.0, MAngle::kDegrees));
-    addAttribute(aMaxX);
-    aMinY = makeAngle(angFn, "minY", "mny", MAngle(-180.0, MAngle::kDegrees));
-    addAttribute(aMinY);
-    aMaxY = makeAngle(angFn, "maxY", "mxy", MAngle(180.0, MAngle::kDegrees));
-    addAttribute(aMaxY);
-    aMinZ = makeAngle(angFn, "minZ", "mnz", MAngle(-180.0, MAngle::kDegrees));
-    addAttribute(aMinZ);
-    aMaxZ = makeAngle(angFn, "maxZ", "mxz", MAngle(180.0, MAngle::kDegrees));
-    addAttribute(aMaxZ);
+    aMin = makeAngle(angFn, "min", "mn", MAngle(-180.0, MAngle::kDegrees));
+    addAttribute(aMin);
+    aMax = makeAngle(angFn, "max", "mx", MAngle(180.0, MAngle::kDegrees));
+    addAttribute(aMax);
 
     createCapabilityOut(out);
     addAttribute(out.compound);
 
-    for (const MObject& src : {aEnableX, aEnableY, aEnableZ, aMinX, aMaxX,
-                               aMinY, aMaxY, aMinZ, aMaxZ}) {
+    for (const MObject& src : {aAxisDirection, aMin, aMax}) {
         attributeAffects(src, out.compound);
     }
     return MS::kSuccess;
@@ -237,22 +216,22 @@ MStatus MaroLimitNode::compute(const MPlug& plug, MDataBlock& data) {
         MDataHandle handle = data.outputValue(out.compound);
         handle.child(out.type).setShort(1);   // 1 = limit
 
-        handle.child(out.enable).set3Short(
-            static_cast<short>(data.inputValue(aEnableX).asBool()),
-            static_cast<short>(data.inputValue(aEnableY).asBool()),
-            static_cast<short>(data.inputValue(aEnableZ).asBool()));
+        // 2026-09-07 재설계: 이 노드는 더 이상 "어느 축"인지 모른다(임의의
+        // 커스텀 축 하나뿐이다). MaroAxisNode::compute()는 여전히
+        // conventionAxis로 capMin/capMax/capEnable의 x/y/z 중 한 성분만
+        // 골라 읽는다(src/maro_plugin/MaroAxisNode.cpp:296-307) -- 그
+        // 코드를 한 글자도 바꾸지 않기 위해, 세 성분 모두에 똑같은 값을
+        // broadcast한다. capEnable도 항상 (1,1,1)이다: 새 스키마엔 "축별
+        // enable" 개념이 없다 -- capability 슬롯이 connected면 항상 활성.
+        handle.child(out.enable).set3Short(1, 1, 1);
 
         // .asAngle().asRadians() is explicit about the unit; the compound
         // children they feed (capMin/capMax) are plain doubles carrying
         // radians.
-        handle.child(out.minimum).set3Double(
-            data.inputValue(aMinX).asAngle().asRadians(),
-            data.inputValue(aMinY).asAngle().asRadians(),
-            data.inputValue(aMinZ).asAngle().asRadians());
-        handle.child(out.maximum).set3Double(
-            data.inputValue(aMaxX).asAngle().asRadians(),
-            data.inputValue(aMaxY).asAngle().asRadians(),
-            data.inputValue(aMaxZ).asAngle().asRadians());
+        const double minRad = data.inputValue(aMin).asAngle().asRadians();
+        const double maxRad = data.inputValue(aMax).asAngle().asRadians();
+        handle.child(out.minimum).set3Double(minRad, minRad, minRad);
+        handle.child(out.maximum).set3Double(maxRad, maxRad, maxRad);
 
         data.setClean(plug);
         return MS::kSuccess;
@@ -420,22 +399,15 @@ MStatus MaroTranslationNode::compute(const MPlug& plug, MDataBlock& data) {
 }
 
 MTypeId MaroTranslationLimitNode::id(0x00135108);
-MObject MaroTranslationLimitNode::aEnableX;
-MObject MaroTranslationLimitNode::aEnableY;
-MObject MaroTranslationLimitNode::aEnableZ;
-MObject MaroTranslationLimitNode::aMinX;
-MObject MaroTranslationLimitNode::aMaxX;
-MObject MaroTranslationLimitNode::aMinY;
-MObject MaroTranslationLimitNode::aMaxY;
-MObject MaroTranslationLimitNode::aMinZ;
-MObject MaroTranslationLimitNode::aMaxZ;
+MObject MaroTranslationLimitNode::aAxisDirection;
+MObject MaroTranslationLimitNode::aMin;
+MObject MaroTranslationLimitNode::aMax;
 CapabilityOutAttrs MaroTranslationLimitNode::out;
 
 void* MaroTranslationLimitNode::creator() { return new MaroTranslationLimitNode(); }
 
 namespace {
-// 거리 단위 어트리뷰트 헬퍼. 위 makeAngle/makeBool과 같은 관례 --
-// 의도(기본 범위)가 반복되는 리터럴 대신 named MDistance로 읽힌다.
+// 거리 단위 어트리뷰트 헬퍼. 위 makeAngle과 같은 관례.
 MObject makeDistance(MFnUnitAttribute& fn, const char* longName,
                      const char* shortName, const MDistance& value) {
     MObject attr = fn.create(longName, shortName, value);
@@ -449,33 +421,23 @@ MStatus MaroTranslationLimitNode::initialize() {
     MFnNumericAttribute numFn;
     MFnUnitAttribute distFn;
 
-    aEnableX = makeBool(numFn, "enableX", "enx");
-    addAttribute(aEnableX);
-    aEnableY = makeBool(numFn, "enableY", "eny");
-    addAttribute(aEnableY);
-    aEnableZ = makeBool(numFn, "enableZ", "enz");
-    addAttribute(aEnableZ);
+    aAxisDirection = numFn.createPoint("axisDirection", "axd");
+    numFn.setStorable(true);
+    numFn.setKeyable(true);
+    numFn.setDefault(0.0f, 0.0f, 1.0f);
+    addAttribute(aAxisDirection);
 
     // 기본 범위 +-10cm -- maroLimit의 +-180도와 같은 성격의 "합리적인 전체
     // 범위" 기본값, 특정 로봇 스펙을 반영하지 않는다.
-    aMinX = makeDistance(distFn, "minX", "mnx", MDistance(-10.0, MDistance::kCentimeters));
-    addAttribute(aMinX);
-    aMaxX = makeDistance(distFn, "maxX", "mxx", MDistance(10.0, MDistance::kCentimeters));
-    addAttribute(aMaxX);
-    aMinY = makeDistance(distFn, "minY", "mny", MDistance(-10.0, MDistance::kCentimeters));
-    addAttribute(aMinY);
-    aMaxY = makeDistance(distFn, "maxY", "mxy", MDistance(10.0, MDistance::kCentimeters));
-    addAttribute(aMaxY);
-    aMinZ = makeDistance(distFn, "minZ", "mnz", MDistance(-10.0, MDistance::kCentimeters));
-    addAttribute(aMinZ);
-    aMaxZ = makeDistance(distFn, "maxZ", "mxz", MDistance(10.0, MDistance::kCentimeters));
-    addAttribute(aMaxZ);
+    aMin = makeDistance(distFn, "min", "mn", MDistance(-10.0, MDistance::kCentimeters));
+    addAttribute(aMin);
+    aMax = makeDistance(distFn, "max", "mx", MDistance(10.0, MDistance::kCentimeters));
+    addAttribute(aMax);
 
     createCapabilityOut(out);
     addAttribute(out.compound);
 
-    for (const MObject& src : {aEnableX, aEnableY, aEnableZ, aMinX, aMaxX,
-                               aMinY, aMaxY, aMinZ, aMaxZ}) {
+    for (const MObject& src : {aAxisDirection, aMin, aMax}) {
         attributeAffects(src, out.compound);
     }
     return MS::kSuccess;
@@ -490,19 +452,13 @@ MStatus MaroTranslationLimitNode::compute(const MPlug& plug, MDataBlock& data) {
         MDataHandle handle = data.outputValue(out.compound);
         handle.child(out.type).setShort(5);   // 5 = translationLimit
 
-        handle.child(out.enable).set3Short(
-            static_cast<short>(data.inputValue(aEnableX).asBool()),
-            static_cast<short>(data.inputValue(aEnableY).asBool()),
-            static_cast<short>(data.inputValue(aEnableZ).asBool()));
+        // MaroLimitNode::compute()와 같은 broadcast 이유(위 주석 참고).
+        handle.child(out.enable).set3Short(1, 1, 1);
 
-        handle.child(out.minimum).set3Double(
-            data.inputValue(aMinX).asDistance().asCentimeters(),
-            data.inputValue(aMinY).asDistance().asCentimeters(),
-            data.inputValue(aMinZ).asDistance().asCentimeters());
-        handle.child(out.maximum).set3Double(
-            data.inputValue(aMaxX).asDistance().asCentimeters(),
-            data.inputValue(aMaxY).asDistance().asCentimeters(),
-            data.inputValue(aMaxZ).asDistance().asCentimeters());
+        const double minCm = data.inputValue(aMin).asDistance().asCentimeters();
+        const double maxCm = data.inputValue(aMax).asDistance().asCentimeters();
+        handle.child(out.minimum).set3Double(minCm, minCm, minCm);
+        handle.child(out.maximum).set3Double(maxCm, maxCm, maxCm);
 
         data.setClean(plug);
         return MS::kSuccess;
