@@ -440,16 +440,46 @@ class MaroSingleObjectNodeEditor(QtWidgets.QWidget):
         picker.show()
 
     def mouseDoubleClickEvent(self, event):
+        # [설계 스펙 2026-09-07 §2] 기존 펼치기/접기 토글은 그대로 두고,
+        # 지금까지 무반응이던 지점에만 상세 설정 열기를 추가한다:
+        #  - 펼친 상태에서 특정 행 더블클릭 -> 그 행의 상세 패널 (신규)
+        #  - 펼친 상태에서 행이 아닌 곳(중앙 노드 등) 더블클릭 -> 접기 (기존과 동일)
+        #  - 접힌 상태, capability 2개 이상 -> 펼치기 (기존과 동일, 위치 무관)
+        #  - 접힌 상태, capability 정확히 1개 -> 그 하나의 상세 패널 (신규,
+        #    기존엔 이 클릭이 무동작이었다)
         try:
             rows = self._capabilityRows()
             connected = [r for r in rows if r["connected"]]
-            if len(connected) >= 2:
-                self._expanded = not self._expanded
-                if not self._expanded:
-                    # 접으면 선택도 함께 푼다 -- 안 보이는 행이 선택된 채로
-                    # 남으면 Delete가 화면에 없는 것을 지운다.
-                    self._selectedCapabilityIndex = None
+
+            if self._expanded:
+                pos = event.position()
+                for logicalIndex, itemRect in self._expandedRowRects(rows):
+                    if itemRect.contains(pos):
+                        for row in rows:
+                            if row["logicalIndex"] == logicalIndex and row["connected"]:
+                                self._openCapabilityDetail(row["capabilityNodeName"])
+                                return
+                # 행이 아닌 곳을 더블클릭하면 기존처럼 접는다.
+                self._expanded = False
+                self._selectedCapabilityIndex = None
                 self.update()
+                return
+
+            if len(connected) >= 2:
+                self._expanded = True
+                self.update()
+                return
+
+            if len(connected) == 1:
+                self._openCapabilityDetail(connected[0]["capabilityNodeName"])
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
+
+    def _openCapabilityDetail(self, capabilityNodeName):
+        try:
+            import maroCapabilityPanel
+            maroCapabilityPanel.openCapabilityPanel(capabilityNodeName)
         except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
             import traceback
             traceback.print_exc()
