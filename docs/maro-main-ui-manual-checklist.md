@@ -1304,3 +1304,80 @@ Arnold가 라이선스된 인터랙티브 Maya 2026에서, `maro.mll`을 로드�
 > 것이지 실제 Qt 버튼 클릭을 통한 것은 아니다 — 버튼 클릭 자체는
 > 여전히 PySide6/GUI가 필요해 이 환경(대화형 GUI Maya 없음)에서는
 > 검증할 수 없다.
+
+## 카파빌리티 노드 상세 설정 UI + Limit/TranslationLimit 캘리브레이션 (2026-09-07 설계) — **[필수 · go/no-go]**
+
+설계 스펙 `docs/superpowers/specs/2026-09-07-maro-capability-node-detail-settings-design.md`,
+구현 플랜 `docs/superpowers/plans/2026-09-07-maro-capability-node-detail-settings.md`.
+이 절 위쪽에 이미 문서화된 것과 같은 이유(mayapy 배치에는
+`QApplication`이 아니라 `QGuiApplication`만 있어 `QWidget`을 하나라도
+만들면 프로세스가 abort한다)로, 7개 상세 설정 패널과 SONE 더블클릭의
+실제 Qt 동작, 그리고 캘리브레이션의 뷰포트 클릭/매니퍼레이터 조작은
+배치 모드로 원리적으로 확인 불가능하다. 자동화 테스트는 `CalibrationSession`
+(순수 Maya 커맨드, Qt 없음)과 순수 함수, factory 매핑까지만 검증했다
+(`tests/maya/test_limit_calibration_pure.py`,
+`tests/maya/test_limit_calibration_session.py`,
+`tests/maya/test_capability_panel.py` — 전부 그린).
+
+### SONE 더블클릭 3분기
+
+- [ ] capability 정확히 1개인 축의 SONE을 열고 중앙 노드를 더블클릭 --
+      그 capability의 상세 설정 창이 열리는지 확인한다.
+- [ ] capability 2개 이상인 축의 SONE에서 중앙 노드를 더블클릭 -- 기존과
+      동일하게 드롭다운이 펼쳐지고(상세 창은 열리지 않음) 확인한다.
+- [ ] 펼친 드롭다운의 특정 행을 더블클릭 -- 그 행의 capability 상세 설정
+      창이 열리고, 드롭다운은 펼쳐진 채로 유지되는지 확인한다.
+- [ ] 펼친 상태에서 행이 아닌 중앙 노드를 더블클릭 -- 기존처럼 접히는지
+      확인한다(회귀 없음).
+
+### 7개 상세 설정 패널
+
+- [ ] Rotation/Translation/SensorDirection/SensorRange/Coupling/Limit/
+      TranslationLimit 각각을 열어 필드 값을 바꾸고 "적용"을 눌러
+      Attribute Editor에서 실제로 반영됐는지 확인한다.
+- [ ] Limit/TranslationLimit 패널의 axisDirection 필드를 바꿔보고, 읽기전용
+      "ROS axis" 라벨이 `mayaDirectionToRos()`(x,-z,y 재배치) 값으로
+      실시간 갱신되는지 확인한다.
+- [ ] Coupling 패널의 "소스 축 재지정" 버튼으로 다른 축을 골라 재연결한다
+      -- SONE의 기존 1회성 피커와 별개로, 언제든 다시 쓸 수 있는지 확인한다.
+- [ ] 같은 노드에 대해 패널을 두 번 열면 같은 창이 앞으로 나오는지(새
+      창이 중복 생성되지 않는지) 확인한다.
+- [ ] `maro` 플러그인을 언로드한다 -- 7개 패널 중 아무거나 열어 둔 채로
+      언로드해도 크래시 없이 창이 정리되는지 확인한다.
+
+### Limit 회전 캘리브레이션 전체 플로우
+
+- [ ] `maroAxis`를 만들고 `maroRotation` + `maroLimit`을 얹은 뒤 씬의
+      오브젝트에 `maroBindAxis`로 바인딩한다.
+- [ ] Limit 상세 설정 창에서 "움직임범위설정"을 누르고, 뷰포트에서 오브젝트
+      표면/버텍스 두 점을 클릭한다 -- 헬퍼 로케이터가 그 방향으로
+      생성되고 Rotate 툴이 자동으로 켜지는지 확인한다.
+- [ ] 헬퍼 로케이터의 Z축 링을 드래그해 오브젝트가 그 축을 기준으로
+      스윙하는지 확인한다.
+- [ ] HUD 창에 현재 각도와 누적 범위가 실시간으로 갱신되는지 확인한다.
+- [ ] 한쪽으로 돌리고 Collect(버튼), 반대쪽으로 더 돌리고 Collect
+      (스페이스바) -- 누적 범위가 두 극값을 모두 포함하도록 넓어지는지
+      확인한다. 스페이스바를 눌렀을 때 Maya 뷰포트의 기본 hotbox가 함께
+      뜨지 않는지(HUD 창에 포커스가 있을 때만 Collect가 반응하는지)도
+      확인한다.
+- [ ] "완료"를 누르면 헬퍼 로케이터/HUD가 정리되고, 오브젝트가 캘리브레이션
+      시작 전과 같은 커넥션/포즈로 돌아오는지(`maroRotation.angle`을
+      바꿔 보면서 여전히 정상 구동되는지) 확인한다.
+- [ ] Limit 상세 설정 창에 최종 min/max와 축 방향이 반영됐는지 확인한다.
+- [ ] 캘리브레이션 도중(HUD가 떠 있는 상태) 창의 X 버튼으로 강제로 닫아도
+      같은 정리가 일어나는지 확인한다.
+- [ ] 캘리브레이션 도중 `maro` 플러그인을 언로드해 본다 -- 헬퍼
+      로케이터/임시 상태가 안전하게 정리되고 크래시가 없는지 확인한다
+      (이 프로젝트가 반복적으로 겪은 "뷰포트가 붙잡은 오브젝트가 언로드
+      시점에 살아있는" 위험군).
+
+### TranslationLimit 이동 캘리브레이션
+
+- [ ] 위와 동일한 플로우를 `maroTranslation` + `maroTranslationLimit`
+      조합으로 반복한다 -- Move 툴이 켜지고, HUD가 cm 단위로 표시되고,
+      완료 후 커넥션이 복원되는지 확인한다.
+
+### 종합 판정
+
+- [ ] 위 4개 절이 전부 PASS면 이 기능은 go. 하나라도 FAIL이면 그 항목을
+      구체적 재현 절차와 함께 이 문서에 기록하고 후속 세션에서 처리한다.
