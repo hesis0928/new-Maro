@@ -8,6 +8,8 @@ axisBasisEulerXYZ/expandRange/mayaDirectionToRos)은 Maya 씬 상태에
 import math
 
 import maya.api.OpenMaya as om2
+import maya.cmds as cmds
+from PySide6 import QtCore, QtGui, QtWidgets
 
 
 def axisDirectionFromPoints(pointA, pointB):
@@ -59,3 +61,212 @@ def mayaDirectionToRos(direction):
     벡터는 단위 없는 순수 방향이므로 씬 단위 스케일을 적용하지 않는다."""
     x, y, z = direction
     return (x, -z, y)
+
+
+_CHANNELS_ROTATE = ("rotateX", "rotateY", "rotateZ")
+_CHANNELS_TRANSLATE = ("translateX", "translateY", "translateZ")
+
+
+class CalibrationSession:
+    """Limit(회전)/TranslationLimit(이동) 공유 캘리브레이션 리그.
+
+    start()가 헬퍼 로케이터를 만들어 axisDirection 방향으로 정렬하고,
+    대상의 회전(또는 이동) 채널을 DG 커넥션에서 임시로 끊은 뒤 헬퍼
+    로케이터 밑에 부모로 넣는다. 사용자는 Maya 네이티브 Rotate(또는
+    Move) 툴로 헬퍼 로케이터의 로컬 Z 축만 조작하면 되고, currentValue()는
+    그 rotateZ(또는 translateZ)를 그대로 읽는다 -- 별도의 축-각 투영
+    수식이 필요 없다(헬퍼 로케이터 자체가 그 축으로 정렬돼 있으므로).
+
+    finish()/cancel()은 항상 같은 _cleanup()을 거쳐 원래 커넥션/부모/값을
+    복원한다 -- 어느 경로로 세션이 끝나든(정상 완료, 사용자 취소, HUD
+    창을 강제로 닫음, 예외) 반드시 이 복원이 실행되도록 호출부(HUD/패널)가
+    try/finally로 감싼다.
+    """
+
+    def __init__(self):
+        self._helper = None
+        self._target = None
+        self._channels = None
+        self._isLinear = False
+        self._originalSources = None   # [str|None, str|None, str|None]
+        self._originalParent = None    # str|None
+        self._originalValues = None    # [float, float, float]
+        self._min = 0.0
+        self._max = 0.0
+        self._cleaned = True
+
+    def helperLocator(self):
+        return self._helper
+
+    def start(self, targetTransform, axisDirection, pivotWorld, isLinear=False):
+        if not self._cleaned:
+            raise RuntimeError("CalibrationSession.start() called while already active")
+
+        self._target = targetTransform
+        self._channels = _CHANNELS_TRANSLATE if isLinear else _CHANNELS_ROTATE
+        self._isLinear = isLinear
+        self._min = 0.0
+        self._max = 0.0
+
+        # 1) 원래 커넥션/값을 전부 캡처한다 -- 하나라도 놓치면 복원이
+        #    불완전해지므로 세 채널 모두 항상 캡처한다.
+        self._originalSources = []
+        self._originalValues = []
+        for channel in self._channels:
+            plug = "{}.{}".format(self._target, channel)
+            sources = cmds.listConnections(plug, source=True, destination=False, plugs=True)
+            self._originalSources.append(sources[0] if sources else None)
+            self._originalValues.append(cmds.getAttr(plug))
+
+        parents = cmds.listRelatives(self._target, parent=True, fullPath=True)
+        self._originalParent = parents[0] if parents else None
+
+        # 2) 커넥션을 끊는다(있는 것만) -- 그래야 자유롭게 재배선 가능.
+        for channel, source in zip(self._channels, self._originalSources):
+            if source is not None:
+                cmds.disconnectAttr(source, "{}.{}".format(self._target, channel))
+
+        # 3) 헬퍼 로케이터를 만들어 axisDirection으로 정렬하고 pivotWorld에 둔다.
+        self._helper = cmds.spaceLocator(name="maroCalibHelper#")[0]
+        rx, ry, rz = axisBasisEulerXYZ(axisDirection)
+        cmds.setAttr(self._helper + ".rotate", rx, ry, rz, type="double3")
+        cmds.xform(self._helper, worldSpace=True, translation=pivotWorld)
+
+        # 4) 대상을 헬퍼 로케이터 밑으로(월드 포즈 보존 -- 커넥션을 이미
+        #    끊었으므로 회전/이동 채널이 자유라 이 재배선이 가능하다).
+        cmds.parent(self._target, self._helper)
+
+        self._cleaned = False
+
+    def currentValue(self):
+        channel = "translateZ" if self._isLinear else "rotateZ"
+        return cmds.getAttr("{}.{}".format(self._helper, channel))
+
+    def collect(self):
+        sample = self.currentValue()
+        self._min, self._max = expandRange(self._min, self._max, sample)
+        return (self._min, self._max)
+
+    def rangeSoFar(self):
+        return (self._min, self._max)
+
+    def finish(self):
+        self._cleanup()
+        return (self._min, self._max)
+
+    def cancel(self):
+        self._cleanup()
+
+    def _cleanup(self):
+        if self._cleaned:
+            return
+        try:
+            # 부모 복원(대상을 헬퍼 로케이터 밖으로) -- 헬퍼를 지우기 전에
+            # 반드시 먼저 해야 대상이 함께 삭제되지 않는다.
+            if self._originalParent is not None:
+                cmds.parent(self._target, self._originalParent)
+            else:
+                cmds.parent(self._target, world=True)
+        except Exception:  # noqa: BLE001 -- 정리 경로는 절대 못 넘어가면 안 된다
+            import traceback
+            traceback.print_exc()
+
+        try:
+            if self._helper is not None and cmds.objExists(self._helper):
+                cmds.delete(self._helper)
+        except Exception:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+
+        for channel, value, source in zip(self._channels, self._originalValues,
+                                          self._originalSources):
+            plug = "{}.{}".format(self._target, channel)
+            try:
+                if source is None:
+                    cmds.setAttr(plug, value)
+                else:
+                    cmds.connectAttr(source, plug, force=True)
+            except Exception as exc:  # noqa: BLE001 -- 복원 실패는 조용히 삼키지 않는다
+                cmds.warning(
+                    "Maro: failed to restore {} (original source {!r}): {}".format(
+                        plug, source, exc))
+
+        self._cleaned = True
+
+
+class CalibrationHud(QtWidgets.QWidget):
+    """캘리브레이션 세션의 작은 실시간 안내 창. 스페이스바는 이 창에
+    포커스가 있을 때만 Collect를 트리거한다(QtCore.Qt.WidgetWithChildrenShortcut) --
+    Maya 뷰포트의 기본 스페이스바(hotbox) 동작과 절대 충돌하지 않는다.
+    """
+
+    def __init__(self, session, unitLabel, onCollect, onFinish, parent=None):
+        super().__init__(parent, QtCore.Qt.Tool | QtCore.Qt.WindowStaysOnTopHint)
+        self._session = session
+        self._onCollectCallback = onCollect
+        self._onFinishCallback = onFinish
+        self.setWindowTitle("Maro 캘리브레이션")
+
+        layout = QtWidgets.QVBoxLayout(self)
+        self._valueLabel = QtWidgets.QLabel("")
+        layout.addWidget(self._valueLabel)
+        self._rangeLabel = QtWidgets.QLabel("")
+        layout.addWidget(self._rangeLabel)
+
+        collectButton = QtWidgets.QPushButton("Collect (Space)")
+        collectButton.clicked.connect(self._onCollect)
+        layout.addWidget(collectButton)
+
+        finishButton = QtWidgets.QPushButton("완료")
+        finishButton.clicked.connect(self._onFinish)
+        layout.addWidget(finishButton)
+
+        shortcut = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Space), self)
+        shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self._onCollect)
+
+        self._unitLabel = unitLabel
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self._refresh)
+        self._timer.start(50)
+        self._refresh()
+
+    def _refresh(self):
+        try:
+            value = self._session.currentValue()
+            self._valueLabel.setText("현재: {:.3f} {}".format(value, self._unitLabel))
+            mn, mx = self._session.rangeSoFar()
+            self._rangeLabel.setText("누적 범위: [{:.3f}, {:.3f}] {}".format(
+                mn, mx, self._unitLabel))
+        except Exception:  # noqa: BLE001 -- QTimer 콜백 경계
+            import traceback
+            traceback.print_exc()
+
+    def _onCollect(self):
+        try:
+            self._onCollectCallback()
+            self._refresh()
+        except Exception:  # noqa: BLE001 -- Qt 콜백 경계
+            import traceback
+            traceback.print_exc()
+
+    def _onFinish(self):
+        try:
+            self._timer.stop()
+            self._onFinishCallback()
+            self.close()
+        except Exception:  # noqa: BLE001 -- Qt 콜백 경계
+            import traceback
+            traceback.print_exc()
+
+    def closeEvent(self, event):
+        # 사용자가 완료 버튼이 아니라 창의 X 버튼으로 닫아도 같은 정리가
+        # 일어나야 한다 -- onFinishCallback이 세션의 finish()를 부르므로
+        # 중복 호출은 CalibrationSession._cleaned 가드가 흡수한다.
+        try:
+            self._timer.stop()
+            self._onFinishCallback()
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
+        super().closeEvent(event)

@@ -1526,11 +1526,11 @@ session = calib.CalibrationSession()
 session.start(freeCube, axisDirection=(0.0, 1.0, 0.0),
               pivotWorld=(0.0, 0.0, 0.0), isLinear=False)
 assert abs(session.currentValue()) < 1e-9, "must start at 0"
-cmds.setAttr(session.helperLocator() + ".rotateY", 30.0)
+cmds.setAttr(session.helperLocator() + ".rotateZ", 30.0)
 assert abs(session.currentValue() - 30.0) < 1e-6, session.currentValue()
 mn, mx = session.collect()
 assert abs(mn - 0.0) < 1e-6 and abs(mx - 30.0) < 1e-6, (mn, mx)
-cmds.setAttr(session.helperLocator() + ".rotateY", -10.0)
+cmds.setAttr(session.helperLocator() + ".rotateZ", -10.0)
 mn, mx = session.collect()
 assert abs(mn - (-10.0)) < 1e-6 and abs(mx - 30.0) < 1e-6, (mn, mx)
 session.finish()
@@ -1557,7 +1557,7 @@ sessionConn.start(boundCube, axisDirection=(0.0, 1.0, 0.0),
 assert cmds.listConnections(boundCube + ".rotateY", source=True, destination=False,
                             plugs=True) in (None, []), \
     "rotateY must be disconnected during calibration"
-cmds.setAttr(sessionConn.helperLocator() + ".rotateY", 15.0)
+cmds.setAttr(sessionConn.helperLocator() + ".rotateZ", 15.0)
 sessionConn.collect()
 sessionConn.finish()
 

@@ -236,6 +236,99 @@ class MaroLimitPanel(_AxisLimitPanelBase):
         ("max", "Max (deg)", "float"),
     ]
 
+    def _buildExtra(self):
+        super()._buildExtra()
+        calibrateButton = QtWidgets.QPushButton("움직임범위설정")
+        calibrateButton.clicked.connect(self._onCalibrate)
+        self._layout.addRow(calibrateButton)
+        self._calibrationSession = None
+        self._calibrationHud = None
+
+    def _onCalibrate(self):
+        try:
+            if self._calibrationSession is not None:
+                cmds.warning("Maro: a calibration session is already running for this node.")
+                return
+            targetAxes = cmds.listConnections(self._node + ".capabilityOut", destination=True,
+                                              source=False, shapes=True) or []
+            if not targetAxes:
+                cmds.warning(
+                    "Maro: this Limit node is not connected to any axis yet -- "
+                    "connect it via SONE before calibrating.")
+                return
+            boundTargets = cmds.listConnections(targetAxes[0] + ".targetObject",
+                                                source=True, destination=False, shapes=False) or []
+            if not boundTargets:
+                cmds.warning(
+                    "Maro: this axis is not bound to a scene object yet -- "
+                    "use maroBindAxis before calibrating.")
+                return
+            target = cmds.ls(boundTargets[0], long=True)[0]
+
+            self._pickedPoints = []
+            picker = cmds.scriptCtx(
+                title="Maro: 축 방향 지정 -- 두 점을 클릭",
+                toolFinish=self._onAxisPickFinish,
+                totalSelectionSets=2,
+                setSelectionAction=lambda: self._onAxisPointPicked(target))
+            cmds.setToolTo(picker)
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
+
+    def _onAxisPointPicked(self, target):
+        try:
+            hits = cmds.filterExpand(cmds.ls(selection=True), selectionMask=(28, 31, 46))
+            if not hits:
+                return
+            pos = cmds.pointPosition(hits[0], world=True)
+            self._pickedPoints.append(tuple(pos))
+            if len(self._pickedPoints) == 2:
+                self._startCalibrationSession(target)
+        except Exception:  # noqa: BLE001 -- Maya scriptCtx 콜백 경계
+            import traceback
+            traceback.print_exc()
+
+    def _onAxisPickFinish(self):
+        # 2점을 다 못 고르고 툴이 끝났으면(Esc 등) 아무 일도 없었던 것으로.
+        self._pickedPoints = []
+
+    def _startCalibrationSession(self, target):
+        axisDirection = maroLimitCalibration.axisDirectionFromPoints(
+            self._pickedPoints[0], self._pickedPoints[1])
+        pivotWorld = cmds.xform(target, query=True, rotatePivot=True, worldSpace=True)
+
+        self._calibrationSession = maroLimitCalibration.CalibrationSession()
+        self._calibrationSession.start(target, axisDirection, pivotWorld, isLinear=False)
+        cmds.select(self._calibrationSession.helperLocator())
+        cmds.setToolTo("RotateSuperContext")
+
+        self._calibrationHud = maroLimitCalibration.CalibrationHud(
+            self._calibrationSession, "deg", self._onCalibrationCollect,
+            self._onCalibrationFinish, parent=self)
+        self._calibrationHud.show()
+
+    def _onCalibrationCollect(self):
+        self._calibrationSession.collect()
+
+    def _onCalibrationFinish(self):
+        if self._calibrationSession is None:
+            return
+        mn, mx = self._calibrationSession.finish()
+        cmds.undoInfo(openChunk=True)
+        try:
+            cmds.setAttr(self._node + ".min", mn)
+            cmds.setAttr(self._node + ".max", mx)
+            axisDir = maroLimitCalibration.axisDirectionFromPoints(
+                self._pickedPoints[0], self._pickedPoints[1])
+            cmds.setAttr(self._node + ".axisDirection", *axisDir, type="double3")
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        self._calibrationSession = None
+        self._calibrationHud = None
+        self._loadValues()
+        self._refreshRosAxisLabel()
+
 
 class MaroTranslationLimitPanel(_AxisLimitPanelBase):
     _ATTRS = [
