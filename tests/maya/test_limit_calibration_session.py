@@ -88,6 +88,31 @@ print("cancel() restores connection OK")
 sessionConn.finish()  # 이미 끝난 세션을 다시 finish해도 예외가 나면 안 된다
 print("idempotent cleanup OK")
 
+# (e) isLinear=True -- translateZ를 읽고, 커넥션 채널도 translateX/Y/Z.
+axisConnLin = cmds.createNode("maroAxis", name="calibConnAxisLin")
+transConnLin = cmds.createNode("maroTranslation", name="calibConnTransLin")
+cmds.connectAttr(transConnLin + ".capabilityOut", axisConnLin + ".capabilityIn[0]")
+cmds.setAttr(transConnLin + ".distance", 3.0)
+boundCubeLin = cmds.polyCube(name="boundCubeForCalibLin")[0]
+cmds.connectAttr(axisConnLin + ".positionLinear", boundCubeLin + ".translateY")
+originalSourceLin = cmds.listConnections(boundCubeLin + ".translateY", source=True,
+                                         destination=False, plugs=True)[0]
+
+sessionLin = calib.CalibrationSession()
+sessionLin.start(boundCubeLin, axisDirection=(0.0, 1.0, 0.0),
+                 pivotWorld=(0.0, 0.0, 0.0), isLinear=True)
+assert cmds.listConnections(boundCubeLin + ".translateY", source=True, destination=False,
+                            plugs=True) in (None, [])
+cmds.setAttr(sessionLin.helperLocator() + ".translateZ", 7.5)
+assert abs(sessionLin.currentValue() - 7.5) < 1e-6
+mn, mx = sessionLin.collect()
+assert abs(mn - 0.0) < 1e-6 and abs(mx - 7.5) < 1e-6
+sessionLin.finish()
+restoredSourceLin = cmds.listConnections(boundCubeLin + ".translateY", source=True,
+                                         destination=False, plugs=True)
+assert restoredSourceLin == [originalSourceLin]
+print("linear (TranslationLimit) calibration session OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
