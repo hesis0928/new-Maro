@@ -293,7 +293,7 @@ if(MARO_BUILD_PLUGIN)
                       dag_menu tech_diag point_cloud_node lidar_commands
                       lidar_menu lidar_multi_mesh skeleton_upload settings_panel synthetic_data_camera urdf_export
                       lidar_scan_query mesh_collision synthetic_data_point_cloud synthetic_data_render limit_calibration_pure
-                      limit_calibration_session)
+                      limit_calibration_session point_cloud_draw)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")

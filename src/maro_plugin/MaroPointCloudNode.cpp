@@ -1,6 +1,9 @@
 #include "MaroPointCloudNode.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 
 #include <maya/MColor.h>
 #include <maya/MDagPath.h>
@@ -161,7 +164,12 @@ MBoundingBox MaroPointCloudNode::boundingBox() const {
         MFnPointArrayData pointArrayDataFn(pointsData, &status);
         MPointArray points;
         if (status) {
-            points = pointArrayDataFn.array();
+            // array()가 아니라 copyTo(). 여기는 지역 변수 pointsData가 아직
+            // 살아 있는 같은 스코프라 array()로도 "우연히" 동작하지만,
+            // prepareForDraw()에서 정확히 그 차이가 use-after-free를 냈다
+            // (아래 주석 참고). 같은 파일 안에서 위험한 관용구와 안전한
+            // 관용구를 섞어 두지 않는다.
+            pointArrayDataFn.copyTo(points);
         }
 
         // 빈 배열이면 오비트 컬링을 피할 수 있는 작은 기본 박스를 준다 --
@@ -214,6 +222,22 @@ MStatus MaroPointCloudNode::preEvaluation(const MDGContext& context,
 
 namespace {
 
+// [진단, 2026-09-07] 드로우 오버라이드가 실제로 불리는지 세는 카운터.
+// GUI에서 "점이 전혀 안 그려진다"는 증상이 (a) 콜백이 아예 안 불리는
+// 것인지 (b) 불리는데 그리지 못하는 것인지 구분하려면 이게 필요하다.
+// Maya API를 부르지 않고 원자적 증가만 하므로 워커 스레드에서도 안전하다
+// (이 파일의 다른 주석이 경고하는 MGlobal::display* 금지 규칙과 무관).
+std::atomic<long> gPrepareForDrawCalls{0};
+std::atomic<long> gAddUIDrawablesCalls{0};
+std::atomic<long> gDrawOverridesCreated{0};
+std::atomic<long> gPointsDrawn{0};
+std::atomic<long> gBailCastFailed{0};
+std::atomic<long> gBailDisabled{0};
+std::atomic<long> gBailEmpty{0};
+std::atomic<long> gPrepNodeFnFailed{0};
+std::atomic<long> gPrepPointsFailed{0};
+std::atomic<long> gPrepPointsRead{0};
+
 class MaroPointCloudUserData : public MUserData {
 public:
     MaroPointCloudUserData() = default;
@@ -228,6 +252,7 @@ public:
 class MaroPointCloudDrawOverride : public MHWRender::MPxDrawOverride {
 public:
     static MHWRender::MPxDrawOverride* creator(const MObject& obj) {
+        ++gDrawOverridesCreated;
         return new MaroPointCloudDrawOverride(obj);
     }
 
@@ -261,6 +286,7 @@ public:
     MUserData* prepareForDraw(const MDagPath& objPath, const MDagPath& /*cameraPath*/,
                               const MHWRender::MFrameContext& /*frameContext*/,
                               MUserData* oldData) override {
+        ++gPrepareForDrawCalls;
         auto* data = dynamic_cast<MaroPointCloudUserData*>(oldData);
         if (!data) data = new MaroPointCloudUserData();
 
@@ -270,7 +296,10 @@ public:
         try {
             MStatus status;
             MFnDependencyNode nodeFn(objPath.node(&status));
-            if (!status) return data;
+            if (!status) {
+                ++gPrepNodeFnFailed;
+                return data;
+            }
 
             data->enabled = nodeFn.findPlug(maro::MaroPointCloudNode::aEnabled, false).asBool();
 
@@ -280,8 +309,22 @@ public:
             MStatus pointsStatus;
             MFnPointArrayData pointArrayDataFn(pointsData, &pointsStatus);
             if (pointsStatus) {
-                data->points = pointArrayDataFn.array();
+                // [실측으로 잡은 버그, 2026-09-07] 여기서 array()를 쓰면 안 된다.
+                // MFnPointArrayData::array()는 Maya 내부 데이터를 가리키는
+                // *참조*를 돌려주지, 복사본을 주지 않는다 -- 위의 지역 변수
+                // pointsData(MObject)와 pointArrayDataFn이 이 함수 끝에서
+                // 사라지면 그 참조는 무효가 된다. 그래서 prepareForDraw는
+                // 점 5개를 "읽었는데" 바로 다음에 불리는 addUIDrawables에서는
+                // points.length()가 0이었다(카운터로 실측 확인). 즉 이 노드가
+                // 뷰포트에 아무것도 안 그려지던 원인이고, 동시에 해제된
+                // Maya 버퍼를 계속 붙들고 있는 use-after-free라서 나중에
+                // 엉뚱한 곳에서 힙 손상 크래시로 터지던 원인이기도 하다
+                // (크래시 덤프의 폴트가 ntdll 힙 관리자 안이었던 이유).
+                // copyTo()가 실제 복사를 하는 접근자다.
+                pointArrayDataFn.copyTo(data->points);
+                gPrepPointsRead += static_cast<long>(data->points.length());
             } else {
+                ++gPrepPointsFailed;
                 data->points.clear();
             }
 
@@ -310,11 +353,22 @@ public:
                         const MUserData* data) override {
         // 여기서는 DG를 절대 건드리지 않는다 -- 필요한 값은 전부
         // prepareForDraw()가 MaroPointCloudUserData에 캐시해 뒀다(전역 제약).
+        ++gAddUIDrawablesCalls;
         try {
             const auto* pointCloudData = dynamic_cast<const MaroPointCloudUserData*>(data);
-            if (!pointCloudData || !pointCloudData->enabled || pointCloudData->points.length() == 0) {
+            if (!pointCloudData) {
+                ++gBailCastFailed;
                 return;
             }
+            if (!pointCloudData->enabled) {
+                ++gBailDisabled;
+                return;
+            }
+            if (pointCloudData->points.length() == 0) {
+                ++gBailEmpty;
+                return;
+            }
+            gPointsDrawn += static_cast<long>(pointCloudData->points.length());
             drawManager.beginDrawable();
             drawManager.setColor(pointCloudData->color);
             drawManager.setPointSize(static_cast<float>(pointCloudData->pointSize));
@@ -346,6 +400,23 @@ MStatus registerPointCloudDrawOverride() {
 }
 
 MStatus deregisterPointCloudDrawOverride() {
+    // [진단, 2026-09-07] MARO_TRACE_DRAW가 설정돼 있으면 이 세션에서
+    // 드로우 오버라이드가 몇 번 불렸는지 stderr로 남긴다. "안 그려진다"가
+    // 콜백 미호출인지 그리기 실패인지 구분하는 유일한 수단이다.
+    // Maya API가 아니라 fprintf만 쓰므로 언로드 경로에서 안전하다.
+    if (std::getenv("MARO_TRACE_DRAW") != nullptr) {
+        std::fprintf(stderr,
+                     "[maro-trace] pointCloud draw override: created=%ld "
+                     "prepareForDraw=%ld addUIDrawables=%ld pointsDrawn=%ld\n"
+                     "[maro-trace]   prepare: nodeFnFailed=%ld pointsFailed=%ld pointsRead=%ld\n"
+                     "[maro-trace]   bail: castFailed=%ld disabled=%ld empty=%ld\n",
+                     gDrawOverridesCreated.load(), gPrepareForDrawCalls.load(),
+                     gAddUIDrawablesCalls.load(), gPointsDrawn.load(),
+                     gPrepNodeFnFailed.load(), gPrepPointsFailed.load(),
+                     gPrepPointsRead.load(),
+                     gBailCastFailed.load(), gBailDisabled.load(), gBailEmpty.load());
+        std::fflush(stderr);
+    }
     return MHWRender::MDrawRegistry::deregisterDrawOverrideCreator(
         MaroPointCloudNode::kDrawDbClassification, MaroPointCloudNode::kDrawRegistrantId);
 }
