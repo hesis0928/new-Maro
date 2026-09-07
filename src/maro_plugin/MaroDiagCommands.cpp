@@ -348,6 +348,10 @@ MStatus MaroDiagQueryCommand::doIt(const MArgList& args) {
         // 뒤에 붙인다 -- 기존 테스트들이 위치 인덱스로 읽으므로 0~9는 그대로 둔다.
         result.append(MString(std::to_string(rec.sequence).c_str()));
         result.append(MString(std::to_string(rec.timestampMs).c_str()));
+        // 반드시 **끝에** 붙인다 -- 이 결과는 위치로 읽히는 평평한 배열이라
+        // 중간에 끼우면 기존 인덱스가 전부 한 칸씩 밀린다. 빈 문자열이
+        // 정상값이다(정책상 안 뜬 경우; MaroStackTrace.h 참고).
+        result.append(MString(rec.stackTrace.c_str()));
         setResult(result);
         return MS::kSuccess;
     } catch (const std::exception& e) {

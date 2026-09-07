@@ -294,7 +294,7 @@ if(MARO_BUILD_PLUGIN)
                       lidar_menu lidar_multi_mesh skeleton_upload settings_panel synthetic_data_camera urdf_export
                       lidar_scan_query mesh_collision synthetic_data_point_cloud synthetic_data_render limit_calibration_pure
                       limit_calibration_session axis_points_from_selection
-                      point_cloud_draw capability_panel_widgets)
+                      point_cloud_draw capability_panel_widgets diag_stacktrace)
         add_test(NAME maya_${maya_test}
                  COMMAND "${MAYAPY}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_${maya_test}.py")

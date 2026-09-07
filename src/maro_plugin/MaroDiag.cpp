@@ -11,6 +11,8 @@
 #include <thread>
 #include <utility>
 
+#include "MaroStackTrace.h"
+
 // 리뷰 Finding C1(리브니스): OpenProcess/WaitForSingleObject를 쓰려면
 // windows.h가 필요하다(isProcessRunning() 참고). 아래 currentProcessId()의
 // 주석이 말하는 "windows.h를 안 끌어오는 편이 낫다"는 판단은 _getpid()로
@@ -427,6 +429,13 @@ void BoadMaro::error(const std::string& siteTag, const MString& message,
         rec.context.activeCommand = onfix::activeCommand();
     }
 
+    // book 락을 잡기 **전에** 뜬다. 심볼화(dbgeng)는 수백 밀리초까지 갈 수
+    // 있는데 그동안 book 뮤텍스를 쥐고 있으면 다른 스레드의 error()가 통째로
+    // 막힌다 -- 이 함수의 기존 규율("락을 쥔 채로 비싼 일/재진입 가능한 일을
+    // 하지 않는다")과 같은 이유다. captureStackTrace()는 절대 던지지 않고,
+    // 뜨지 않기로 한 경우 빈 문자열을 준다(MaroStackTrace.h의 정책 주석).
+    rec.stackTrace = captureStackTrace(siteTag);
+
     // appendToSpill이 false를 돌려주면(book 디렉터리를 쓸 수 없는 등) true가
     // 된다. try/catch 밖, 아직 이 함수가 자신의 lock_guard를 잡기 전에
     // warnBookUnwritableOnce()를 부르기 위해 밖에 선언해 둔다.
@@ -740,6 +749,11 @@ void BoadMaro::resetForTest() {
     // 그대로 성립하므로 별도 락 없이도 안전하다(MaroDiag.h의 해당 주석에
     // 이 두 번째 쓰기를 함께 적어 뒀다).
     crashAdjacencyStorage() = CrashAdjacency{};
+    // 스택 트레이스 래치도 세션 상태다 -- "siteTag당 세션 1회"를 유지하는
+    // 집합이라, 안 비우면 리셋 뒤 첫 error()가 스택 없이 나온다. 이 함수의
+    // 독스트링이 경고하는 "새 상태를 여기 반영 안 하면 절반만 리셋된다"의
+    // 정확한 사례이므로 함께 비운다.
+    resetStackTraceLatchForTest();
 }
 
 // Task 9 Step 2: 감시자를 spawn하는 쪽(MaroSentinelClient.cpp)이 같은

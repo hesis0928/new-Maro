@@ -34,11 +34,14 @@ print("record emitted OK")
 rec = cmds.maroDiagQuery(index=0)
 # 리뷰 Finding C1: maroDiagQuery는 이제 priorAnalysis를 10번째 필드로
 # 덧붙인다 (기존 0~8 인덱스는 그대로다). Task 1에서 sequence, timestampMs를
-# 11, 12번째 필드로 더 덧붙였다 (기존 0~9 인덱스는 그대로다). 여기서는 그
-# 값들 자체를 쓰지 않으므로 이름 없이 풀어 둔다.
+# 11, 12번째 필드로 더 덧붙였다 (기존 0~9 인덱스는 그대로다). 2026-09-07에
+# stackTrace가 13번째로 또 덧붙었다 (기존 0~11은 그대로다). 새 필드는 언제나
+# 맨 끝에만 붙는다 -- 이 결과는 위치로 읽히므로 중간 삽입은 여기 언패킹을
+# 포함해 모든 소비자를 조용히 밀어낸다. 여기서는 그 값들 자체를 쓰지
+# 않으므로 이름 없이 풀어 둔다.
 (severity, message, errorHash, nodeType, attributeName, activeCommand,
  axisOrTarget, remedy, servedFromBook, _priorAnalysis, _sequence,
- _timestampMs) = rec
+ _timestampMs, _stackTrace) = rec
 
 assert severity == "error", f"expected severity 'error', got {severity!r}"
 assert nodeType == "pointLight", f"expected nodeType 'pointLight', got {nodeType!r}"

@@ -17,6 +17,7 @@ set(SOURCE_FILES
     MaroPump.cpp
     MaroCommandDeviceNode.cpp
     MaroDiag.cpp
+    MaroStackTrace.cpp
     MaroDiagCommands.cpp
     MaroPanelCommands.cpp
     MaroPythonBridge.cpp
@@ -76,6 +77,12 @@ target_link_libraries(${PROJECT_NAME} maro_transform)
 # 병렬성뿐이다.
 target_link_libraries(${PROJECT_NAME} maro_lidar)
 target_link_libraries(${PROJECT_NAME} maro_diag)
+# MaroStackTrace.cpp의 boost::stacktrace가 쓰는 MSVC 백엔드(frame_msvc.ipp)는
+# dbgeng(디버깅 엔진)를 COM으로 부른다 -- 그래서 이 둘이 필요하다. 둘 다
+# Windows SDK가 주는 시스템 라이브러리이고 배포할 DLL은 없다. Boost 자체는
+# 헤더 온리이며 Maya devkit이 devkitBase/include/boost로 이미 제공한다
+# (그래서 별도 include 경로도 필요 없다 -- <maya/...>와 같은 루트다).
+target_link_libraries(${PROJECT_NAME} dbgeng ole32)
 target_link_libraries(${PROJECT_NAME} maro_ipc)
 
 foreach(ros_lib rclcpp rcl rcutils rcpputils rmw rosidl_runtime_c

@@ -82,6 +82,17 @@ struct DiagRecord {
     // 갈 수 있고, 그때 순서가 흔들리면 연쇄의 앞뒤가 뒤집혀 원인 분석이
     // 통째로 반대가 된다. 형식화는 표시하는 쪽(Python)이 로컬 시간대로 한다.
     std::uint64_t timestampMs = 0;
+    // Error 심각도에서만, 그리고 정책이 허락할 때만 채워진다(자세한 조건은
+    // src/maro_plugin/MaroStackTrace.h). 빈 문자열이 정상값이며 "스택을 못
+    // 얻었다"가 아니라 "이번엔 뜨지 않기로 했다"는 뜻일 수 있다 -- 심볼화가
+    // 비싸서 siteTag당 세션 1회, 메인 스레드에서만 뜬다.
+    //
+    // 저널에는 안 나간다. JournalWriter::writeRecord()는 DiagRecord 전체가
+    // 아니라 부분집합(순번/시각/심각도/사이트태그/메시지)만 받는 계약이고,
+    // DgContext도 같은 이유로 인메모리에만 있다 -- 그 경계를 그대로 따른다.
+    // 세션 안에서 패널이 읽는 것이 이 필드의 용도다.
+    std::string stackTrace;
+
     // 이 발생에 대한 구조화된 해법. 없으면 RemedyActionKind::None(기본값).
     // book에서 오지 않는다 -- 위 RemedyAction.h의 주석 참고. 실패가 일어난
     // 자리(MaroCommands.cpp)가 이 발생의 살아있는 씬 상태로 직접 채운다.

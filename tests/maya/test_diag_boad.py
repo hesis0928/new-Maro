@@ -39,7 +39,9 @@ cmds.maroDiagEmit(severity="info", message="seq probe B")
 newer = cmds.maroDiagQuery(index=0)
 older = cmds.maroDiagQuery(index=1)
 
-assert len(newer) == 12, f"expected 12 fields from maroDiagQuery, got {len(newer)}"
+# 12 -> 13: 맨 끝에 stackTrace가 붙었다(2026-09-07). 새 필드는 반드시 끝에만
+# 붙인다 -- 이 결과는 위치로 읽히므로 중간 삽입은 기존 인덱스를 전부 밀어낸다.
+assert len(newer) == 13, f"expected 13 fields from maroDiagQuery, got {len(newer)}"
 
 seqNewer = int(newer[10])
 seqOlder = int(older[10])
