@@ -66,7 +66,19 @@ class MaroCapabilityPanelBase(QtWidgets.QWidget):
         """서브클래스가 _ATTRS 외 추가 위젯(버튼, 읽기전용 표시 등)을 넣는
         훅. 기본은 무동작."""
 
+    def _onClosing(self):
+        """창이 닫히기 직전에 서브클래스가 자기 자원을 정리하는 훅.
+        기본은 무동작. 여기서 나는 예외는 호출부가 삼킨다 -- 정리 하나가
+        실패해도 나머지 정리가 멈추면 안 된다(stop()의 규율과 같다)."""
+
     def closeEvent(self, event):
+        # _OPEN_EDITORS에서 빼기 **전에** 부른다. 정리가 실패해도 창은
+        # 닫히고 레지스트리에서도 빠져야 하므로 순서를 이렇게 둔다.
+        try:
+            self._onClosing()
+        except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
+            import traceback
+            traceback.print_exc()
         try:
             if _OPEN_EDITORS.get(self._node) is self:
                 del _OPEN_EDITORS[self._node]
@@ -214,6 +226,12 @@ class _AxisLimitPanelBase(MaroCapabilityPanelBase):
     def _buildExtra(self):
         self._rosAxisLabel = QtWidgets.QLabel("")
         self._layout.addRow("ROS axis (read-only)", self._rosAxisLabel)
+        # 체크리스트가 요구하는 "실시간 갱신" -- axisDirection의 세 스핀박스
+        # 중 어느 것을 바꿔도(아직 적용 전이라도) 라벨이 즉시 따라간다.
+        subFields = self._vecFields.get("axisDirection")
+        if subFields is not None:
+            for field in subFields:
+                field.valueChanged.connect(self._refreshRosAxisLabel)
         self._refreshRosAxisLabel()
 
     def _refreshRosAxisLabel(self):
@@ -228,6 +246,28 @@ class _AxisLimitPanelBase(MaroCapabilityPanelBase):
         super()._onApply()
         self._refreshRosAxisLabel()
 
+    def _onClosing(self):
+        """캘리브레이션이 진행 중인 채로 창이 닫히면 반드시 되돌린다.
+
+        [설계 검토로 발견, 2026-09-07] 이게 없으면 조용한 씬 손상이다.
+        CalibrationSession.start()는 대상의 회전/이동 채널을 DG에서 끊고
+        대상을 헬퍼 로케이터 **밑으로 재부모화**한다. 정리는 finish()/
+        cancel()만 하는데, 예전 closeEvent는 _OPEN_EDITORS에서 빼기만 했다.
+        그래서 캘리브레이션 도중 X 버튼으로 닫거나 -- 더 나쁘게는 플러그인
+        언로드가 stop()을 통해 close()를 부르면 -- 사용자의 리그가
+        maroCalibHelper 밑에 매달린 채 구동 커넥션이 끊긴 상태로 남았다.
+        수동 체크리스트는 이 두 경우를 이미 요구하고 있었는데 코드가
+        따라가지 못한 자리다.
+        """
+        session = getattr(self, "_calibrationSession", None)
+        hud = getattr(self, "_calibrationHud", None)
+        self._calibrationSession = None
+        self._calibrationHud = None
+        if session is not None:
+            session.cancel()
+        if hud is not None:
+            hud.close()
+
 
 class MaroLimitPanel(_AxisLimitPanelBase):
     _ATTRS = [
@@ -238,7 +278,7 @@ class MaroLimitPanel(_AxisLimitPanelBase):
 
     def _buildExtra(self):
         super()._buildExtra()
-        calibrateButton = QtWidgets.QPushButton("움직임범위설정")
+        calibrateButton = QtWidgets.QPushButton("선택한 두 점으로 움직임범위설정")
         calibrateButton.clicked.connect(self._onCalibrate)
         self._layout.addRow(calibrateButton)
         self._calibrationSession = None
@@ -265,33 +305,15 @@ class MaroLimitPanel(_AxisLimitPanelBase):
                 return
             target = cmds.ls(boundTargets[0], long=True)[0]
 
-            self._pickedPoints = []
-            picker = cmds.scriptCtx(
-                title="Maro: 축 방향 지정 -- 두 점을 클릭",
-                toolFinish=self._onAxisPickFinish,
-                totalSelectionSets=2,
-                setSelectionAction=lambda: self._onAxisPointPicked(target))
-            cmds.setToolTo(picker)
+            try:
+                self._pickedPoints = list(maroLimitCalibration.readAxisPointsFromSelection())
+            except ValueError as exc:
+                cmds.warning(str(exc))
+                return
+            self._startCalibrationSession(target)
         except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
             import traceback
             traceback.print_exc()
-
-    def _onAxisPointPicked(self, target):
-        try:
-            hits = cmds.filterExpand(cmds.ls(selection=True), selectionMask=(28, 31, 46))
-            if not hits:
-                return
-            pos = cmds.pointPosition(hits[0], world=True)
-            self._pickedPoints.append(tuple(pos))
-            if len(self._pickedPoints) == 2:
-                self._startCalibrationSession(target)
-        except Exception:  # noqa: BLE001 -- Maya scriptCtx 콜백 경계
-            import traceback
-            traceback.print_exc()
-
-    def _onAxisPickFinish(self):
-        # 2점을 다 못 고르고 툴이 끝났으면(Esc 등) 아무 일도 없었던 것으로.
-        self._pickedPoints = []
 
     def _startCalibrationSession(self, target):
         axisDirection = maroLimitCalibration.axisDirectionFromPoints(
@@ -339,7 +361,7 @@ class MaroTranslationLimitPanel(_AxisLimitPanelBase):
 
     def _buildExtra(self):
         super()._buildExtra()
-        calibrateButton = QtWidgets.QPushButton("움직임범위설정")
+        calibrateButton = QtWidgets.QPushButton("선택한 두 점으로 움직임범위설정")
         calibrateButton.clicked.connect(self._onCalibrate)
         self._layout.addRow(calibrateButton)
         self._calibrationSession = None
@@ -366,32 +388,15 @@ class MaroTranslationLimitPanel(_AxisLimitPanelBase):
                 return
             target = cmds.ls(boundTargets[0], long=True)[0]
 
-            self._pickedPoints = []
-            picker = cmds.scriptCtx(
-                title="Maro: 축 방향 지정 -- 두 점을 클릭",
-                toolFinish=self._onAxisPickFinish,
-                totalSelectionSets=2,
-                setSelectionAction=lambda: self._onAxisPointPicked(target))
-            cmds.setToolTo(picker)
+            try:
+                self._pickedPoints = list(maroLimitCalibration.readAxisPointsFromSelection())
+            except ValueError as exc:
+                cmds.warning(str(exc))
+                return
+            self._startCalibrationSession(target)
         except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
             import traceback
             traceback.print_exc()
-
-    def _onAxisPointPicked(self, target):
-        try:
-            hits = cmds.filterExpand(cmds.ls(selection=True), selectionMask=(28, 31, 46))
-            if not hits:
-                return
-            pos = cmds.pointPosition(hits[0], world=True)
-            self._pickedPoints.append(tuple(pos))
-            if len(self._pickedPoints) == 2:
-                self._startCalibrationSession(target)
-        except Exception:  # noqa: BLE001 -- Maya scriptCtx 콜백 경계
-            import traceback
-            traceback.print_exc()
-
-    def _onAxisPickFinish(self):
-        self._pickedPoints = []
 
     def _startCalibrationSession(self, target):
         axisDirection = maroLimitCalibration.axisDirectionFromPoints(

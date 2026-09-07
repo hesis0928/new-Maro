@@ -113,6 +113,64 @@ restoredSourceLin = cmds.listConnections(boundCubeLin + ".translateY", source=Tr
 assert restoredSourceLin == [originalSourceLin]
 print("linear (TranslationLimit) calibration session OK")
 
+# (e) 창이 캘리브레이션 도중 닫히면 패널이 세션을 취소해야 한다.
+#
+# 이게 없으면 조용한 씬 손상이다: start()는 대상의 구동 채널을 끊고 대상을
+# 헬퍼 로케이터 밑으로 재부모화하는데, 정리는 finish()/cancel()만 한다.
+# 캘리브레이션 도중 X 버튼으로 닫거나 -- 더 나쁘게는 플러그인 언로드가
+# maroCapabilityPanel.stop() -> close()를 부르면 -- 사용자의 리그가
+# 헬퍼 밑에 매달린 채 커넥션이 끊긴 상태로 남는다.
+#
+# QWidget을 만들면 배치 mayapy가 abort하므로(이 파일 가족의 알려진 제약)
+# 패널 인스턴스를 만들지 않고, _onClosing()을 오리 타입 객체를 self로 삼아
+# 직접 부른다 -- 검증 대상은 그 메서드의 본문이지 Qt가 아니다.
+import maroCapabilityPanel as panelMod  # noqa: E402
+
+
+class _FakeHud:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakePanel:
+    pass
+
+
+cmds.setAttr(rotConn + ".angle", 1.1)
+valueBeforeClose = cmds.getAttr(boundCube + ".rotateY")
+sessionClose = calib.CalibrationSession()
+sessionClose.start(boundCube, axisDirection=(0.0, 1.0, 0.0),
+                   pivotWorld=(0.0, 0.0, 0.0), isLinear=False)
+helperWhileOpen = sessionClose.helperLocator()
+assert cmds.objExists(helperWhileOpen)
+
+fakePanel = _FakePanel()
+fakePanel._calibrationSession = sessionClose
+fakePanel._calibrationHud = _FakeHud()
+panelMod._AxisLimitPanelBase._onClosing(fakePanel)
+
+assert fakePanel._calibrationHud is None or fakePanel._calibrationSession is None
+assert not cmds.objExists(helperWhileOpen), \
+    "closing the panel mid-calibration must delete the helper locator"
+restoredOnClose = cmds.listConnections(boundCube + ".rotateY", source=True,
+                                       destination=False, plugs=True)
+assert restoredOnClose == [originalSource], \
+    f"closing the panel must restore the driven connection (got {restoredOnClose})"
+assert abs(cmds.getAttr(boundCube + ".rotateY") - valueBeforeClose) < 1e-9, \
+    "closing the panel must restore the pre-calibration pose"
+parentsAfterClose = cmds.listRelatives(boundCube, parent=True, fullPath=True)
+assert parentsAfterClose in (None, []), \
+    f"the target must be un-parented from the helper (got {parentsAfterClose})"
+print("closing the panel mid-calibration restores the scene OK")
+
+# 세션이 없을 때 불려도 안전해야 한다(언로드는 창을 연 적 없어도 이 경로를 탄다).
+idlePanel = _FakePanel()
+panelMod._AxisLimitPanelBase._onClosing(idlePanel)
+print("_onClosing with no active session is a safe no-op OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()

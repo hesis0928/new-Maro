@@ -1886,34 +1886,15 @@ class MaroLimitPanel(_AxisLimitPanelBase):
                 return
             target = cmds.ls(boundTargets[0], long=True)[0]
 
-            self._pickedPoints = []
-            cmds.setToolTo(cmds.selectContext())
-            picker = cmds.scriptCtx(
-                title="Maro: 축 방향 지정 -- 두 점을 클릭",
-                toolFinish=self._onAxisPickFinish,
-                totalSelectionSets=2,
-                setSelectionAction=lambda: self._onAxisPointPicked(target))
-            cmds.setToolTo(picker)
+            try:
+                self._pickedPoints = list(maroLimitCalibration.readAxisPointsFromSelection())
+            except ValueError as exc:
+                cmds.warning(str(exc))
+                return
+            self._startCalibrationSession(target)
         except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
             import traceback
             traceback.print_exc()
-
-    def _onAxisPointPicked(self, target):
-        try:
-            hits = cmds.filterExpand(cmds.ls(selection=True), selectionMask=(28, 31, 46))
-            if not hits:
-                return
-            pos = cmds.pointPosition(hits[0], world=True)
-            self._pickedPoints.append(tuple(pos))
-            if len(self._pickedPoints) == 2:
-                self._startCalibrationSession(target)
-        except Exception:  # noqa: BLE001 -- Maya scriptCtx 콜백 경계
-            import traceback
-            traceback.print_exc()
-
-    def _onAxisPickFinish(self):
-        # 2점을 다 못 고르고 툴이 끝났으면(Esc 등) 아무 일도 없었던 것으로.
-        self._pickedPoints = []
 
     def _startCalibrationSession(self, target):
         axisDirection = maroLimitCalibration.axisDirectionFromPoints(
@@ -1954,7 +1935,9 @@ class MaroLimitPanel(_AxisLimitPanelBase):
 
 파일 상단 import 블록에 `import maroLimitCalibration`이 이미 Task 5에서 추가되어 있으므로 추가 import는 필요 없다.
 
-**참고(수동 체크리스트 대상, Task 8에서 확인)**: `cmds.scriptCtx`의 `setSelectionAction`/`totalSelectionSets` 기반 2점 클릭 캡처와 `cmds.filterExpand`의 정확한 마스크 값(28=폴리곤 버텍스, 31=폴리곤 엣지, 46=폴리곤 페이스)은 실제 대화형 Maya 세션에서만 최종 검증 가능하다 — mayapy 배치로는 `scriptCtx`의 마우스 클릭 자체를 재현할 수 없으므로, `CalibrationSession`/`CalibrationHud`는 Step 3/5에서 이미 자동화 테스트로 검증했고 이 클릭 캡처 부분만 Task 8의 수동 체크리스트가 담당한다.
+**[Task 8 수동 테스트 결과로 정정된 설계]** 이 계획의 원안은 `cmds.scriptCtx`로 전용 tool context를 세워 두 번의 클릭을 직접 가로채는 방식이었다. 실제 대화형 Maya에서 전혀 동작하지 않았고, 근본 원인은 `cmds.filterExpand(..., selectionMask=(28, 31, 46))` 한 줄이었다 — 폴리곤 컴포넌트의 실제 마스크는 **31=버텍스, 32=에지, 34=페이스**이고, 게다가 `selectionMask`에 **튜플**을 주면 `filterExpand`가 예외 없이 `None`을 돌려준다(리스트여야 한다). 즉 이 호출은 항상 빈 결과였고, "유효하지 않은 선택이니 다시 받는다" 분기가 영원히 재발동해 무한루프/무반응으로 나타났다. 증상만 보고 `exitUponCompletion`·재진입·잔여 선택을 각각 고치는 시도가 네 번 실패한 뒤에야 마스크 값을 실측해 원인이 잡혔다.
+
+정정된 설계는 tool context를 아예 세우지 않는다. 사용자가 Maya 기본 선택 툴로 컴포넌트 두 개를 고른 뒤 패널 버튼을 누르면, `maroLimitCalibration.readAxisPointsFromSelection()`이 현재 선택을 읽는다(컨스트레인트 생성 등 Maya 자체 기능과 같은 방식). 이로써 MEL↔Python 브리지, 모듈 레벨 피커 스택, `evalDeferred` 지연, 툴 재진입 문제가 전부 사라지고, **무엇보다 이 경로가 mayapy 배치로 완전히 테스트 가능해진다**(`tests/maya/test_axis_points_from_selection.py` — 두 버텍스/면+에지 혼합/거부 5종). `cmds.pointPosition()`이 면·에지를 받지 않는다는 것도 그 테스트에서 드러나, 컴포넌트를 구성 버텍스로 환산해 중심을 쓰는 `_componentCenter()`가 됐다. 수동 체크리스트가 담당하는 범위는 이제 클릭 캡처가 아니라 캘리브레이션 세션·HUD의 실제 조작감뿐이다.
 
 - [ ] **Step 7: 회귀 테스트 — 패널이 여전히 정상 임포트/생성되는지**
 
@@ -2090,32 +2073,15 @@ class MaroTranslationLimitPanel(_AxisLimitPanelBase):
                 return
             target = cmds.ls(boundTargets[0], long=True)[0]
 
-            self._pickedPoints = []
-            picker = cmds.scriptCtx(
-                title="Maro: 축 방향 지정 -- 두 점을 클릭",
-                toolFinish=self._onAxisPickFinish,
-                totalSelectionSets=2,
-                setSelectionAction=lambda: self._onAxisPointPicked(target))
-            cmds.setToolTo(picker)
+            try:
+                self._pickedPoints = list(maroLimitCalibration.readAxisPointsFromSelection())
+            except ValueError as exc:
+                cmds.warning(str(exc))
+                return
+            self._startCalibrationSession(target)
         except Exception:  # noqa: BLE001 -- Qt 이벤트 핸들러 경계
             import traceback
             traceback.print_exc()
-
-    def _onAxisPointPicked(self, target):
-        try:
-            hits = cmds.filterExpand(cmds.ls(selection=True), selectionMask=(28, 31, 46))
-            if not hits:
-                return
-            pos = cmds.pointPosition(hits[0], world=True)
-            self._pickedPoints.append(tuple(pos))
-            if len(self._pickedPoints) == 2:
-                self._startCalibrationSession(target)
-        except Exception:  # noqa: BLE001 -- Maya scriptCtx 콜백 경계
-            import traceback
-            traceback.print_exc()
-
-    def _onAxisPickFinish(self):
-        self._pickedPoints = []
 
     def _startCalibrationSession(self, target):
         axisDirection = maroLimitCalibration.axisDirectionFromPoints(

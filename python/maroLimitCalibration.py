@@ -63,6 +63,59 @@ def mayaDirectionToRos(direction):
     return (x, -z, y)
 
 
+# polygon vertex / edge / face의 selection mask 번호. [실측 확인] 값을
+# 손으로 짐작하면 안 된다 -- 이 번호를 틀리게 쓴 이전 구현은 예외 대신
+# 빈 결과를 돌려받아 "클릭이 먹지 않는" 증상으로만 나타났다. 또한
+# selectionMask에 튜플을 주면 filterExpand가 조용히 None을 돌려준다
+# (리스트여야 한다) -- 둘 다 실패가 보이지 않는 종류라 실측으로 고정한다.
+_COMPONENT_MASKS = [31, 32, 34]
+
+
+def readAxisPointsFromSelection():
+    """지금 선택돼 있는 폴리곤 컴포넌트 두 개의 월드 좌표를 돌려준다.
+
+    캘리브레이션 축 방향을 정하는 입력이다. 전용 tool context(scriptCtx)를
+    세워 클릭을 가로채지 않고, 사용자가 Maya 기본 선택 툴로 두 점을 고른 뒤
+    패널 버튼을 누르는 흐름을 쓴다 -- 컨스트레인트 생성 등 Maya 자체 기능과
+    같은 방식이다. [실측] scriptCtx 방식은 finalCommandScript가 MEL이라
+    self를 못 넘기고, 콜백 안에서 다음 컨텍스트를 세우면 Maya가 그 전환을
+    되돌리며, 남아 있는 선택이 setAutoComplete를 즉시 재발동시켜 무한루프가
+    났다 -- 이 함수는 그 실패 유형 전체를 없앤다.
+
+    선택 순서 추적(selectPref -trackSelectionOrder)이 켜져 있으면 그 순서를
+    쓴다(축의 부호가 사용자가 고른 순서를 따른다). 꺼져 있으면 Maya가 주는
+    순서를 그대로 쓴다 -- 사용자 환경 설정을 우리가 바꾸지는 않는다.
+
+    두 개가 아니거나 컴포넌트가 아니면 ValueError(메시지는 그대로 사용자에게
+    보여줄 수 있는 한국어 안내).
+    """
+    ordered = cmds.ls(orderedSelection=True, flatten=True) or []
+    picked = cmds.filterExpand(ordered, selectionMask=_COMPONENT_MASKS) or []
+    if len(picked) != 2:
+        selected = cmds.ls(selection=True, flatten=True) or []
+        picked = cmds.filterExpand(selected, selectionMask=_COMPONENT_MASKS) or []
+    if len(picked) != 2:
+        raise ValueError(
+            "Maro: 뷰포트에서 축 방향이 될 두 점(버텍스/에지/페이스)을 선택한 뒤 "
+            "다시 누르세요 -- 지금 선택된 컴포넌트는 {}개입니다.".format(len(picked)))
+    return (_componentCenter(picked[0]), _componentCenter(picked[1]))
+
+
+def _componentCenter(component):
+    """컴포넌트 하나의 월드 좌표 대표점. cmds.pointPosition()은 버텍스/CV만
+    받으므로(면/에지에 주면 RuntimeError -- 실측 확인), 어떤 컴포넌트든
+    구성 버텍스로 환산해 그 중심을 쓴다. 버텍스는 자기 자신으로 환산되므로
+    세 종류가 같은 경로를 탄다."""
+    verts = cmds.ls(cmds.polyListComponentConversion(component, toVertex=True),
+                    flatten=True) or []
+    if not verts:
+        raise ValueError(
+            "Maro: 선택한 컴포넌트({})에서 좌표를 읽을 수 없습니다.".format(component))
+    positions = [cmds.pointPosition(v, world=True) for v in verts]
+    count = float(len(positions))
+    return tuple(sum(p[i] for p in positions) / count for i in range(3))
+
+
 _CHANNELS_ROTATE = ("rotateX", "rotateY", "rotateZ")
 _CHANNELS_TRANSLATE = ("translateX", "translateY", "translateZ")
 

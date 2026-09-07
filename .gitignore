@@ -7,3 +7,7 @@ CMakeLists.txt.bak
 .superpowers/
 out/
 vcpkg_installed/
+
+# 파이썬 바이트코드. mayapy가 테스트/플러그인 모듈을 import할 때 만든다.
+__pycache__/
+*.pyc
