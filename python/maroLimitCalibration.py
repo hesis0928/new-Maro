@@ -155,12 +155,31 @@ class CalibrationSession:
         if not self._cleaned:
             raise RuntimeError("CalibrationSession.start() called while already active")
 
-        self._target = targetTransform
+        # 대상은 항상 풀 경로로 정규화해서 들고 다닌다. 짧은 이름은 계층이
+        # 바뀌어도 Maya가 해소해 주지만 그건 이름이 유일할 때만이고, 아래
+        # _reparent()가 만드는 것도 풀 경로다 -- 두 형태를 섞지 않는다.
+        self._target = cmds.ls(targetTransform, long=True)[0]
         self._channels = _CHANNELS_TRANSLATE if isLinear else _CHANNELS_ROTATE
         self._isLinear = isLinear
         self._min = 0.0
         self._max = 0.0
 
+        # 아래 씬 변경 전부를 undo 한 덩어리로 묶는다.
+        #
+        # [설계 검토로 발견] 안 묶으면 로케이터 생성 / 커넥션 끊기 / 재부모화가
+        # 각각 별개의 undo 항목이 된다. 캘리브레이션 도중 사용자가 Ctrl+Z를
+        # 누르면 그중 하나만 되돌아가는데, 하필 "로케이터 생성"이 되돌아가면
+        # **그 밑에 매달린 사용자 오브젝트가 함께 삭제된다.** 한 덩어리로
+        # 묶으면 Ctrl+Z 한 번이 셋업 전체를 원자적으로 되돌리므로 그 상태가
+        # 애초에 성립하지 않는다. 되돌려진 뒤의 정리 호출은 _cleanup()이
+        # 방어한다(_isUnderHelper()/objExists 검사).
+        cmds.undoInfo(openChunk=True)
+        try:
+            self._startInChunk(axisDirection, pivotWorld)
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+    def _startInChunk(self, axisDirection, pivotWorld):
         # 1) 원래 커넥션/값을 전부 캡처한다 -- 하나라도 놓치면 복원이
         #    불완전해지므로 세 채널 모두 항상 캡처한다.
         self._originalSources = []
@@ -180,16 +199,49 @@ class CalibrationSession:
                 cmds.disconnectAttr(source, "{}.{}".format(self._target, channel))
 
         # 3) 헬퍼 로케이터를 만들어 axisDirection으로 정렬하고 pivotWorld에 둔다.
-        self._helper = cmds.spaceLocator(name="maroCalibHelper#")[0]
+        self._helper = cmds.ls(cmds.spaceLocator(name="maroCalibHelper#")[0],
+                               long=True)[0]
         rx, ry, rz = axisBasisEulerXYZ(axisDirection)
         cmds.setAttr(self._helper + ".rotate", rx, ry, rz, type="double3")
         cmds.xform(self._helper, worldSpace=True, translation=pivotWorld)
 
         # 4) 대상을 헬퍼 로케이터 밑으로(월드 포즈 보존 -- 커넥션을 이미
         #    끊었으므로 회전/이동 채널이 자유라 이 재배선이 가능하다).
-        cmds.parent(self._target, self._helper)
+        #
+        # [실측으로 잡은 버그] cmds.parent()가 옮기고 나면 **옮기기 전의 풀
+        # DAG 경로는 더 이상 존재하지 않는다.** 그런데 이 클래스는 정리
+        # 단계에서 self._target으로 다시 parent/setAttr/connectAttr를 한다 --
+        # 옛 경로를 그대로 들고 있으면 그 셋이 전부 "No object matches name"으로
+        # 실패해서, 대상이 헬퍼 밑에 매달린 채 구동 커넥션도 끊긴 상태로
+        # 남는다(= 사용자 리그가 조용히 망가진다). 짧은 이름은 Maya가 계층과
+        # 무관하게 해소해 주기 때문에 이 결함이 오래 드러나지 않았는데, 실제
+        # 패널(maroCapabilityPanel._onCalibrate)은 cmds.ls(..., long=True)로
+        # 정규화한 **풀 경로**를 넘긴다 -- 즉 진짜 사용 경로가 정확히 깨지는
+        # 쪽이었다. cmds.parent()가 돌려주는 새 이름과 이미 확정된 새 부모를
+        # 조합해 새 풀 경로를 만들어 둔다(maroDagMenu.py가 같은 함정에 대해
+        # 이미 쓰고 있는 방식과 동일).
+        self._target = self._reparent(self._target, self._helper)
 
         self._cleaned = False
+
+    def _isUnderHelper(self):
+        """대상이 지금도 헬퍼 로케이터 밑에 있는가. 사용자가 셋업을 undo했거나
+        직접 계층을 바꾼 뒤라면 False -- 그때 정리가 억지로 parent를 부르면
+        멀쩡한 계층을 흔든다."""
+        if self._helper is None or not cmds.objExists(self._helper):
+            return False
+        parents = cmds.listRelatives(self._target, parent=True, fullPath=True) or []
+        return bool(parents) and parents[0] == self._helper
+
+    @staticmethod
+    def _reparent(target, newParent):
+        """target을 newParent(None이면 월드) 밑으로 옮기고 **새 풀 경로**를
+        돌려준다. 옮긴 뒤에도 옛 경로를 계속 쓰면 안 되는 이유는 위 주석 참고."""
+        if newParent is None:
+            moved = cmds.parent(target, world=True)[0]
+            return cmds.ls(moved, long=True)[0]
+        moved = cmds.parent(target, newParent)[0]
+        return newParent + "|" + moved.split("|")[-1]
 
     def currentValue(self):
         channel = "translateZ" if self._isLinear else "rotateZ"
@@ -216,10 +268,16 @@ class CalibrationSession:
         try:
             # 부모 복원(대상을 헬퍼 로케이터 밖으로) -- 헬퍼를 지우기 전에
             # 반드시 먼저 해야 대상이 함께 삭제되지 않는다.
-            if self._originalParent is not None:
-                cmds.parent(self._target, self._originalParent)
-            else:
-                cmds.parent(self._target, world=True)
+            #
+            # 여기서도 새 경로를 받아 self._target을 갱신한다. 아래 채널
+            # 복원 루프가 그 경로를 쓰는데, 옮기고 나면 지금 경로는 또
+            # 무효가 되기 때문이다(start()의 같은 함정, 같은 주석 참고).
+            #
+            # 대상이 이미 헬퍼 밑에 없으면(예: 사용자가 Ctrl+Z로 셋업을
+            # 통째로 되돌린 뒤) 옮길 것이 없다 -- 그 경우 억지로 parent를
+            # 부르면 오히려 멀쩡한 계층을 흔든다.
+            if cmds.objExists(self._target) and self._isUnderHelper():
+                self._target = self._reparent(self._target, self._originalParent)
         except Exception:  # noqa: BLE001 -- 정리 경로는 절대 못 넘어가면 안 된다
             import traceback
             traceback.print_exc()
@@ -230,6 +288,13 @@ class CalibrationSession:
         except Exception:  # noqa: BLE001
             import traceback
             traceback.print_exc()
+
+        if not cmds.objExists(self._target):
+            # 대상이 사라졌다(사용자가 지웠거나 셋업 자체가 undo됐다).
+            # 복원할 것이 없고, 없는 노드에 setAttr을 시도하면 경고만
+            # 쏟아진다. 래치는 반드시 세우고 끝낸다.
+            self._cleaned = True
+            return
 
         for channel, value, source in zip(self._channels, self._originalValues,
                                           self._originalSources):

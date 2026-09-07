@@ -476,13 +476,15 @@ MObjectHandle g_commandDeviceHandle;
 MaroRosRuntime* g_abandonedRuntime = nullptr;
 }  // namespace
 
-void shutdownBridge() {
+bool shutdownBridge() {
+    bool tornDown = false;
     MaroPump::stop();          // 아웃바운드 타이머 콜백을 먼저 뗀다.
 
     if (g_commandDeviceHandle.isValid()) {
         MDGModifier modifier;
         modifier.deleteNode(g_commandDeviceHandle.object());
         modifier.doIt();
+        tornDown = true;
     }
     g_commandDeviceHandle = MObjectHandle();
 
@@ -539,13 +541,15 @@ void shutdownBridge() {
         // 그 둘 중 덜 나쁜 쪽을 실제로 선택하는 코드다. 프로세스 종료 시
         // OS가 나머지를 정리한다.
         g_abandonedRuntime = g_runtime.release();
-        return;
+        return true;
     }
 
     if (g_runtime) {
         g_runtime->stop();
         g_runtime.reset();
+        tornDown = true;
     }
+    return tornDown;
 }
 
 void* MaroStartBridgeCommand::creator() { return new MaroStartBridgeCommand(); }
@@ -577,7 +581,10 @@ MStatus MaroStartBridgeCommand::doIt(const MArgList& args) {
         if (!status) return status;
 
         if (g_runtime && g_runtime->isRunning()) {
-            maro::BoadMaro::warn("Maro: bridge is already running.");
+            maro::BoadMaro::warn(
+                "Maro: bridge is already running -- this call did NOT restart it, so a "
+                "changed robot name or ROS_DOMAIN_ID has not been applied. Stop the "
+                "bridge first (maroStopBridge), then start it again.");
             return MS::kSuccess;
         }
 
@@ -779,8 +786,11 @@ MStatus MaroStopBridgeCommand::doIt(const MArgList&) {
     // boad::error()/info()가 새로 던지면(예: bad_alloc) 잡아줄 것이 없어
     // Maya가 통째로 죽었다.
     try {
-        shutdownBridge();
-        maro::BoadMaro::info("Maro: bridge stopped.");
+        if (shutdownBridge()) {
+            maro::BoadMaro::info("Maro: bridge stopped.");
+        } else {
+            maro::BoadMaro::info("Maro: bridge was not running; nothing to stop.");
+        }
         return MS::kSuccess;
     } catch (const std::exception& e) {
         maro::BoadMaro::error("MaroStopBridgeCommand.doIt.Exception",

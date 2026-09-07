@@ -21,6 +21,7 @@
 #include "MaroAxisNode.h"
 #include "CommandDeltaCheck.h"
 #include "MaroDiag.h"
+#include "MaroRosContext.h"
 
 namespace maro {
 
@@ -340,15 +341,24 @@ void MaroCommandDeviceNode::threadHandler() {
     // 하나(가드 컨디션, wait set까지)를 새로 만들고 버린다. 이 루프는
     // frameRate Hz로 돈다 -- 매 반복 그 생성/파괴 비용을 물 이유가 없다.
     // executor 하나를 스레드 수명 동안 들고 spin_some()만 반복 호출한다.
-    rclcpp::executors::SingleThreadedExecutor executor;
+    // 발행 쪽(MaroRosRuntime)과 **같은** Maro 전용 컨텍스트를 쓴다. 전역
+    // 기본 컨텍스트를 쓰면 같은 Maya에 사는 다른 rclcpp 플러그인과 서로의
+    // 컨텍스트를 끊게 된다(MaroRosContext.h 참고). executor에도 같은
+    // 컨텍스트를 넘겨야 한다 -- 안 넘기면 executor만 전역 컨텍스트에
+    // 매달려서, 우리 컨텍스트가 끝나도 spin_some()이 그것을 모른다.
+    auto rosCtx = maro::rosContext();
+    rclcpp::ExecutorOptions executorOptions;
+    if (rosCtx) executorOptions.context = rosCtx;
+    rclcpp::executors::SingleThreadedExecutor executor(executorOptions);
 
-    if (!robotName.empty()) {
+    if (!robotName.empty() && rosCtx) {
         try {
             // 발행 쪽(MaroRosRuntime)과 별개인, 이 스레드 전용 노드다.
             // 두 노드 다 같은 전역 rclcpp 컨텍스트를 쓰므로 rclcpp::init()은
             // 여기서 부르지 않는다 -- MaroRosRuntime::start()가 이미 했고,
             // 이 스레드는 그 뒤에만 시작된다 (maroStartBridge 순서 참고).
-            node = rclcpp::Node::make_shared(robotName + "_cmd_rx");
+            node = rclcpp::Node::make_shared(
+                robotName + "_cmd_rx", rclcpp::NodeOptions().context(rosCtx));
             sub = node->create_subscription<sensor_msgs::msg::JointState>(
                 "/" + robotName + "/joint_commands", 10,
                 [&pending](sensor_msgs::msg::JointState::SharedPtr msg) {

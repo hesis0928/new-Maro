@@ -113,6 +113,45 @@ try:
         f"(before={ticks_after}, after={ticks_now})"
     print("stop halts both threads OK")
 
+    # 내린 뒤 **다시 올릴 수 있어야 한다.**
+    #
+    # [설계 검토, 2026-09-07] 이건 이제 정상 경로다: 설정 패널의 "연결"이
+    # 도메인 ID/로봇 이름 변경을 실제로 반영하려고 maroStopBridge ->
+    # maroStartBridge를 연달아 부른다(maroSettingsPanel._onConnect).
+    #
+    # 그리고 이 경로는 rclcpp 컨텍스트를 전역 기본값에서 Maro 전용
+    # 인스턴스로 옮기면서 새로 위험해진 자리이기도 하다 -- 한 번 shutdown()된
+    # rclcpp::Context는 되살릴 수 없으므로, 재시작은 반드시 **새** 컨텍스트를
+    # 만들어야 한다(MaroRosContext.cpp). 안 그러면 두 번째 연결이 조용히
+    # 죽은 컨텍스트 위에 올라앉아 아무것도 발행하지 못한다.
+    collectedBeforeRestart, drainedBeforeRestart = cmds.maroBridgeStats()[:2]
+    cmds.maroStartBridge("maro")
+
+    deadline = time.time() + 20
+    collectedRestart = drainedRestart = 0
+    while time.time() < deadline:
+        _qapp.processEvents()
+        time.sleep(0.05)
+        collectedRestart, drainedRestart, _, ticksRestart, errsRestart = \
+            cmds.maroBridgeStats()[:5]
+        if (collectedRestart > collectedBeforeRestart
+                and drainedRestart > drainedBeforeRestart):
+            break
+
+    assert collectedRestart > collectedBeforeRestart, (
+        "the pump never collected again after a stop/start cycle "
+        "(before=%d, after=%d)" % (collectedBeforeRestart, collectedRestart))
+    assert drainedRestart > drainedBeforeRestart, (
+        "samples never reached the background thread after a restart -- the "
+        "rclcpp context was probably not recreated (before=%d, after=%d)"
+        % (drainedBeforeRestart, drainedRestart))
+    assert errsRestart == 0, \
+        "spinLoop() errored after the restart (publishErrors=%d)" % errsRestart
+    print("restart after stop OK (collected=%d, drained=%d)"
+          % (collectedRestart, drainedRestart))
+
+    cmds.maroStopBridge()
+
     # 브리지를 켠 채로 언로드해도 좀비 스레드가 남지 않아야 한다. 여기가 이
     # 태스크에서 가장 중요한 시나리오다: File -> New가 커맨드 디바이스 노드를
     # 지우는 경로(명시적 maroStopBridge를 거치지 않는 경로)로도 스레드가

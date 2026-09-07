@@ -182,6 +182,26 @@ Maya API는 스레드 안전하지 않고 rclcpp는 자체 executor 스레드를
 
 Maya를 켜둔 채 플러그인만 언로드·리로드해도 좀비 스레드나 잔여 컨텍스트가 남지 않아야 한다.
 
+> **[정정, 2026-09-07] 전역 컨텍스트를 쓰지 않는다.**
+> 위의 `rclcpp::init`/`rclcpp::shutdown`은 **프로세스 전역**의 기본 컨텍스트를
+> 건드린다. Maya는 플러그인이 여럿 사는 프로세스라, 같은 Maya에 rclcpp를
+> 쓰는 다른 플러그인이 있으면 Maro의 언로드가 그쪽 컨텍스트까지 끝내
+> 버린다(반대도 성립한다). 어느 쪽이든 남의 노드/퍼블리셔가 살아 있는 채로
+> 밑에서 컨텍스트가 사라지는 것이다.
+>
+> 그래서 Maro는 자기 `rclcpp::Context` 인스턴스를 소유하고
+> (`src/maro_plugin/MaroRosContext.h/.cpp`), 노드는
+> `NodeOptions::context()`로, executor는 `ExecutorOptions::context`로 그것을
+> 받는다. 발행(`MaroRosRuntime`)과 수신(`MaroCommandDeviceNode`)이 **같은**
+> 컨텍스트를 공유해야 `shutdownBridge()`가 지키는 종료 순서("수신 스레드가
+> 멈춘 뒤에야 컨텍스트를 끊는다")가 의미를 갖는다 — 범위만 좁아졌을 뿐
+> 그 순서 규율은 그대로다.
+>
+> 부수 효과 하나: 한 번 `shutdown()`된 `rclcpp::Context`는 되살릴 수 없으므로
+> 재연결은 **새** 컨텍스트를 만든다. 그 경로는 이제 정상 경로다(설정 패널의
+> "연결"이 도메인 ID 변경을 반영하려고 stop→start를 한다) —
+> `tests/maya/test_bridge_pump.py`의 "restart after stop"이 이를 고정한다.
+
 DLL 의존성은 검증된 PostBuildEvent(ROS 2 런타임 DLL을 출력 폴더로 복사) 방식을 사용한다.
 
 ## 7. 토픽 계약

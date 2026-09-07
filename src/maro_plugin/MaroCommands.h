@@ -79,7 +79,10 @@ public:
     MStatus doIt(const MArgList& args) override;
 };
 
-// 플러그인 언로드 시 브리지를 확실히 내린다.
-void shutdownBridge();
+// 플러그인 언로드 시 브리지를 확실히 내린다. 실제로 내릴 것이 있었으면
+// true -- 호출부가 "정말 멈췄는지"를 사용자에게 정직하게 알릴 수 있게
+// 한다(아무것도 안 돌고 있을 때 "bridge stopped."를 찍으면 거짓말이다).
+// 아무것도 안 돌고 있어도 안전한 무동작이며 빠르게 반환한다.
+bool shutdownBridge();
 
 }  // namespace maro

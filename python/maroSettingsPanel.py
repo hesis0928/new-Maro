@@ -170,6 +170,23 @@ class MaroSettingsPanel(QtWidgets.QWidget):
                 os.environ["ROS_DOMAIN_ID"] = _ORIGINAL_ROS_DOMAIN_ID
             else:
                 os.environ.pop("ROS_DOMAIN_ID", None)
+
+            # 먼저 내리고 다시 올린다.
+            #
+            # [설계 검토로 발견] maroStartBridge는 브리지가 이미 돌고 있으면
+            # 경고만 하고 **kSuccess를 돌려준다**. 그래서 예전에는 연결된
+            # 상태에서 도메인 ID나 로봇 이름을 바꾸고 "연결"을 눌러도 아무
+            # 일도 일어나지 않았고, 실패로 보이지도 않았다 -- 사용자는 새
+            # 설정으로 붙은 줄 알지만 실제로는 옛 설정 그대로다. 게다가
+            # ROS_DOMAIN_ID는 rclcpp 컨텍스트가 만들어질 때 한 번 읽히므로,
+            # 이미 살아 있는 컨텍스트에는 위에서 바꾼 환경변수가 애초에
+            # 닿지 않는다.
+            #
+            # 이 버튼의 뜻은 "이 설정으로 연결하라"이므로, 돌고 있으면 내리고
+            # 새 설정으로 다시 올리는 것이 사용자가 누른 그대로다.
+            # maroStopBridge는 아무것도 안 돌고 있어도 안전한 무동작이고
+            # 빠르게 반환한다(MaroCommands.cpp의 shutdownBridge 참고).
+            cmds.maroStopBridge()
             cmds.maroStartBridge(robotName)
         except Exception as exc:  # noqa: BLE001 -- Qt 콜백 경계
             cmds.warning("Maro: failed to connect: {}".format(exc))

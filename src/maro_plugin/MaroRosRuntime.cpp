@@ -1,5 +1,7 @@
 #include "MaroRosRuntime.h"
 
+#include "MaroRosContext.h"
+
 #include <chrono>
 
 #include <rclcpp/rclcpp.hpp>
@@ -15,6 +17,9 @@
 namespace maro {
 
 struct MaroRosRuntime::Impl {
+    // 이 런타임이 쓰는 컨텍스트를 붙들어 둔다 -- 노드/퍼블리셔가 살아 있는
+    // 동안 컨텍스트도 살아 있어야 한다.
+    std::shared_ptr<rclcpp::Context> context;
     std::shared_ptr<rclcpp::Node> node;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr jointPub;
     rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tfPub;
@@ -31,10 +36,14 @@ bool MaroRosRuntime::start(const std::string& robotName) {
     if (m_running.load()) return true;
 
     try {
-        if (!rclcpp::ok()) {
-            rclcpp::init(0, nullptr);
-        }
-        m_impl->node = rclcpp::Node::make_shared(robotName);
+        // 전역 기본 컨텍스트가 아니라 Maro 전용 컨텍스트를 쓴다 -- 이유는
+        // MaroRosContext.h 참고(같은 Maya에 사는 다른 rclcpp 플러그인과
+        // 서로의 컨텍스트를 끊지 않기 위해서다).
+        auto context = maro::rosContext();
+        if (!context) return false;
+        m_impl->context = context;
+        m_impl->node = rclcpp::Node::make_shared(
+            robotName, rclcpp::NodeOptions().context(context));
         // 상대 토픽 이름("joint_states")은 노드의 네임스페이스(기본 "/")
         // 아래로 풀려 "/joint_states"가 된다 -- 노드 *이름*은 토픽 해석에
         // 관여하지 않는다. MaroCommandDeviceNode.cpp(Task 10, 수신 방향)가
@@ -89,15 +98,18 @@ void MaroRosRuntime::stop() {
     m_impl->jointPub.reset();
     m_impl->node.reset();
 
-    // 이 rclcpp::shutdown()은 프로세스 전역 rclcpp 컨텍스트를 끝낸다.
-    // MaroCommandDeviceNode도 같은 전역 컨텍스트로 자기 노드를 만들므로,
+    // MaroCommandDeviceNode도 **같은** Maro 컨텍스트로 자기 노드를 만드므로,
     // 그쪽 스레드가 완전히 멈춘 뒤에만 여기까지 와야 한다. 호출자
-    // (MaroCommands.cpp의 shutdownBridge())가 그 순서를 보장한다 — 여기서
-    // 순서를 어기면 살아있는 스레드 밑에서 컨텍스트가 끊겨 크래시하거나
-    // 프로세스가 끝나지 않는다.
-    if (rclcpp::ok()) {
-        rclcpp::shutdown();
-    }
+    // (MaroCommands.cpp의 shutdownBridge())가 그 순서를 보장한다 -- 순서를
+    // 어기면 살아있는 스레드 밑에서 컨텍스트가 끊겨 크래시하거나 프로세스가
+    // 끝나지 않는다. 컨텍스트를 우리 것으로 좁혔다고 이 순서 규율이
+    // 느슨해지지는 않는다(범위만 좁아졌을 뿐 같은 위험이다).
+    //
+    // 다만 이제 끝나는 것은 **우리 컨텍스트뿐**이다. 예전에는 전역
+    // rclcpp::shutdown()이라 같은 프로세스의 다른 rclcpp 사용자까지 함께
+    // 끊었다(MaroRosContext.h 참고).
+    maro::shutdownRosContext("Maro bridge stopped");
+    m_impl->context.reset();
 }
 
 void MaroRosRuntime::spinLoop() {
@@ -109,7 +121,7 @@ void MaroRosRuntime::spinLoop() {
     // 설계 방침이다. MaroCommandDeviceNode::threadHandler()가 이미 같은
     // 관례를 쓴다: 그쪽도 try를 루프 안쪽에 둬서 실패한 틱 하나가 스레드
     // 전체를 끝내지 않게 한다.
-    while (!m_stopRequested.load() && rclcpp::ok()) {
+    while (!m_stopRequested.load() && maro::rosContextOk()) {
         try {
             // 이 노드는 퍼블리셔만 갖는다 — 구독은 MaroCommandDeviceNode
             // 쪽의 별도 노드가 처리한다 (Task 10 설계 노트). 퍼블리셔는

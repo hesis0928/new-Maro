@@ -14,6 +14,7 @@ set(SOURCE_FILES
     MaroCommands.cpp
     MaroDeleteWatcher.cpp
     MaroRosRuntime.cpp
+    MaroRosContext.cpp
     MaroPump.cpp
     MaroCommandDeviceNode.cpp
     MaroDiag.cpp

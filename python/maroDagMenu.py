@@ -683,7 +683,6 @@ def _onLidarMenuItemClicked(object_):
     (설계 스펙 §5.3). 그래서 이 함수는 mayapy 배치에서도 안전하게 직접 호출할
     수 있다(tests/maya/test_lidar_menu.py)."""
     import maroLidarPanel
-    import maroRosProxy
 
     existingLidar = _findLidarForMesh(object_)
     if existingLidar is not None:
@@ -765,17 +764,38 @@ def _onLidarMenuItemClicked(object_):
         # 문제인 것은 "거리 0에 자동 탑재하는" 이 마킹메뉴 경로뿐이다.
         cmds.setAttr(lidar + ".rangeMin", 0.0)
 
+        # 포인트클라우드는 Maya가 자동으로 만들어 준 최상위 트랜스폼에
+        # 그대로 둔다.
+        #
+        # [설계 검토로 정정, 2026-09-07] 예전에는 이것을
+        # maroRosProxy.ensureProxyGroup() 밑으로 옮겼다. "그러면 패널별
+        # 격리가 공짜"라는 이유였는데, 그 공짜에는 대가가 있었다:
+        # maroRosProxy._refreshMayaIsolation()은 그 그룹을 Maya(좌측)
+        # 패널의 격리 목록에서 **일부러 빼기** 때문에, 포인트클라우드가
+        # 정작 스캔 대상이 보이는 좌측 뷰포트에서는 안 보였다. 게다가 그
+        # 배치는 두 서브시스템이 한 씬 노드를 공유하는 구조라, 프록시 쪽
+        # 격리 로직을 손대면 LiDAR 시각화가 같이 깨진다(Phase 5 계획서가
+        # 그 위험을 명시적으로 경고해 두었다).
+        #
+        # 좌표계를 보면 답이 분명하다: 스캔 포인트는 MaroPump가 **Maya
+        # 월드 좌표**로 들고 있는 값이다(ROS 프레임으로 바꾸는 것은 발행
+        # 직전이다). 즉 이건 ROS 프레임 표현이 아니라 Maya 씬 지오메트리이고,
+        # 자기가 스캔한 메쉬 위에 겹쳐 보이는 것이 맞다. 최상위에 두면
+        # _refreshMayaIsolation()이 여느 assembly와 똑같이 좌측 패널에
+        # 넣어 주므로 특별 취급 자체가 필요 없어진다.
         pointCloud = cmds.createNode("maroPointCloud")
         pointCloud = cmds.ls(pointCloud, long=True)[0]
         pointCloudParents = cmds.listRelatives(pointCloud, parent=True, fullPath=True) or []
         if pointCloudParents:
+            # 실패 시 이 트랜스폼을 지우면 셰이프도 함께 사라진다.
             pointCloudAutoTransform = pointCloudParents[0]
-            proxyGroup = maroRosProxy.ensureProxyGroup()
-            newShortName = cmds.parent(pointCloud, proxyGroup, relative=True, shape=True)[0]
-            pointCloud = proxyGroup + "|" + newShortName
-            if cmds.objExists(pointCloudAutoTransform):
-                cmds.delete(pointCloudAutoTransform)
-            pointCloudAutoTransform = None
+            renamed = cmds.rename(pointCloudAutoTransform,
+                                  object_.split("|")[-1] + "_maroPointCloud")
+            pointCloudAutoTransform = cmds.ls(renamed, long=True)[0]
+            pointCloud = cmds.ls(
+                cmds.listRelatives(pointCloudAutoTransform, shapes=True,
+                                   fullPath=True, type="maroPointCloud")[0],
+                long=True)[0]
         cmds.connectAttr(lidar + ".message", pointCloud + ".sourceLidar")
 
         if _hasMeshShape(object_):
@@ -791,9 +811,11 @@ def _onLidarMenuItemClicked(object_):
         # 지우면 object_(사용자가 우클릭한 오브젝트)나 공유 프록시 그룹까지
         # 지워 버리는 사고가 난다. 셰이프 자신을 지우는 것과, 아직 셰이프를
         # 옮기기 전 단계에서 실패했을 때를 위해 자동 생성 트랜스폼을 따로
-        # 지우는 것은 서로 배타적이지 않다(성공적으로 옮긴 뒤에는
-        # lidarAutoTransform/pointCloudAutoTransform을 이미 None으로
-        # 되돌려 뒀으므로 이중 삭제 시도가 없다).
+        # 지우는 것은 서로 배타적이지 않다. lidar 쪽은 성공적으로 옮긴 뒤
+        # lidarAutoTransform을 None으로 되돌려 두므로 이중 삭제가 없고,
+        # 포인트클라우드 쪽은 그 자동 트랜스폼이 곧 최종 부모라서 셰이프를
+        # 먼저 지운 뒤 빈 트랜스폼을 마저 지우는 것이 맞다(objExists로
+        # 각각 가드한다).
         # [I-2] placeholderSphere는 생성 직후 cmds.select()로 선택돼 있을 수
         # 있다. 지워지는 노드는 Maya가 알아서 선택 목록에서 걷어내므로(축
         # 생성 실패 롤백에서도 별도 처리 없이 같은 방식에 기대는 것과 동일)

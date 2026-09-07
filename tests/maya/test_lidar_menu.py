@@ -46,10 +46,19 @@ print("mesh used directly as target (no placeholder) OK")
 pointClouds = cmds.ls(type="maroPointCloud", long=True)
 assert len(pointClouds) == 1
 pointCloudParents = cmds.listRelatives(pointClouds[0], parent=True, fullPath=True) or []
-import maroRosProxy  # noqa: E402
-assert pointCloudParents and pointCloudParents[0] == maroRosProxy._PROXY_GROUP_PATH, (
-    "the point cloud must be parented under maroRosProxy_grp for free viewport isolation")
-print("point cloud parented under the ROS proxy group OK")
+# [정정, 2026-09-07] 예전 계약은 "maroRosProxy_grp 밑" 이었다. 그 배치는
+# 패널별 격리가 공짜라는 이유였지만, maroRosProxy._refreshMayaIsolation()이
+# 그 그룹을 Maya(좌측) 패널에서 **일부러 빼기** 때문에 포인트클라우드가 정작
+# 스캔 대상이 보이는 뷰포트에서 안 보였다. 스캔 포인트는 Maya 월드 좌표
+# 값이므로(ROS 프레임 변환은 발행 직전에 한다) 최상위 씬 지오메트리로 두는
+# 것이 맞고, 그러면 격리 로직이 여느 assembly와 똑같이 처리한다.
+assert pointCloudParents, "the point cloud shape must have a transform parent"
+assert "|" not in pointCloudParents[0][1:], (
+    "the point cloud must sit at the top level, not inside another group -- got %r"
+    % (pointCloudParents[0],))
+assert not pointCloudParents[0].startswith("|maroRosProxy_grp"), (
+    "the point cloud must no longer ride on the ROS proxy group")
+print("point cloud is a top-level object (visible in the Maya viewport) OK")
 
 sourceLidarConnections = cmds.listConnections(
     pointClouds[0] + ".sourceLidar", shapes=True) or []

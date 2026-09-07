@@ -113,6 +113,42 @@ restoredSourceLin = cmds.listConnections(boundCubeLin + ".translateY", source=Tr
 assert restoredSourceLin == [originalSourceLin]
 print("linear (TranslationLimit) calibration session OK")
 
+# (d-2) 대상을 **풀 DAG 경로**로 넘겨도 복원된다.
+#
+# 실제 패널이 넘기는 형태가 이것이다(maroCapabilityPanel._onCalibrate가
+# cmds.ls(..., long=True)로 정규화한다). 그런데 start()는 대상을 헬퍼
+# 로케이터 밑으로 옮기므로 그 순간 원래 풀 경로는 더 이상 존재하지 않는다
+# -- 그 뒤로도 옛 경로를 계속 쓰면 정리 단계의 parent/setAttr/connectAttr가
+# 전부 없는 노드를 가리킨다. 짧은 이름은 Maya가 계층과 무관하게 해소해 주기
+# 때문에 이 결함이 지금까지 드러나지 않았다.
+axisFull = cmds.createNode("maroAxis", name="fullPathAxis")
+rotFull = cmds.createNode("maroRotation", name="fullPathRot")
+cmds.connectAttr(rotFull + ".capabilityOut", axisFull + ".capabilityIn[0]")
+cmds.setAttr(rotFull + ".angle", 0.3)
+groupFull = cmds.group(empty=True, name="fullPathGroup")
+cubeFull = cmds.polyCube(name="fullPathCube")[0]
+cmds.parent(cubeFull, groupFull)
+cubeFull = cmds.ls(cubeFull, long=True)[0]          # "|fullPathGroup|fullPathCube"
+cmds.connectAttr(axisFull + ".position", cubeFull + ".rotateY")
+sourceFull = cmds.listConnections(cubeFull + ".rotateY", source=True,
+                                  destination=False, plugs=True)[0]
+valueFull = cmds.getAttr(cubeFull + ".rotateY")
+
+sessionFull = calib.CalibrationSession()
+sessionFull.start(cubeFull, axisDirection=(0.0, 1.0, 0.0),
+                  pivotWorld=(0.0, 0.0, 0.0), isLinear=False)
+sessionFull.finish()
+
+restoredFull = cmds.listConnections(cubeFull + ".rotateY", source=True,
+                                    destination=False, plugs=True)
+assert restoredFull == [sourceFull], (
+    "a full-path target must be restored too, got %r" % (restoredFull,))
+assert abs(cmds.getAttr(cubeFull + ".rotateY") - valueFull) < 1e-9
+parentsFull = cmds.listRelatives(cubeFull, parent=True, fullPath=True)
+assert parentsFull == [cmds.ls(groupFull, long=True)[0]], (
+    "the target must go back under its original parent, got %r" % (parentsFull,))
+print("full-path target restores OK")
+
 # (e) 창이 캘리브레이션 도중 닫히면 패널이 세션을 취소해야 한다.
 #
 # 이게 없으면 조용한 씬 손상이다: start()는 대상의 구동 채널을 끊고 대상을
