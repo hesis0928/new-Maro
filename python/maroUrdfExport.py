@@ -468,6 +468,30 @@ def export(path=None):
         return None
 
 
+def mayaTrianglesToRosMeters(triangles):
+    """Maya 내부 단위(센티미터)의 링크 로컬 삼각형들을 ROS 프레임 미터로.
+
+    축 재배치 (x,y,z) -> (x,-z,y)는 python/maroLimitCalibration.py의
+    mayaDirectionToRos와 **같은 식**이다. 다른 점은 스케일뿐이다 --
+    방향 벡터는 단위가 없어 스케일을 곱하지 않지만 위치는 곱한다.
+
+    **정점 순서를 바꾸지 않는다.** 그 재배치의 행렬식은 +1이다(X축 -90°
+    회전이며 반사가 아니다). 따라서 와인딩이 그대로 보존되어 법선이
+    뒤집히지 않는다 -- 반사였다면 삼각형마다 정점 두 개를 맞바꿔야 했고,
+    확인하지 않고 넘어갔다면 RViz에서 안팎이 뒤집힌 메쉬가 나왔을 것이다.
+
+    스케일은 메쉬 하나당 한 번만 조회한다(정점마다 om2를 부르지 않는다).
+    om2는 UI 선형 단위 계층 아래에서 항상 내부 단위로만 동작하므로
+    (_gatherAxisWorldTransformRos의 주석과 같은 이유) 사용자의 UI 단위
+    설정이 이 값을 흔들지 않는다.
+    """
+    scale = om2.MDistance(1.0, om2.MDistance.internalUnit()).asMeters()
+    return [
+        tuple((v[0] * scale, -v[2] * scale, v[1] * scale) for v in triangle)
+        for triangle in triangles
+    ]
+
+
 # 바이너리 STL 헤더. 80바이트까지 \0으로 채운다(설계 스펙 §5).
 _STL_HEADER = b"Maro URDF export"
 

@@ -439,6 +439,31 @@ _degVals = _struct.unpack("<12fH", open(_degPath, "rb").read()[84:134])
 assert _degVals[0:3] == (0.0, 0.0, 0.0), _degVals[0:3]
 print("writeBinaryStl OK")
 
+# --- mayaTrianglesToRosMeters (슬라이스 1) ---
+# Maya 내부 단위는 항상 센티미터다(실측: om2.MDistance.internalUnit() == 6,
+# .asMeters() == 0.01). 100 단위 = 1 미터.
+_converted = urdf.mayaTrianglesToRosMeters(
+    [((100.0, 0.0, 0.0), (0.0, 100.0, 0.0), (0.0, 0.0, 100.0))])
+assert len(_converted) == 1
+_a, _b, _c = _converted[0]
+# 축 재배치 (x,y,z) -> (x,-z,y), 그리고 cm -> m.
+assert _a == (1.0, 0.0, 0.0), _a          # maya +X -> ros +X
+assert _b == (0.0, 0.0, 1.0), _b          # maya +Y(up) -> ros +Z(up)
+assert _c == (0.0, -1.0, 0.0), _c         # maya +Z -> ros -Y
+
+# 와인딩 보존: 이 재배치의 행렬식이 +1(반사가 아닌 회전)이므로, 변환 후
+# 삼각형의 법선은 "변환 전 법선을 같은 방식으로 재배치한 것"과 같아야
+# 한다. 반사였다면 부호가 뒤집혀 RViz에서 안팎이 뒤집힌 메쉬가 나온다.
+_beforeNormal = urdf._triangleNormal(
+    (100.0, 0.0, 0.0), (0.0, 100.0, 0.0), (0.0, 0.0, 100.0))
+_expectedNormal = (_beforeNormal[0], -_beforeNormal[2], _beforeNormal[1])
+_afterNormal = urdf._triangleNormal(_a, _b, _c)
+assert all(abs(x - y) < 1e-9 for x, y in zip(_expectedNormal, _afterNormal)), \
+    (_expectedNormal, _afterNormal)
+
+assert urdf.mayaTrianglesToRosMeters([]) == []
+print("mayaTrianglesToRosMeters OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
