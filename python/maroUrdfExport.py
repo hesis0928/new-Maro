@@ -14,7 +14,9 @@ jointType/computeRelativeOrigin/buildUrdfXml)은 Maya 씬을 조회하지 않는
 추가된다.
 """
 
+import math
 import os
+import struct
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om2
@@ -464,3 +466,49 @@ def export(path=None):
     except Exception as exc:  # noqa: BLE001 -- 메뉴 커맨드 문자열 경계
         cmds.warning("Maro: URDF export failed: {}".format(exc))
         return None
+
+
+# 바이너리 STL 헤더. 80바이트까지 \0으로 채운다(설계 스펙 §5).
+_STL_HEADER = b"Maro URDF export"
+
+
+def _triangleNormal(a, b, c):
+    """삼각형의 단위 법선. 면적이 0이면 (0,0,0)을 준다 -- 0으로 나누지
+    않는다. 대부분의 STL 뷰어는 저장된 법선을 무시하고 다시 계산하지만,
+    전부 0으로 두면 형식을 잘못 쓴 것과 구별되지 않으므로 계산해 채운다."""
+    ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+    nx = uy * vz - uz * vy
+    ny = uz * vx - ux * vz
+    nz = ux * vy - uy * vx
+    length = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if length < 1e-12:
+        return (0.0, 0.0, 0.0)
+    return (nx / length, ny / length, nz / length)
+
+
+def writeBinaryStl(triangles, path):
+    """triangles([((x,y,z),(x,y,z),(x,y,z)), ...])를 바이너리 STL로 쓴다.
+
+    형식(전부 리틀엔디언):
+      오프셋 0    80바이트  헤더
+      오프셋 80    4바이트  uint32 삼각형 수
+      오프셋 84+  50바이트  삼각형당: 법선 3xfloat32, 정점 9xfloat32, uint16 속성
+
+    Maya 내장 익스포터(stlTranslator.mll)가 아니라 직접 쓰는 이유는 설계
+    스펙 §5에 있다 -- 좌표/단위 변환을 정점에 바로 적용할 수 있고(익스포터의
+    단위 해석에 의존하지 않는다), 순수 함수라 배치 테스트로 왕복 검증이
+    된다. maroSyntheticDataPointCloud.writePly와 같은 결이다.
+
+    "<12fH"는 12*4 + 2 = 50바이트다 -- "<"가 정렬 패딩을 끄므로 구조체
+    크기가 형식대로 정확히 나온다.
+    """
+    with open(path, "wb") as f:
+        f.write(_STL_HEADER.ljust(80, b"\0"))
+        f.write(struct.pack("<I", len(triangles)))
+        for a, b, c in triangles:
+            nx, ny, nz = _triangleNormal(a, b, c)
+            f.write(struct.pack("<12fH", nx, ny, nz,
+                                a[0], a[1], a[2],
+                                b[0], b[1], b[2],
+                                c[0], c[1], c[2], 0))

@@ -410,6 +410,35 @@ os.remove(tmpPathInvert)
 
 os.remove(tmpPath)
 
+# --- writeBinaryStl (슬라이스 1) ---
+import struct as _struct
+
+_stlDir = tempfile.mkdtemp(prefix="maro_stl_")
+_stlPath = os.path.join(_stlDir, "one.stl")
+# 반시계 방향(CCW) 삼각형 -- 법선이 +Z여야 한다.
+urdf.writeBinaryStl([((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))], _stlPath)
+_raw = open(_stlPath, "rb").read()
+assert len(_raw) == 84 + 50, len(_raw)
+assert _raw[:16] == b"Maro URDF export", _raw[:16]
+assert _raw[16:80] == b"\0" * 64, "header must be zero-padded to 80 bytes"
+assert _struct.unpack("<I", _raw[80:84])[0] == 1
+_vals = _struct.unpack("<12fH", _raw[84:134])
+assert _vals[0:3] == (0.0, 0.0, 1.0), _vals[0:3]
+assert _vals[3:12] == (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0), _vals[3:12]
+assert _vals[12] == 0, "attribute byte count must be 0"
+
+# 삼각형 0개도 유효한 STL이다(헤더 + 개수 0).
+_emptyPath = os.path.join(_stlDir, "empty.stl")
+urdf.writeBinaryStl([], _emptyPath)
+assert len(open(_emptyPath, "rb").read()) == 84
+
+# 축퇴 삼각형(면적 0)은 법선을 0으로 둔다 -- 0으로 나누면 안 된다.
+_degPath = os.path.join(_stlDir, "deg.stl")
+urdf.writeBinaryStl([((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))], _degPath)
+_degVals = _struct.unpack("<12fH", open(_degPath, "rb").read()[84:134])
+assert _degVals[0:3] == (0.0, 0.0, 0.0), _degVals[0:3]
+print("writeBinaryStl OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
