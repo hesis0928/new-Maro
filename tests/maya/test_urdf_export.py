@@ -338,7 +338,8 @@ flatAxes = cmds.maroListAxisNodes()
 axisRows = urdf.sliceAxisRows(flatAxes)
 assert len(axisRows) == 2, axisRows
 
-tmpPath = os.path.join(tempfile.gettempdir(), "maro_urdf_export_test.urdf")
+tmpPath = os.path.join(tempfile.mkdtemp(prefix="maro_urdf_export_test_"),
+                        "maro_urdf_export_test.urdf")
 result = urdf.export(path=tmpPath)
 assert result == tmpPath, result
 assert os.path.isfile(tmpPath), tmpPath
@@ -393,7 +394,8 @@ print("end-to-end export() with a real 2-axis chain OK")
 # 켜고 다시 내보내서 axis xyz가 "1 0 0" -> "-1 0 0"으로 뒤집히는지 확인한다.
 cmds.setAttr(childAxis + ".conventionInvert", True)
 
-tmpPathInvert = os.path.join(tempfile.gettempdir(), "maro_urdf_export_test_invert.urdf")
+tmpPathInvert = os.path.join(tempfile.mkdtemp(prefix="maro_urdf_export_test_invert_"),
+                              "maro_urdf_export_test_invert.urdf")
 resultInvert = urdf.export(path=tmpPathInvert)
 assert resultInvert == tmpPathInvert, resultInvert
 
@@ -563,6 +565,123 @@ assert _v.find("origin").get("rpy") == "0 0 0", _v.find("origin").attrib
 assert _byName["noMesh"].find("visual") is None
 assert _byName["legacy"].find("visual") is None
 print("buildUrdfXml <visual> OK")
+
+# --- 최종 리뷰 Finding 1 회귀: 메쉬는 바인딩된 트랜스폼이 아니라
+# maroAxis 로케이터의 부모 트랜스폼(=URDF 링크 프레임) 기준으로 구워야
+# 한다 ---
+#
+# 위쪽의 종단 간 픽스처(baseLink/armLink)는 자식 로케이터를 일부러 자식
+# 메쉬 위치로 옮겨(306-307행) 두 프레임을 일치시킨다 -- 그래서 이 결함을
+# 절대 못 잡는다(디자인 스펙 §4 [정정, 2026-09-07] 참고). 이 픽스처는
+# 반대로 로케이터와 바인딩된 트랜스폼을 평행이동과 회전 양쪽에서 일부러
+# 어긋나게 둔다 -- 실제 리깅 관례(관절 위치에 로케이터, 메쉬는 자기
+# 피벗)를 흉내낸다.
+cmds.file(new=True, force=True)
+
+_f1RootMesh = cmds.polyCube(name="f1Base")[0]
+_f1RootAxis = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_f1RootAxis, _f1RootMesh)
+cmds.setAttr(_f1RootAxis + ".jointName", "f1_base_joint", type="string")
+_f1RootAxis = cmds.ls(_f1RootAxis, long=True)[0]
+# 루트 축은 origin 계산에 안 쓰이므로(기존 e2e 픽스처와 같은 이유) 원점
+# 그대로 둔다.
+
+_f1ChildMesh = cmds.polyCube(name="f1Arm")[0]
+# "팔 메쉬 피벗 y=20cm" -- 디자인 스펙 §4 [정정]의 실측 시나리오와 같다.
+cmds.xform(_f1ChildMesh, worldSpace=True, translation=(0.0, 20.0, 0.0))
+
+_f1ChildAxis = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_f1ChildAxis, _f1ChildMesh)
+cmds.setAttr(_f1ChildAxis + ".jointName", "f1_arm_joint", type="string")
+_f1ChildAxis = cmds.ls(_f1ChildAxis, long=True)[0]
+_f1ChildAxisTransform = cmds.listRelatives(_f1ChildAxis, parent=True, fullPath=True)[0]
+# 관절(로케이터)은 메쉬 피벗과 다른 y=10cm에 두고, Z축으로 90도 돌려
+# 둔다 -- 평행이동과 회전 둘 다에서 두 프레임이 어긋나게 한다. 현재 세션
+# 각도 단위는 파일 앞쪽에서 "rad"로 복원돼 있으므로(369행)
+# math.pi/2 == 90도다.
+cmds.xform(_f1ChildAxisTransform, worldSpace=True, translation=(0.0, 10.0, 0.0),
+           rotation=(0.0, 0.0, math.pi / 2.0))
+
+cmds.maroConnectAxis(_f1ChildAxis, _f1RootAxis)
+
+_f1MeshDir = tempfile.mkdtemp(prefix="maro_urdf_f1_")
+_f1Path = os.path.join(_f1MeshDir, "f1.urdf")
+assert urdf.export(path=_f1Path) == _f1Path
+
+# 기대값은 코드 아래 함수(_linkMeshTriangles/_writeLinkMeshes)를 다시
+# 부르지 않고 독립적으로 구한다 -- childMesh는 대칭 큐브이므로 그 월드
+# 중심은 자신의 피벗 월드 위치(0, 20, 0)cm와 같다(자기 자신의 회전은
+# 손대지 않았으므로 무관하다). 그 점을 로케이터의 부모 트랜스폼(=링크
+# 프레임)의 역행렬로 되돌리면 기대하는 링크-로컬 위치가 나온다 -- 이
+# 파일의 computeRelativeOrigin 회전 검증과 같은 방식으로 om2를 직접
+# 불러 독립 검증한다.
+_f1FrameDag = om2.MSelectionList().add(_f1ChildAxisTransform).getDagPath(0)
+_f1FrameInverse = _f1FrameDag.inclusiveMatrixInverse()
+_f1MeshWorldCentroidMaya = om2.MPoint(0.0, 20.0, 0.0)  # cm
+_f1ExpectedLocalMaya = _f1MeshWorldCentroidMaya * _f1FrameInverse
+# mayaTrianglesToRosMeters와 같은 식: (x,y,z)->(x,-z,y), cm->m.
+_f1ExpectedLocalRos = (
+    _f1ExpectedLocalMaya.x * 0.01,
+    -_f1ExpectedLocalMaya.z * 0.01,
+    _f1ExpectedLocalMaya.y * 0.01,
+)
+# 정합성 확인: 두 프레임이 실제로 어긋나 있으므로 기대값이 원점이면 안
+# 된다(원점이면 이 테스트가 아무것도 구분하지 못한다).
+_f1ExpectedMagnitude = sum(v * v for v in _f1ExpectedLocalRos) ** 0.5
+assert _f1ExpectedMagnitude > 1e-3, (
+    "test setup sanity: locator and bound transform must not be coincident, "
+    "got expected local {}".format(_f1ExpectedLocalRos))
+
+_f1MeshFile = os.path.join(_f1MeshDir, "meshes", "f1Arm.stl")
+assert os.path.isfile(_f1MeshFile), _f1MeshFile
+_f1Raw = open(_f1MeshFile, "rb").read()
+_f1Count = _struct.unpack("<I", _f1Raw[80:84])[0]
+assert _f1Count == 12, _f1Count
+_f1Verts = []
+for _f1I in range(_f1Count):
+    _f1Vals = _struct.unpack("<12fH", _f1Raw[84 + _f1I * 50: 84 + _f1I * 50 + 50])
+    _f1Verts.append(_f1Vals[3:6])
+    _f1Verts.append(_f1Vals[6:9])
+    _f1Verts.append(_f1Vals[9:12])
+_f1Xs = [v[0] for v in _f1Verts]
+_f1Ys = [v[1] for v in _f1Verts]
+_f1Zs = [v[2] for v in _f1Verts]
+# 대칭 큐브의 실제 중심은 바운딩 박스 중심과 같다 -- 삼각화가 정점을
+# 균등하지 않게 반복해도(getTriangles) 이 중심 계산에는 영향이 없다.
+_f1Centroid = ((min(_f1Xs) + max(_f1Xs)) / 2.0,
+               (min(_f1Ys) + max(_f1Ys)) / 2.0,
+               (min(_f1Zs) + max(_f1Zs)) / 2.0)
+assert all(abs(a - b) < 1e-4 for a, b in zip(_f1Centroid, _f1ExpectedLocalRos)), (
+    "mesh baked in the wrong frame -- got centre {} in the link frame, expected "
+    "{} (derived independently from the locator's own inverse matrix); if this "
+    "is (0, 0, 0) instead, the mesh is still being baked in the bound target's "
+    "own frame (final-review Finding 1)".format(_f1Centroid, _f1ExpectedLocalRos))
+print("visual mesh baked in the locator's frame, not the bound target's frame "
+      "(final-review Finding 1) OK: link-frame centre {}".format(_f1Centroid))
+
+# --- 최종 리뷰 Finding 2 회귀: 디포머의 중간 셰이프(...ShapeOrig)가
+# 삼각형을 두 배로 만들면 안 된다 ---
+cmds.file(new=True, force=True)
+_f2Mesh = cmds.polyCube(name="f2Bent")[0]
+cmds.select(_f2Mesh, replace=True)
+cmds.nonLinear(type="bend")  # 디포머 히스토리가 붙으면 셰이프에 ...ShapeOrig가 생긴다.
+
+_f2Axis = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_f2Axis, _f2Mesh)
+cmds.setAttr(_f2Axis + ".jointName", "f2_joint", type="string")
+
+_f2Dir = tempfile.mkdtemp(prefix="maro_urdf_f2_")
+_f2Path = os.path.join(_f2Dir, "f2.urdf")
+assert urdf.export(path=_f2Path) == _f2Path
+
+_f2Stl = os.path.join(_f2Dir, "meshes", "f2Bent.stl")
+assert os.path.isfile(_f2Stl), _f2Stl
+_f2Count = _struct.unpack("<I", open(_f2Stl, "rb").read()[80:84])[0]
+assert _f2Count == 12, (
+    "intermediate shape (...ShapeOrig) doubled the geometry -- got {} triangles, "
+    "expected the undeformed count 12 (final-review Finding 2)".format(_f2Count))
+print("bend-deformed mesh exports the undeformed triangle count, no "
+      "intermediate-shape ghost body (final-review Finding 2) OK")
 
 maya.standalone.uninitialize()
 print("teardown OK")

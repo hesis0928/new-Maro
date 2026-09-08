@@ -354,13 +354,26 @@ def _resolveCapabilityDetails(axis, capRow, conventionAxis):
     return result
 
 
+def _axisParentTransformPath(axis):
+    """axis(maroAxis 로케이터 셰이프)의 부모 트랜스폼 전체 경로를 돌려준다.
+
+    이 노드가 URDF의 **링크 프레임**을 실제로 정한다(설계 스펙 §4
+    [정정, 2026-09-07] -- 최종 전체 브랜치 리뷰 Finding 1). 조인트 원점
+    (`_gatherAxisWorldTransformRos`)과 관절 축(`axisVectorForConvention`)이
+    이미 이 노드를 프레임으로 쓰므로, 시각 메쉬(`_linkMeshTriangles`)도
+    같은 노드를 써야 셋이 같은 프레임에 선다. `maroBindAxis`는 message
+    커넥션 하나일 뿐 이 트랜스폼을 바인딩 대상 위로 옮기지 않으므로, 이
+    함수와 바인딩된 트랜스폼(`boundTargetPath`)은 일반적으로 다른 노드다."""
+    return cmds.listRelatives(axis, parent=True, fullPath=True)[0]
+
+
 def _gatherAxisWorldTransformRos(axis):
     """axis(maroAxis 로케이터 셰이프)의 부모 트랜스폼의 월드 위치/회전을
     ROS 프레임 (pos, quat) 튜플로 돌려준다.
 
     maroAxis는 로케이터 **셰이프**다 -- 위치/회전은 실제로 그 부모
     트랜스폼에 있으므로(`createNode("maroAxis")`가 자동으로 만드는 부모),
-    `cmds.listRelatives(axis, parent=True)`로 먼저 그 트랜스폼을 얻는다.
+    `_axisParentTransformPath(axis)`로 먼저 그 트랜스폼을 얻는다.
 
     위치는 `cmds.xform`이 아니라 `dagPath.inclusiveMatrix()` +
     `MTransformationMatrix.translation()`으로 얻는다 -- `cmds.xform`은
@@ -379,7 +392,7 @@ def _gatherAxisWorldTransformRos(axis):
     그 옆 주석 참고). (`_resolveCapabilityDetails`의 capMin/capMax는 이와는
     별개 문제다 -- 그쪽은 애초에 UI 단위가 전혀 개입하지 않는 평범한
     double이라 감싸면 안 되는 값이었다.)"""
-    transformPath = cmds.listRelatives(axis, parent=True, fullPath=True)[0]
+    transformPath = _axisParentTransformPath(axis)
     dagPath = om2.MSelectionList().add(transformPath).getDagPath(0)
     worldMatrix = om2.MTransformationMatrix(dagPath.inclusiveMatrix())
     pos = worldMatrix.translation(om2.MSpace.kWorld)
@@ -394,9 +407,10 @@ def _shortName(fullPath):
     return fullPath.split("|")[-1]
 
 
-def _linkMeshTriangles(linkTransform):
-    """linkTransform의 **직속** mesh 셰이프들에서 삼각형을 모아 링크 로컬
-    프레임(Maya 내부 단위)으로 돌려준다. 메쉬가 없으면 빈 리스트.
+def _linkMeshTriangles(linkTransform, axisFramePath):
+    """linkTransform의 **직속** mesh 셰이프(중간 셰이프 제외)들에서 삼각형을
+    모아 **링크 프레임**(axisFramePath, Maya 내부 단위)으로 돌려준다. 메쉬가
+    없으면 빈 리스트.
 
     **allDescendents를 쓰면 안 된다.** 조인트 체인에서 한 링크의 자손에는
     자식 링크의 메쉬가 들어 있어서, 자손 전체를 훑으면 같은 지오메트리가
@@ -418,16 +432,32 @@ def _linkMeshTriangles(linkTransform):
     것은 shapes를 뗀 쪽이며, 그 형태로 바꾸면 부모 링크가 삼각형 24개를
     받아 테스트가 실패하는 것을 확인했다.
 
-    월드 좌표를 링크의 월드 역행렬로 되돌린다 -- 셰이프가 링크의 직속
-    자식이면 오브젝트 공간과 같지만(실측 확인), 중간 트랜스폼이 끼어도 이
-    경로는 항상 링크 프레임을 준다.
+    **중간 셰이프(intermediate object)는 건너뛴다** [최종 리뷰 Finding 2].
+    디포머가 걸린 메쉬는 `...ShapeOrig` 중간 셰이프를 함께 갖는데, 그것까지
+    세면 변형된 껍질과 변형 전 껍질이 겹쳐 들어가 삼각형이 두 배가 되고
+    RViz에 유령 몸통이 뜬다(실측: bend 디포머를 건 큐브가 12개가 아니라
+    24개). `noIntermediate=True`로 막는다 -- `MaroLidarScan.cpp`가 이미 같은
+    문제를 `isIntermediateObject()`로 풀어 뒀고, 그 헤더가 "이 문제를 두 번
+    풀지 않는다"고 적어 둔 바로 그 자리다.
+
+    [정정, 최종 리뷰 Finding 1] 정점을 되돌리는 역행렬은 linkTransform(메쉬
+    셰이프를 찾은 바인딩 대상)이 아니라 axisFramePath(maroAxis 로케이터의
+    부모 트랜스폼)에서 가져온다. URDF의 링크 프레임을 실제로 정하는 것은
+    조인트 원점(`_gatherAxisWorldTransformRos`)과 관절 축
+    (`axisVectorForConvention`)이 이미 쓰는 이 로케이터 프레임이다 --
+    `maroBindAxis`는 message 커넥션 하나일 뿐 로케이터를 바인딩 대상 위로
+    옮기거나 자세를 맞추지 않으므로, 관절이 팔꿈치에 있고 팔 메쉬 피벗이 그
+    위에 있는 흔한 리그에서 두 프레임은 어긋난다(설계 스펙 §4
+    [정정, 2026-09-07]). 회전도 로케이터 기준으로 같이 되돌려야 하므로,
+    위치/회전을 따로 분해하지 않고 axisFramePath의 inclusiveMatrixInverse()
+    하나로 한 번에 되돌린다.
     """
     shapes = cmds.listRelatives(linkTransform, shapes=True, fullPath=True,
-                                type="mesh") or []
+                                type="mesh", noIntermediate=True) or []
     if not shapes:
         return []
 
-    linkInverse = om2.MSelectionList().add(linkTransform).getDagPath(0) \
+    frameInverse = om2.MSelectionList().add(axisFramePath).getDagPath(0) \
         .inclusiveMatrixInverse()
     triangles = []
     for shape in shapes:
@@ -440,7 +470,7 @@ def _linkMeshTriangles(linkTransform):
         for i in range(0, len(indices), 3):
             corners = []
             for j in range(3):
-                p = worldPoints[indices[i + j]] * linkInverse
+                p = worldPoints[indices[i + j]] * frameInverse
                 corners.append((p.x, p.y, p.z))
             triangles.append(tuple(corners))
     return triangles
@@ -453,13 +483,19 @@ def _writeLinkMeshes(links, meshDir, robotName):
 
     meshDir는 실제로 쓸 것이 생겼을 때만 만든다 -- 지오메트리가 하나도
     없는 씬을 내보내면 빈 meshes/ 디렉터리를 남기지 않는다.
+
+    targetPath(메쉬 셰이프를 찾을 바인딩 대상)와 axisFramePath(정점을 구울
+    링크 프레임 -- maroAxis 로케이터의 부모 트랜스폼)는 일반적으로 서로
+    다른 노드다(최종 리뷰 Finding 1). 링크 딕셔너리가 둘 다 갖고 있어야
+    한다 -- `_buildRobotModel`이 채운다.
     """
     usedNames = set()
     for link in links:
         targetPath = link.get("targetPath")
-        if not targetPath:
+        axisFramePath = link.get("axisFramePath")
+        if not targetPath or not axisFramePath:
             continue
-        triangles = _linkMeshTriangles(targetPath)
+        triangles = _linkMeshTriangles(targetPath, axisFramePath)
         if not triangles:
             continue
         fileName = sanitizeMeshFileName(link["name"], usedNames)
@@ -478,10 +514,13 @@ def _buildRobotModel():
     root, childrenByParent = buildAxisTree(axisRows)
 
     rowsByPath = {row["axisFullPath"]: row for row in axisRows}
-    # targetPath는 _writeLinkMeshes가 그 링크의 메쉬를 찾는 데 쓴다.
-    # buildUrdfXml은 이 키를 무시한다.
+    # targetPath는 _writeLinkMeshes가 그 링크의 메쉬 셰이프를 찾는 데 쓰고,
+    # axisFramePath는 그 메쉬를 구울 링크 프레임(로케이터의 부모 트랜스폼,
+    # _gatherAxisWorldTransformRos/axisVectorForConvention과 같은 노드)을
+    # 알려준다(최종 리뷰 Finding 1). buildUrdfXml은 이 키들을 무시한다.
     links = [{"name": _shortName(rowsByPath[root]["boundTargetPath"]),
-              "targetPath": rowsByPath[root]["boundTargetPath"]}]
+              "targetPath": rowsByPath[root]["boundTargetPath"],
+              "axisFramePath": _axisParentTransformPath(root)}]
     joints = []
 
     def _visit(parentAxis):
@@ -516,7 +555,8 @@ def _buildRobotModel():
                     axisVector = tuple(0.0 if v == 0.0 else -v for v in axisVector)
 
             links.append({"name": _shortName(childRow["boundTargetPath"]),
-                          "targetPath": childRow["boundTargetPath"]})
+                          "targetPath": childRow["boundTargetPath"],
+                          "axisFramePath": _axisParentTransformPath(childAxis)})
             joints.append({
                 "name": childRow["jointName"],
                 "type": jt["type"],
