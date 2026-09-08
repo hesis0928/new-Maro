@@ -404,6 +404,20 @@ def _linkMeshTriangles(linkTransform):
     maroDagMenu._findLidarForMesh가 listRelatives(shapes=True)로 직속만
     보는 것과 같은 이유다.
 
+    [실측, 2026-09-07] 위험한 형태는 정확히 `allDescendents=True, type="mesh"`
+    (shapes 플래그 **없이**) 하나다. 같은 씬에서 재 봤다:
+
+        shapes=True                       -> ['|pBase|pBaseShape']
+        allDescendents=True, shapes=True  -> ['|pBase|pBaseShape']      (같음!)
+        allDescendents=True (shapes 없음) -> ['|pBase|pBaseShape',
+                                              '|pBase|pChild|pChildShape']
+
+    즉 `shapes=True`는 `allDescendents`의 재귀를 조용히 무력화한다. 그래서
+    "allDescendents를 쓰되 shapes도 남겨 둔" 실수는 우연히 올바르게 동작하고,
+    테스트도 (잡을 결함이 없으므로) 통과한다. 회귀 테스트가 실제로 겨누는
+    것은 shapes를 뗀 쪽이며, 그 형태로 바꾸면 부모 링크가 삼각형 24개를
+    받아 테스트가 실패하는 것을 확인했다.
+
     월드 좌표를 링크의 월드 역행렬로 되돌린다 -- 셰이프가 링크의 직속
     자식이면 오브젝트 공간과 같지만(실측 확인), 중간 트랜스폼이 끼어도 이
     경로는 항상 링크 프레임을 준다.
