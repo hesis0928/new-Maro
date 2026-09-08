@@ -448,17 +448,38 @@ def _linkMeshTriangles(linkTransform, axisFramePath):
     `maroBindAxis`는 message 커넥션 하나일 뿐 로케이터를 바인딩 대상 위로
     옮기거나 자세를 맞추지 않으므로, 관절이 팔꿈치에 있고 팔 메쉬 피벗이 그
     위에 있는 흔한 리그에서 두 프레임은 어긋난다(설계 스펙 §4
-    [정정, 2026-09-07]). 회전도 로케이터 기준으로 같이 되돌려야 하므로,
-    위치/회전을 따로 분해하지 않고 axisFramePath의 inclusiveMatrixInverse()
-    하나로 한 번에 되돌린다.
+    [정정, 2026-09-07]).
+
+    [정정, 2차 수정 파동 Finding A] 그 역행렬은 axisFramePath의
+    inclusiveMatrixInverse()를 통째로 쓰면 안 된다 -- 그건 스케일/시어까지
+    포함한다. `_gatherAxisWorldTransformRos`는 이 트랜스폼에서 **평행이동과
+    회전만** 읽고 스케일은 일부러 무시한다(그 함수의 주석 참고). 두 소비자가
+    같은 프레임에서 같은 값을 읽어야 하는데 하나는 스케일을 포함하고 다른
+    하나는 무시하면, 로케이터의 부모 트랜스폼에 스케일이 조금이라도 있을 때
+    (`MaroAxisNode`는 자체 size 속성이 없는 `MPxLocatorNode`라 뷰포트에서
+    로케이터를 보이게 하려면 그 부모 트랜스폼 자체를 스케일하는 수밖에
+    없다 -- 흔한 상황이다) 메쉬가 반토막 나거나 엉뚱한 자리로 밀린다(실측:
+    로케이터 2배 스케일 -> 1cm 정육면체가 0.5cm로, 중심도 절반 거리로
+    수축). 그래서 평행이동+회전만으로 강체(rigid) 행렬을 손수 만들어
+    그것만 뒤집는다 -- `_gatherAxisWorldTransformRos`가 읽는 것과 정확히
+    같은 두 값이다. 메쉬 자신의 스케일은 이 경로와 무관하다: 월드 정점은
+    이미 메쉬 자신의 스케일을 반영한 채로 들어오고, 여기서는 로케이터
+    프레임의 평행이동/회전만 되돌리므로 메쉬 지오메트리 자체는 그대로
+    보존된다.
     """
     shapes = cmds.listRelatives(linkTransform, shapes=True, fullPath=True,
                                 type="mesh", noIntermediate=True) or []
     if not shapes:
         return []
 
-    frameInverse = om2.MSelectionList().add(axisFramePath).getDagPath(0) \
-        .inclusiveMatrixInverse()
+    frameDag = om2.MSelectionList().add(axisFramePath).getDagPath(0)
+    frameWorld = om2.MTransformationMatrix(frameDag.inclusiveMatrix())
+    framePos = frameWorld.translation(om2.MSpace.kWorld)
+    frameQuat = om2.MFnTransform(frameDag).rotation(om2.MSpace.kWorld, asQuaternion=True)
+    frameRigid = om2.MTransformationMatrix()
+    frameRigid.setTranslation(framePos, om2.MSpace.kWorld)
+    frameRigid.setRotation(frameQuat)
+    frameInverse = frameRigid.asMatrix().inverse()
     triangles = []
     for shape in shapes:
         meshFn = om2.MFnMesh(om2.MSelectionList().add(shape).getDagPath(0))

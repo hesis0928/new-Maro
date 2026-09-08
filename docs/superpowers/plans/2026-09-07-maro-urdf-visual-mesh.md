@@ -429,7 +429,34 @@ git commit -m "feat(urdf): emit <visual> and sanitise mesh filenames"
 
 **Interfaces:**
 - Consumes: Task 1의 `writeBinaryStl`, Task 2의 `mayaTrianglesToRosMeters`, Task 3의 `sanitizeMeshFileName`과 `visualMesh` 필드. **주의:** 이 태스크의 테스트 코드는 파일 앞쪽(기존 통합 절 끝, 374행 근처)에 들어가고 Task 1-3의 테스트 절은 파일 **끝**에 붙으므로, 앞쪽에서 뒤쪽 이름(`_struct` 등)을 쓸 수 없다 -- 필요한 import는 이 블록 안에서 다시 한다.
-- Produces: 없음(마지막 태스크). 내부 함수 `_linkMeshTriangles(linkTransform) -> list`와 `_writeLinkMeshes(links, meshDir, robotName) -> None`이 생기고, `_buildRobotModel`이 만드는 링크 딕셔너리에 `"targetPath"` 키가 추가된다(`buildUrdfXml`은 이 키를 무시한다).
+- Produces: 없음(마지막 태스크). 내부 함수 `_linkMeshTriangles(linkTransform, axisFramePath) -> list`와 `_writeLinkMeshes(links, meshDir, robotName) -> None`이 생기고, `_buildRobotModel`이 만드는 링크 딕셔너리에 `"targetPath"`와 `"axisFramePath"` 키가 추가된다(`buildUrdfXml`은 이 키들을 무시한다).
+
+> **[정정, 최종 전체 브랜치 리뷰 + 2차 수정 파동, 2026-09-07/09-08]** 아래
+> Step 3의 코드는 이 플랜을 작성할 당시(태스크 최초 구현) 그대로였고,
+> 최종 리뷰와 그 다음 재검토에서 잡힌 결함 세 개를 반영하지 못하고 있었다
+> -- 그대로 다시 실행하면 세 결함이 전부 되살아난다. 아래 Step 3/4는
+> 실제로 나간 코드(`python/maroUrdfExport.py`)에 맞춰 다시 썼다:
+>
+> 1. **최종 리뷰 Finding 1(프레임)** -- 정점을 되돌리는 역행렬은
+>    `linkTransform`(메쉬를 찾은 바인딩 대상)이 아니라 `axisFramePath`
+>    (maroAxis 로케이터의 부모 트랜스폼 -- `_gatherAxisWorldTransformRos`/
+>    `axisVectorForConvention`이 이미 링크 프레임으로 쓰는 바로 그 노드)
+>    에서 가져와야 한다. 아래 초안 코드의 "중간 트랜스폼이 끼어도 이
+>    경로는 항상 링크 프레임을 준다"는 설명은 틀렸다 -- `maroBindAxis`는
+>    message 커넥션 하나일 뿐이라 로케이터가 바인딩 대상과 다른 노드에
+>    남는 흔한 리그(관절은 팔꿈치, 메쉬 피벗은 그 위)에서 둘은 어긋난다
+>    (설계 스펙 §4 [정정, 2026-09-07] 참고).
+> 2. **최종 리뷰 Finding 2(중간 셰이프)** -- `listRelatives`에
+>    `noIntermediate=True`가 없으면 디포머가 붙은 메쉬의 `...ShapeOrig`
+>    중간 셰이프까지 세어 삼각형이 두 배가 된다.
+> 3. **2차 수정 파동 Finding A(로케이터 스케일)** -- Finding 1 수정 직후
+>    한 번 더 실측으로 잡힌 결함: `axisFramePath`의
+>    `inclusiveMatrixInverse()`를 통째로 쓰면 스케일/시어까지 들어온다.
+>    `_gatherAxisWorldTransformRos`는 같은 트랜스폼에서 평행이동/회전만
+>    읽으므로, `MaroAxisNode`(자체 size 속성이 없는 `MPxLocatorNode`라
+>    뷰포트에 보이려면 부모 트랜스폼 자체를 스케일할 수밖에 없다)의
+>    부모가 조금이라도 스케일돼 있으면 메쉬가 반토막 나거나 밀린다.
+>    평행이동+회전만으로 강체(rigid) 행렬을 손수 만들어 그것만 뒤집는다.
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
@@ -515,12 +542,28 @@ Expected: FAIL — `AssertionError` (meshes 디렉터리가 없다)
 
 - [ ] **Step 3: 씬에서 삼각형을 모으는 함수 둘을 구현한다**
 
-`python/maroUrdfExport.py`의 `def _buildRobotModel():` **바로 앞**에 붙인다:
+`python/maroUrdfExport.py`의 `def _buildRobotModel():` **바로 앞**에 붙인다
+(**[정정, 2026-09-08]** 아래 코드는 최종 리뷰 Finding 1/2와 2차 수정 파동
+Finding A까지 반영된, 실제로 나간 버전이다 -- 위 correction box 참고):
 
 ```python
-def _linkMeshTriangles(linkTransform):
-    """linkTransform의 **직속** mesh 셰이프들에서 삼각형을 모아 링크 로컬
-    프레임(Maya 내부 단위)으로 돌려준다. 메쉬가 없으면 빈 리스트.
+def _axisParentTransformPath(axis):
+    """axis(maroAxis 로케이터 셰이프)의 부모 트랜스폼 전체 경로를 돌려준다.
+
+    이 노드가 URDF의 **링크 프레임**을 실제로 정한다(설계 스펙 §4
+    [정정, 2026-09-07]). 조인트 원점(`_gatherAxisWorldTransformRos`)과
+    관절 축(`axisVectorForConvention`)이 이미 이 노드를 프레임으로 쓰므로,
+    시각 메쉬(`_linkMeshTriangles`)도 같은 노드를 써야 셋이 같은 프레임에
+    선다. `maroBindAxis`는 message 커넥션 하나일 뿐 이 트랜스폼을 바인딩
+    대상 위로 옮기지 않으므로, 이 함수와 바인딩된 트랜스폼
+    (`boundTargetPath`)은 일반적으로 다른 노드다."""
+    return cmds.listRelatives(axis, parent=True, fullPath=True)[0]
+
+
+def _linkMeshTriangles(linkTransform, axisFramePath):
+    """linkTransform의 **직속** mesh 셰이프(중간 셰이프 제외)들에서 삼각형을
+    모아 **링크 프레임**(axisFramePath, Maya 내부 단위)으로 돌려준다. 메쉬가
+    없으면 빈 리스트.
 
     **allDescendents를 쓰면 안 된다.** 조인트 체인에서 한 링크의 자손에는
     자식 링크의 메쉬가 들어 있어서, 자손 전체를 훑으면 같은 지오메트리가
@@ -528,17 +571,46 @@ def _linkMeshTriangles(linkTransform):
     maroDagMenu._findLidarForMesh가 listRelatives(shapes=True)로 직속만
     보는 것과 같은 이유다.
 
-    월드 좌표를 링크의 월드 역행렬로 되돌린다 -- 셰이프가 링크의 직속
-    자식이면 오브젝트 공간과 같지만(실측 확인), 중간 트랜스폼이 끼어도 이
-    경로는 항상 링크 프레임을 준다.
+    **중간 셰이프(intermediate object)는 건너뛴다** [최종 리뷰 Finding 2].
+    디포머가 걸린 메쉬는 `...ShapeOrig` 중간 셰이프를 함께 갖는데, 그것까지
+    세면 변형된 껍질과 변형 전 껍질이 겹쳐 들어가 삼각형이 두 배가 된다.
+    `noIntermediate=True`로 막는다.
+
+    [최종 리뷰 Finding 1] 정점을 되돌리는 역행렬은 linkTransform(메쉬
+    셰이프를 찾은 바인딩 대상)이 아니라 axisFramePath(maroAxis 로케이터의
+    부모 트랜스폼)에서 가져온다. URDF의 링크 프레임을 실제로 정하는 것은
+    조인트 원점과 관절 축이 이미 쓰는 이 로케이터 프레임이다 --
+    `maroBindAxis`는 로케이터를 바인딩 대상 위로 옮기거나 자세를 맞추지
+    않으므로, 관절이 팔꿈치에 있고 팔 메쉬 피벗이 그 위에 있는 흔한
+    리그에서 두 프레임은 어긋난다.
+
+    [2차 수정 파동 Finding A] 그 역행렬은 axisFramePath의
+    inclusiveMatrixInverse()를 통째로 쓰면 안 된다 -- 스케일/시어까지
+    포함해 버린다. `_gatherAxisWorldTransformRos`는 이 트랜스폼에서
+    **평행이동과 회전만** 읽고 스케일은 일부러 무시하므로, 로케이터의
+    부모 트랜스폼에 스케일이 조금이라도 있으면(`MaroAxisNode`는 자체
+    size 속성이 없는 `MPxLocatorNode`라 뷰포트에서 보이게 하려면 부모
+    트랜스폼 자체를 스케일할 수밖에 없다 -- 흔하다) 메쉬가 반토막 나거나
+    밀린다. 그래서 평행이동+회전만으로 강체(rigid) 행렬을 손수 만들어
+    그것만 뒤집는다 -- `_gatherAxisWorldTransformRos`가 읽는 것과 정확히
+    같은 두 값이다. 메쉬 자신의 스케일은 이 경로와 무관하다: 월드 정점은
+    이미 메쉬 자신의 스케일을 반영한 채로 들어오고, 여기서는 로케이터
+    프레임의 평행이동/회전만 되돌리므로 메쉬 지오메트리 자체는 그대로
+    보존된다.
     """
     shapes = cmds.listRelatives(linkTransform, shapes=True, fullPath=True,
-                                type="mesh") or []
+                                type="mesh", noIntermediate=True) or []
     if not shapes:
         return []
 
-    linkInverse = om2.MSelectionList().add(linkTransform).getDagPath(0) \
-        .inclusiveMatrixInverse()
+    frameDag = om2.MSelectionList().add(axisFramePath).getDagPath(0)
+    frameWorld = om2.MTransformationMatrix(frameDag.inclusiveMatrix())
+    framePos = frameWorld.translation(om2.MSpace.kWorld)
+    frameQuat = om2.MFnTransform(frameDag).rotation(om2.MSpace.kWorld, asQuaternion=True)
+    frameRigid = om2.MTransformationMatrix()
+    frameRigid.setTranslation(framePos, om2.MSpace.kWorld)
+    frameRigid.setRotation(frameQuat)
+    frameInverse = frameRigid.asMatrix().inverse()
     triangles = []
     for shape in shapes:
         meshFn = om2.MFnMesh(om2.MSelectionList().add(shape).getDagPath(0))
@@ -550,7 +622,7 @@ def _linkMeshTriangles(linkTransform):
         for i in range(0, len(indices), 3):
             corners = []
             for j in range(3):
-                p = worldPoints[indices[i + j]] * linkInverse
+                p = worldPoints[indices[i + j]] * frameInverse
                 corners.append((p.x, p.y, p.z))
             triangles.append(tuple(corners))
     return triangles
@@ -563,13 +635,19 @@ def _writeLinkMeshes(links, meshDir, robotName):
 
     meshDir는 실제로 쓸 것이 생겼을 때만 만든다 -- 지오메트리가 하나도
     없는 씬을 내보내면 빈 meshes/ 디렉터리를 남기지 않는다.
+
+    targetPath(메쉬 셰이프를 찾을 바인딩 대상)와 axisFramePath(정점을 구울
+    링크 프레임 -- maroAxis 로케이터의 부모 트랜스폼)는 일반적으로 서로
+    다른 노드다(최종 리뷰 Finding 1). 링크 딕셔너리가 둘 다 갖고 있어야
+    한다 -- `_buildRobotModel`이 채운다.
     """
     usedNames = set()
     for link in links:
         targetPath = link.get("targetPath")
-        if not targetPath:
+        axisFramePath = link.get("axisFramePath")
+        if not targetPath or not axisFramePath:
             continue
-        triangles = _linkMeshTriangles(targetPath)
+        triangles = _linkMeshTriangles(targetPath, axisFramePath)
         if not triangles:
             continue
         fileName = sanitizeMeshFileName(link["name"], usedNames)
@@ -580,7 +658,12 @@ def _writeLinkMeshes(links, meshDir, robotName):
         link["visualMesh"] = "package://{}/meshes/{}.stl".format(robotName, fileName)
 ```
 
-- [ ] **Step 4: `_buildRobotModel`이 링크에 `targetPath`를 싣게 한다**
+- [ ] **Step 4: `_buildRobotModel`이 링크에 `targetPath`와 `axisFramePath`를
+  싣게 한다** (**[정정, 2026-09-08]** `axisFramePath`는 최종 리뷰
+  Finding 1이 추가하기 전까지는 이 플랜에 없던 키다 -- Step 3이 이제
+  `_linkMeshTriangles(targetPath, axisFramePath)`를 요구하므로 이 키가
+  없으면 `_writeLinkMeshes`가 모든 링크를 조용히 건너뛰어 메쉬가 하나도
+  안 나간다.)
 
 391행
 
@@ -591,10 +674,13 @@ def _writeLinkMeshes(links, meshDir, robotName):
 을
 
 ```python
-    # targetPath는 _writeLinkMeshes가 그 링크의 메쉬를 찾는 데 쓴다.
-    # buildUrdfXml은 이 키를 무시한다.
+    # targetPath는 _writeLinkMeshes가 그 링크의 메쉬 셰이프를 찾는 데 쓰고,
+    # axisFramePath는 그 메쉬를 구울 링크 프레임(로케이터의 부모 트랜스폼,
+    # _gatherAxisWorldTransformRos/axisVectorForConvention과 같은 노드)을
+    # 알려준다(최종 리뷰 Finding 1). buildUrdfXml은 이 키들을 무시한다.
     links = [{"name": _shortName(rowsByPath[root]["boundTargetPath"]),
-              "targetPath": rowsByPath[root]["boundTargetPath"]}]
+              "targetPath": rowsByPath[root]["boundTargetPath"],
+              "axisFramePath": _axisParentTransformPath(root)}]
 ```
 
 으로, 그리고 429행
@@ -607,7 +693,8 @@ def _writeLinkMeshes(links, meshDir, robotName):
 
 ```python
             links.append({"name": _shortName(childRow["boundTargetPath"]),
-                          "targetPath": childRow["boundTargetPath"]})
+                          "targetPath": childRow["boundTargetPath"],
+                          "axisFramePath": _axisParentTransformPath(childAxis)})
 ```
 
 로 바꾼다.

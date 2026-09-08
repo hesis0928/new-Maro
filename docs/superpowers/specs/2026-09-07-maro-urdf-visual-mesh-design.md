@@ -34,7 +34,8 @@ RViz에 실제 형상이 나오고, 볼록 껍질은 "어떤 점 집합이든 �
 가져온다:
 
 ```python
-cmds.listRelatives(linkTransform, shapes=True, fullPath=True, type="mesh")
+cmds.listRelatives(linkTransform, shapes=True, fullPath=True, type="mesh",
+                    noIntermediate=True)
 ```
 
 **`allDescendents`를 쓰면 안 된다.** 조인트 체인에서 한 링크의 자손에는

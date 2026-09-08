@@ -576,7 +576,18 @@ print("buildUrdfXml <visual> OK")
 # 반대로 로케이터와 바인딩된 트랜스폼을 평행이동과 회전 양쪽에서 일부러
 # 어긋나게 둔다 -- 실제 리깅 관례(관절 위치에 로케이터, 메쉬는 자기
 # 피벗)를 흉내낸다.
+#
+# [정정, 2차 수정 파동 Finding B] `cmds.file(new=True, force=True)`는 세션
+# 각도 단위를 "deg"로 되돌린다(실측 확인) -- 369행에서 "rad"로 복원해 둔
+# 것과 무관하게, 새 씬을 열 때마다 매번 다시 깨진다. 그래서 아래에서
+# 명시적으로 다시 "rad"를 설정한다 -- 그래야 다음 xform 호출의
+# `math.pi / 2.0`이 실제로 90도가 된다. 이 명시적 호출이 없으면
+# `rotation=(0, 0, math.pi/2)`는 "1.5707963도"로 해석돼(180/pi 배 더 작은
+# 값) 이 픽스처가 겨누는 회전 오프셋을 57배 약하게만 검증한다 -- 여전히
+# 결함을 잡긴 하지만(0을 아니게는 만드니까) 스펙이 실측한 시나리오
+# (90도 회전 어긋남)를 전혀 재현하지 못한다.
 cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
 
 _f1RootMesh = cmds.polyCube(name="f1Base")[0]
 _f1RootAxis = cmds.createNode("maroAxis")
@@ -596,9 +607,9 @@ cmds.setAttr(_f1ChildAxis + ".jointName", "f1_arm_joint", type="string")
 _f1ChildAxis = cmds.ls(_f1ChildAxis, long=True)[0]
 _f1ChildAxisTransform = cmds.listRelatives(_f1ChildAxis, parent=True, fullPath=True)[0]
 # 관절(로케이터)은 메쉬 피벗과 다른 y=10cm에 두고, Z축으로 90도 돌려
-# 둔다 -- 평행이동과 회전 둘 다에서 두 프레임이 어긋나게 한다. 현재 세션
-# 각도 단위는 파일 앞쪽에서 "rad"로 복원돼 있으므로(369행)
-# math.pi/2 == 90도다.
+# 둔다 -- 평행이동과 회전 둘 다에서 두 프레임이 어긋나게 한다. 세션 각도
+# 단위는 위(579-580행)에서 이 픽스처 전용으로 명시적으로 "rad"를 다시
+# 설정해 뒀으므로 math.pi/2 == 90도다.
 cmds.xform(_f1ChildAxisTransform, worldSpace=True, translation=(0.0, 10.0, 0.0),
            rotation=(0.0, 0.0, math.pi / 2.0))
 
@@ -658,6 +669,127 @@ assert all(abs(a - b) < 1e-4 for a, b in zip(_f1Centroid, _f1ExpectedLocalRos)),
     "own frame (final-review Finding 1)".format(_f1Centroid, _f1ExpectedLocalRos))
 print("visual mesh baked in the locator's frame, not the bound target's frame "
       "(final-review Finding 1) OK: link-frame centre {}".format(_f1Centroid))
+
+# --- 2차 수정 파동 Finding A 회귀: 로케이터 자신의 스케일이 구운 지오메트리를
+# 오염시키면 안 된다 ---
+#
+# MaroAxisNode는 자체 size/localScale 속성이 없는 순수 MPxLocatorNode다
+# (src/maro_plugin/MaroAxisNode.h) -- 로케이터를 뷰포트에서 보이게 만드는
+# 유일한 방법은 그 부모 트랜스폼 자체를 스케일하는 것뿐이므로, 이 픽스처는
+# 예외적인 리그가 아니라 흔한 리그다. `_gatherAxisWorldTransformRos`는 이미
+# 이 트랜스폼에서 평행이동/회전만 읽는데(그 함수의 주석 참고),
+# `_linkMeshTriangles`가 그 트랜스폼의 **전체** inclusiveMatrixInverse()
+# (스케일/시어까지 포함)로 구우면 로케이터 트랜스폼에 스케일이 조금이라도
+# 있을 때 메쉬 프레임과 조인트 프레임이 어긋난다.
+#
+# 위 최종 리뷰 Finding 1 픽스처와 같은 오프셋+회전 지오메트리(자식 메쉬
+# 피벗은 월드 y=20cm, 로케이터는 월드 y=10cm에서 Z축 90도 회전)를 그대로
+# 재사용하고, 로케이터의 트랜스폼에만 추가로 2배 스케일을 건다. 메쉬
+# 자신은 스케일하지 않는다.
+cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
+
+_saRootMesh = cmds.polyCube(name="saBase")[0]
+_saRootAxis = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_saRootAxis, _saRootMesh)
+cmds.setAttr(_saRootAxis + ".jointName", "sa_base_joint", type="string")
+_saRootAxis = cmds.ls(_saRootAxis, long=True)[0]
+
+_saChildMesh = cmds.polyCube(name="saArm")[0]  # 기본 폴리큐브: 한 변 1cm, 스케일 없음
+cmds.xform(_saChildMesh, worldSpace=True, translation=(0.0, 20.0, 0.0))
+
+_saChildAxis = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_saChildAxis, _saChildMesh)
+cmds.setAttr(_saChildAxis + ".jointName", "sa_arm_joint", type="string")
+_saChildAxis = cmds.ls(_saChildAxis, long=True)[0]
+_saChildAxisTransform = cmds.listRelatives(_saChildAxis, parent=True, fullPath=True)[0]
+cmds.xform(_saChildAxisTransform, worldSpace=True, translation=(0.0, 10.0, 0.0),
+           rotation=(0.0, 0.0, math.pi / 2.0))
+# 이 픽스처가 겨누는 결함: 로케이터 자신의 트랜스폼에 2배 스케일을 건다.
+# 메쉬는 손대지 않는다.
+cmds.setAttr(_saChildAxisTransform + ".scaleX", 2.0)
+cmds.setAttr(_saChildAxisTransform + ".scaleY", 2.0)
+cmds.setAttr(_saChildAxisTransform + ".scaleZ", 2.0)
+
+cmds.maroConnectAxis(_saChildAxis, _saRootAxis)
+
+_saDir = tempfile.mkdtemp(prefix="maro_urdf_scale_")
+_saPath = os.path.join(_saDir, "sa.urdf")
+assert urdf.export(path=_saPath) == _saPath
+
+_saTree = ET2.parse(_saPath)
+_saJointEls = _saTree.getroot().findall("joint")
+assert len(_saJointEls) == 1, _saJointEls
+_saOriginXyz = [float(v) for v in _saJointEls[0].find("origin").get("xyz").split()]
+_saOriginMagnitude = sum(v * v for v in _saOriginXyz) ** 0.5
+# 조인트 원점은 _gatherAxisWorldTransformRos가 이미 평행이동/회전만 읽어서
+# 만든다 -- 여기서 로케이터에 스케일을 추가로 건다고 값이 달라지면 안
+# 된다(스케일 없는 종단 간 픽스처와 같은 ~0.1m, 387행 참고).
+assert abs(_saOriginMagnitude - 0.1) < 1e-3, _saOriginXyz
+
+# 기대하는 메쉬 중심을 결함 없이 독립적으로 구한다: om2로 로케이터
+# 트랜스폼의 평행이동+회전"만" 읽어 강체(rigid) 역행렬을 손수 만든다 --
+# _gatherAxisWorldTransformRos가 읽는 것과 정확히 같은 두 값이다. 일부러
+# axisFrameDag.inclusiveMatrixInverse()를 쓰지 않는다 -- 그건 로케이터의
+# 2배 스케일까지 그대로 포함해 버려서 겨누는 결함을 그대로 재현해 버린다.
+_saFrameDag = om2.MSelectionList().add(_saChildAxisTransform).getDagPath(0)
+_saFrameWorld = om2.MTransformationMatrix(_saFrameDag.inclusiveMatrix())
+_saFramePos = _saFrameWorld.translation(om2.MSpace.kWorld)
+_saFrameQuat = om2.MFnTransform(_saFrameDag).rotation(om2.MSpace.kWorld, asQuaternion=True)
+_saRigid = om2.MTransformationMatrix()
+_saRigid.setTranslation(_saFramePos, om2.MSpace.kWorld)
+_saRigid.setRotation(_saFrameQuat)
+_saRigidInverse = _saRigid.asMatrix().inverse()
+_saMeshWorldCentroidMaya = om2.MPoint(0.0, 20.0, 0.0)  # cm, saArm 자신의 피벗
+_saExpectedLocalMaya = _saMeshWorldCentroidMaya * _saRigidInverse
+# mayaTrianglesToRosMeters와 같은 식: (x,y,z)->(x,-z,y), cm->m.
+_saExpectedLocalRos = (
+    _saExpectedLocalMaya.x * 0.01,
+    -_saExpectedLocalMaya.z * 0.01,
+    _saExpectedLocalMaya.y * 0.01,
+)
+_saExpectedMagnitude = sum(v * v for v in _saExpectedLocalRos) ** 0.5
+# 정합성 확인: 강체 역행렬 기준 기대값은 스케일 없는 Finding-1 픽스처와
+# 같은 지오메트리이므로 ~0.1m여야 한다(원점이면 이 테스트가 아무것도
+# 구분하지 못한다).
+assert abs(_saExpectedMagnitude - 0.1) < 1e-3, (
+    "test setup sanity: expected centre should match the unscaled Finding-1 "
+    "geometry (~0.1m), got {}".format(_saExpectedLocalRos))
+
+_saMeshFile = os.path.join(_saDir, "meshes", "saArm.stl")
+assert os.path.isfile(_saMeshFile), _saMeshFile
+_saRaw = open(_saMeshFile, "rb").read()
+_saCount = _struct.unpack("<I", _saRaw[80:84])[0]
+assert _saCount == 12, _saCount
+_saVerts = []
+for _saI in range(_saCount):
+    _saVals = _struct.unpack("<12fH", _saRaw[84 + _saI * 50: 84 + _saI * 50 + 50])
+    _saVerts.append(_saVals[3:6])
+    _saVerts.append(_saVals[6:9])
+    _saVerts.append(_saVals[9:12])
+_saXs = [v[0] for v in _saVerts]
+_saYs = [v[1] for v in _saVerts]
+_saZs = [v[2] for v in _saVerts]
+_saExtent = (max(_saXs) - min(_saXs), max(_saYs) - min(_saYs), max(_saZs) - min(_saZs))
+_saCentre = ((min(_saXs) + max(_saXs)) / 2.0,
+             (min(_saYs) + max(_saYs)) / 2.0,
+             (min(_saZs) + max(_saZs)) / 2.0)
+
+# 기본 폴리큐브는 한 변 1cm(스케일 없음) -- 로케이터가 2배 스케일이어도
+# 내보낸 STL의 한 변은 그대로 0.01m여야 한다(결함이 있으면 로케이터의
+# 역스케일 때문에 0.005m로 반토막난다).
+for _v in _saExtent:
+    assert abs(_v - 0.01) < 1e-4, (
+        "locator transform scale leaked into mesh geometry -- expected an "
+        "unscaled 0.01m cube edge, got extent {}".format(_saExtent))
+assert all(abs(a - b) < 1e-4 for a, b in zip(_saCentre, _saExpectedLocalRos)), (
+    "mesh centre displaced by the locator's own scale -- got {}, expected {} "
+    "(derived from the locator's rigid translation+rotation only, matching "
+    "_gatherAxisWorldTransformRos; second-wave Finding A)".format(
+        _saCentre, _saExpectedLocalRos))
+print("locator transform scale (2x) does not contaminate baked mesh geometry "
+      "OK: extent {} centre {} joint-origin magnitude {}".format(
+          _saExtent, _saCentre, _saOriginMagnitude))
 
 # --- 최종 리뷰 Finding 2 회귀: 디포머의 중간 셰이프(...ShapeOrig)가
 # 삼각형을 두 배로 만들면 안 된다 ---
