@@ -410,6 +410,76 @@ os.remove(tmpPathInvert)
 
 os.remove(tmpPath)
 
+# --- 시각 메쉬 (슬라이스 1) ---
+# struct를 여기서 다시 import한다 -- Task 1의 테스트 절은 이 파일의 **끝**에
+# 붙으므로, 이 지점(374행 근처)에서는 아직 _struct가 정의되지 않았다.
+# 재import는 무해하다.
+import struct as _struct
+
+# 위 export()가 이미 돌았다. 폴리큐브는 mesh 셰이프를 가지므로 두 링크 다
+# <visual>과 STL 파일이 나와야 한다.
+_meshDir = os.path.join(os.path.dirname(os.path.abspath(tmpPath)), "meshes")
+assert os.path.isdir(_meshDir), _meshDir
+for _linkName in ("baseLink", "armLink"):
+    _stl = os.path.join(_meshDir, _linkName + ".stl")
+    assert os.path.isfile(_stl), _stl
+    # 기본 폴리큐브는 6면 * 2 = 12 삼각형이다(실측 확인).
+    _count = _struct.unpack("<I", open(_stl, "rb").read()[80:84])[0]
+    assert _count == 12, (_linkName, _count)
+
+for _linkEl in robotEl.findall("link"):
+    _vis = _linkEl.find("visual")
+    assert _vis is not None, "expected <visual> on " + _linkEl.get("name")
+    _fn = _vis.find("geometry/mesh").get("filename")
+    _expected = "package://{}/meshes/{}.stl".format(
+        os.path.splitext(os.path.basename(tmpPath))[0], _linkEl.get("name"))
+    assert _fn == _expected, (_fn, _expected)
+print("visual meshes exported OK")
+
+# 부모 링크가 자식 링크의 메쉬를 삼키지 않는다.
+#
+# allDescendents로 훑으면 정확히 이 상황에서 부모가 자식 지오메트리까지
+# 가져가 삼각형 수가 24가 된다 -- 조인트 체인에서는 자식 링크가 부모의
+# DAG 자손이기 때문이다(스펙 §3).
+cmds.file(new=True, force=True)
+_pBase = cmds.polyCube(name="pBase")[0]
+_pChild = cmds.polyCube(name="pChild")[0]
+cmds.parent(_pChild, _pBase)
+_aBase = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_aBase, _pBase)
+cmds.setAttr(_aBase + ".jointName", "j_base", type="string")
+_aBase = cmds.ls(_aBase, long=True)[0]
+_aChild = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_aChild, cmds.ls(_pChild, long=True)[0])
+cmds.setAttr(_aChild + ".jointName", "j_child", type="string")
+_aChild = cmds.ls(_aChild, long=True)[0]
+cmds.maroConnectAxis(_aChild, _aBase)
+_nestPath = os.path.join(tempfile.mkdtemp(prefix="maro_urdf_nest_"), "nested.urdf")
+assert urdf.export(path=_nestPath) == _nestPath
+_nestMeshDir = os.path.join(os.path.dirname(os.path.abspath(_nestPath)), "meshes")
+_baseStl = os.path.join(_nestMeshDir, "pBase.stl")
+_baseCount = _struct.unpack("<I", open(_baseStl, "rb").read()[80:84])[0]
+assert _baseCount == 12, (
+    "the parent link swallowed its child's geometry (allDescendents trap): %d"
+    % _baseCount)
+print("parent link does not swallow child geometry OK")
+
+# 메쉬가 없는 링크는 <visual> 없이 나간다(에러가 아니다).
+cmds.file(new=True, force=True)
+_bone = cmds.createNode("joint", name="boneOnly")
+_aBone = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_aBone, _bone)
+cmds.setAttr(_aBone + ".jointName", "j_bone", type="string")
+_bonePath = os.path.join(tempfile.mkdtemp(prefix="maro_urdf_bone_"), "bone.urdf")
+assert urdf.export(path=_bonePath) == _bonePath
+_boneRoot = ET2.parse(_bonePath).getroot()
+assert _boneRoot.find("link").find("visual") is None, \
+    "a mesh-less link must have no <visual>"
+assert not os.path.isdir(
+    os.path.join(os.path.dirname(os.path.abspath(_bonePath)), "meshes")), \
+    "no meshes/ directory should be created when nothing has geometry"
+print("mesh-less link exports without <visual> OK")
+
 # --- writeBinaryStl (슬라이스 1) ---
 import struct as _struct
 

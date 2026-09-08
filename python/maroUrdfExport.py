@@ -394,6 +394,68 @@ def _shortName(fullPath):
     return fullPath.split("|")[-1]
 
 
+def _linkMeshTriangles(linkTransform):
+    """linkTransform의 **직속** mesh 셰이프들에서 삼각형을 모아 링크 로컬
+    프레임(Maya 내부 단위)으로 돌려준다. 메쉬가 없으면 빈 리스트.
+
+    **allDescendents를 쓰면 안 된다.** 조인트 체인에서 한 링크의 자손에는
+    자식 링크의 메쉬가 들어 있어서, 자손 전체를 훑으면 같은 지오메트리가
+    두 링크에 중복으로 들어가고 부모 링크가 로봇 전체를 삼킨다(스펙 §3).
+    maroDagMenu._findLidarForMesh가 listRelatives(shapes=True)로 직속만
+    보는 것과 같은 이유다.
+
+    월드 좌표를 링크의 월드 역행렬로 되돌린다 -- 셰이프가 링크의 직속
+    자식이면 오브젝트 공간과 같지만(실측 확인), 중간 트랜스폼이 끼어도 이
+    경로는 항상 링크 프레임을 준다.
+    """
+    shapes = cmds.listRelatives(linkTransform, shapes=True, fullPath=True,
+                                type="mesh") or []
+    if not shapes:
+        return []
+
+    linkInverse = om2.MSelectionList().add(linkTransform).getDagPath(0) \
+        .inclusiveMatrixInverse()
+    triangles = []
+    for shape in shapes:
+        meshFn = om2.MFnMesh(om2.MSelectionList().add(shape).getDagPath(0))
+        worldPoints = meshFn.getPoints(om2.MSpace.kWorld)
+        # getTriangles()는 (면당 삼각형 수, 평평한 정점 인덱스)를 준다 --
+        # 인덱스는 세 개씩 한 삼각형이다(실측: 기본 폴리큐브 = 면 6개,
+        # 인덱스 36개, 삼각형 12개).
+        _counts, indices = meshFn.getTriangles()
+        for i in range(0, len(indices), 3):
+            corners = []
+            for j in range(3):
+                p = worldPoints[indices[i + j]] * linkInverse
+                corners.append((p.x, p.y, p.z))
+            triangles.append(tuple(corners))
+    return triangles
+
+
+def _writeLinkMeshes(links, meshDir, robotName):
+    """각 링크의 메쉬를 STL로 쓰고 link["visualMesh"]에 package:// 경로를
+    채운다. 메쉬가 없거나 삼각형이 0개인 링크는 건드리지 않는다 -- 그
+    링크는 <visual> 없이 나가며 이는 정상이고 에러가 아니다.
+
+    meshDir는 실제로 쓸 것이 생겼을 때만 만든다 -- 지오메트리가 하나도
+    없는 씬을 내보내면 빈 meshes/ 디렉터리를 남기지 않는다.
+    """
+    usedNames = set()
+    for link in links:
+        targetPath = link.get("targetPath")
+        if not targetPath:
+            continue
+        triangles = _linkMeshTriangles(targetPath)
+        if not triangles:
+            continue
+        fileName = sanitizeMeshFileName(link["name"], usedNames)
+        if not os.path.isdir(meshDir):
+            os.makedirs(meshDir)
+        writeBinaryStl(mayaTrianglesToRosMeters(triangles),
+                       os.path.join(meshDir, fileName + ".stl"))
+        link["visualMesh"] = "package://{}/meshes/{}.stl".format(robotName, fileName)
+
+
 def _buildRobotModel():
     """씬을 조회해 buildUrdfXml에 넘길 (links, joints)를 만든다."""
     axisRows = sliceAxisRows(cmds.maroListAxisNodes())
@@ -402,7 +464,10 @@ def _buildRobotModel():
     root, childrenByParent = buildAxisTree(axisRows)
 
     rowsByPath = {row["axisFullPath"]: row for row in axisRows}
-    links = [{"name": _shortName(rowsByPath[root]["boundTargetPath"])}]
+    # targetPath는 _writeLinkMeshes가 그 링크의 메쉬를 찾는 데 쓴다.
+    # buildUrdfXml은 이 키를 무시한다.
+    links = [{"name": _shortName(rowsByPath[root]["boundTargetPath"]),
+              "targetPath": rowsByPath[root]["boundTargetPath"]}]
     joints = []
 
     def _visit(parentAxis):
@@ -436,7 +501,8 @@ def _buildRobotModel():
                     # 0 성분은 0.0으로 정규화해 둔다.
                     axisVector = tuple(0.0 if v == 0.0 else -v for v in axisVector)
 
-            links.append({"name": _shortName(childRow["boundTargetPath"])})
+            links.append({"name": _shortName(childRow["boundTargetPath"]),
+                          "targetPath": childRow["boundTargetPath"]})
             joints.append({
                 "name": childRow["jointName"],
                 "type": jt["type"],
@@ -469,6 +535,13 @@ def export(path=None):
     try:
         links, joints = _buildRobotModel()
         robotName = os.path.splitext(os.path.basename(path))[0]
+        # STL은 .urdf 옆 meshes/ 에 쓴다. abspath를 거치는 이유는 path가
+        # 디렉터리 없는 상대 파일명일 때 dirname이 ""이 되어 meshes/가
+        # 엉뚱한 곳(프로세스 cwd)에 생기는 것을 막기 위해서다.
+        _writeLinkMeshes(
+            links,
+            os.path.join(os.path.dirname(os.path.abspath(path)), "meshes"),
+            robotName)
         robotElement = buildUrdfXml(robotName, links, joints)
         ET.indent(robotElement, space="  ")
         ET.ElementTree(robotElement).write(path, xml_declaration=True, encoding="utf-8")
