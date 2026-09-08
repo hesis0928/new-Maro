@@ -464,6 +464,36 @@ assert all(abs(x - y) < 1e-9 for x, y in zip(_expectedNormal, _afterNormal)), \
 assert urdf.mayaTrianglesToRosMeters([]) == []
 print("mayaTrianglesToRosMeters OK")
 
+# --- sanitizeMeshFileName (슬라이스 1) ---
+_used = set()
+assert urdf.sanitizeMeshFileName("baseLink", _used) == "baseLink"
+# 네임스페이스가 붙은 노드: _shortName은 "|"로만 쪼개므로 ":"가 그대로
+# 남는다. ":"는 Windows 파일명에 쓸 수 없다.
+assert urdf.sanitizeMeshFileName("ns:cube", _used) == "ns_cube"
+# 살균 결과가 충돌하면 일련번호를 붙인다.
+assert urdf.sanitizeMeshFileName("ns/cube", _used) == "ns_cube_1"
+assert urdf.sanitizeMeshFileName("", _used) == "link"
+assert _used == {"baseLink", "ns_cube", "ns_cube_1", "link"}, _used
+print("sanitizeMeshFileName OK")
+
+# --- buildUrdfXml <visual> (슬라이스 1) ---
+_visualRobot = urdf.buildUrdfXml(
+    "rob",
+    [{"name": "withMesh", "visualMesh": "package://rob/meshes/withMesh.stl"},
+     {"name": "noMesh", "visualMesh": None},
+     {"name": "legacy"}],          # 키 자체가 없는 기존 호출부도 그대로 동작해야 한다
+    [])
+_byName = {l.get("name"): l for l in _visualRobot.findall("link")}
+_v = _byName["withMesh"].find("visual")
+assert _v is not None, "a link with visualMesh must emit <visual>"
+assert _v.find("geometry/mesh").get("filename") == "package://rob/meshes/withMesh.stl"
+# 정점을 이미 링크 프레임으로 구웠으므로 원점은 항등이다.
+assert _v.find("origin").get("xyz") == "0 0 0", _v.find("origin").attrib
+assert _v.find("origin").get("rpy") == "0 0 0", _v.find("origin").attrib
+assert _byName["noMesh"].find("visual") is None
+assert _byName["legacy"].find("visual") is None
+print("buildUrdfXml <visual> OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)

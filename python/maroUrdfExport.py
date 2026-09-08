@@ -16,6 +16,7 @@ jointType/computeRelativeOrigin/buildUrdfXml)은 Maya 씬을 조회하지 않는
 
 import math
 import os
+import re
 import struct
 
 import maya.cmds as cmds
@@ -192,7 +193,8 @@ def computeRelativeOrigin(parentPosRos, parentQuatRos, childPosRos, childQuatRos
 
 
 def buildUrdfXml(robotName, links, joints):
-    """links: [{"name": str}, ...]. joints: [{"name": str, "type": str,
+    """links: [{"name": str, "visualMesh": str|None(선택)}, ...].
+    joints: [{"name": str, "type": str,
     "parent": str, "child": str, "originXyz": (x,y,z), "originRpy": (r,p,y),
     "axis": (x,y,z)|None, "lower": float|None, "upper": float|None,
     "mimic": {"joint": str, "multiplier": float, "offset": float}|None}, ...].
@@ -204,7 +206,17 @@ def buildUrdfXml(robotName, links, joints):
     """
     robot = ET.Element("robot", name=robotName)
     for link in links:
-        ET.SubElement(robot, "link", name=link["name"])
+        linkEl = ET.SubElement(robot, "link", name=link["name"])
+        # .get()으로 읽는다 -- "visualMesh" 키가 아예 없는 기존 호출부와
+        # 테스트도 그대로 동작해야 한다(슬라이스 1이 추가한 선택적 필드다).
+        visualMesh = link.get("visualMesh")
+        if visualMesh:
+            visualEl = ET.SubElement(linkEl, "visual")
+            # 정점을 이미 링크 프레임으로 구웠으므로 원점은 항등이다 --
+            # 변환을 URDF 쪽 <origin>/<scale>로 미루지 않는다(스펙 §6).
+            ET.SubElement(visualEl, "origin", xyz="0 0 0", rpy="0 0 0")
+            geometryEl = ET.SubElement(visualEl, "geometry")
+            ET.SubElement(geometryEl, "mesh", filename=visualMesh)
 
     for joint in joints:
         jointEl = ET.SubElement(robot, "joint", name=joint["name"], type=joint["type"])
@@ -466,6 +478,34 @@ def export(path=None):
     except Exception as exc:  # noqa: BLE001 -- 메뉴 커맨드 문자열 경계
         cmds.warning("Maro: URDF export failed: {}".format(exc))
         return None
+
+
+# 파일명에 그대로 써도 안전한 문자. 나머지는 "_"로 바꾼다.
+_UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def sanitizeMeshFileName(linkName, usedNames):
+    """linkName을 파일명으로 쓸 수 있게 살균한다(확장자는 안 붙인다).
+
+    [실측] _shortName()은 DAG 경로를 "|"로만 쪼개므로, 네임스페이스가 붙은
+    노드는 링크 이름이 "ns:cube"가 된다. ":"는 Windows 파일명에 쓸 수 없어
+    그대로 쓰면 내보내기가 실패한다.
+
+    **URDF 안의 <link name=>은 이 함수를 거치지 않는다.** 그건 이미
+    동작하는 기존 계약이고 이번 변경이 건드릴 이유가 없다 -- 링크 이름과
+    파일명은 별개이며 <mesh filename=>만 살균된 쪽을 가리킨다.
+
+    usedNames(set)는 이 함수가 갱신한다. 살균 결과가 서로 충돌하면
+    ("a:b"와 "a/b"가 둘 다 "a_b"가 되는 경우) 뒤에 일련번호를 붙인다.
+    """
+    base = _UNSAFE_FILENAME_RE.sub("_", linkName) or "link"
+    candidate = base
+    suffix = 1
+    while candidate in usedNames:
+        candidate = "{}_{}".format(base, suffix)
+        suffix += 1
+    usedNames.add(candidate)
+    return candidate
 
 
 def mayaTrianglesToRosMeters(triangles):
