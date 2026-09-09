@@ -159,8 +159,11 @@ O(n x F)다. F(면 수)가 작으면 빠르지만, 볼록한 표면에서는 모
 
 - 빌드는 항상 `--config Release`, `ctest --test-dir out/build -C Release
   --output-on-failure`가 전부 통과해야 한다.
-- `.py`만 고쳐도 반드시 `cmake --build`를 돌린다 -- 테스트는 플러그인 옆에
-  스테이징된 사본을 import한다.
+- `cmake --build`는 C++를 고쳤을 때 돌린다. **`.py`만 고쳤으면 필요 없다** --
+  `tests/maya/*.py` 57개가 전부 `sys.path.insert(0, <repo>/python)`으로 소스를
+  직접 import하며, 이 스펙을 쓰면서 `urdf.__file__`을 찍어 실측 확인했다
+  (플러그인 옆 스테이징 사본은 실제 Maya 런타임용이지 테스트용이 아니다).
+  앞선 슬라이스 문서들이 반대로 적어 두었으므로 바로잡는다.
 - 테스트 블록은 `tests/maya/test_urdf_export.py`의 **teardown 바로 앞**에
   넣는다. 파일 끝은 `sys.exit(0)` 뒤라 실행되지 않는다(슬라이스 2에서
   실측으로 발견 -- RED 단계가 PASS로 나와서 드러났다).
