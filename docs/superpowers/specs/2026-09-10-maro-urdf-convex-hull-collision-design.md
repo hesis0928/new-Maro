@@ -159,11 +159,16 @@ O(n x F)다. F(면 수)가 작으면 빠르지만, 볼록한 표면에서는 모
 
 - 빌드는 항상 `--config Release`, `ctest --test-dir out/build -C Release
   --output-on-failure`가 전부 통과해야 한다.
-- `cmake --build`는 C++를 고쳤을 때 돌린다. **`.py`만 고쳤으면 필요 없다** --
-  `tests/maya/*.py` 57개가 전부 `sys.path.insert(0, <repo>/python)`으로 소스를
-  직접 import하며, 이 스펙을 쓰면서 `urdf.__file__`을 찍어 실측 확인했다
-  (플러그인 옆 스테이징 사본은 실제 Maya 런타임용이지 테스트용이 아니다).
-  앞선 슬라이스 문서들이 반대로 적어 두었으므로 바로잡는다.
+- `cmake --build`는 C++를 고쳤을 때 **필수**다. `.py`만 고쳤다면 어느
+  테스트를 도느냐에 따라 갈린다(2026-09-10 실측):
+  - `sys.path.insert(0, <repo>/python)`을 하는 17개(`test_urdf_export.py`
+    포함)는 소스를 직접 import한다 -> 빌드 불필요.
+  - `test_dag_menu` / `test_delete_rules` / `test_lidar_menu` /
+    `test_main_menu` / `test_main_window` / `test_skeleton_upload` 6개는 그
+    삽입이 없어 플러그인 옆 **스테이징 사본**
+    (`out/build/src/maro_plugin/Release/`)을 import한다 -> **빌드 필수**.
+  - 나머지는 maro 파이썬 모듈을 아예 import하지 않는다.
+  안전한 기본값: 전체 스위트를 돌리기 전에는 언제나 빌드한다.
 - 테스트 블록은 `tests/maya/test_urdf_export.py`의 **teardown 바로 앞**에
   넣는다. 파일 끝은 `sys.exit(0)` 뒤라 실행되지 않는다(슬라이스 2에서
   실측으로 발견 -- RED 단계가 PASS로 나와서 드러났다).

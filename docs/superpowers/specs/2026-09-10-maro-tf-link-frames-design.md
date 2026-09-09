@@ -168,8 +168,16 @@ C++/Python UI 이름 계약에 쓴 방식대로, **양쪽을 한 테스트에 �
 - 빌드는 항상 `--config Release`. C++를 고치므로 `cmake --build`가
   **필요하다**(파이썬만 고칠 때와 다르다).
 - `ctest --test-dir out/build -C Release --output-on-failure` 전부 통과.
-- `tests/maya/*.py`는 소스 `python/`을 직접 import한다 -- `.py`만 고쳤으면
-  빌드가 필요 없다(2026-09-10 실측).
+- `cmake --build`는 C++를 고쳤을 때 **필수**다. `.py`만 고쳤다면 어느
+  테스트를 도느냐에 따라 갈린다(2026-09-10 실측):
+  - `sys.path.insert(0, <repo>/python)`을 하는 17개(`test_urdf_export.py`
+    포함)는 소스를 직접 import한다 -> 빌드 불필요.
+  - `test_dag_menu` / `test_delete_rules` / `test_lidar_menu` /
+    `test_main_menu` / `test_main_window` / `test_skeleton_upload` 6개는 그
+    삽입이 없어 플러그인 옆 **스테이징 사본**
+    (`out/build/src/maro_plugin/Release/`)을 import한다 -> **빌드 필수**.
+  - 나머지는 maro 파이썬 모듈을 아예 import하지 않는다.
+  안전한 기본값: 전체 스위트를 돌리기 전에는 언제나 빌드한다.
 - 새 테스트 블록은 해당 파일의 teardown **바로 앞**에 넣는다.
 - 커맨드/노드 경계의 예외 처리는 기존 `ScopedCommandContext` +
   `try/catch(std::exception)/catch(...)` 패턴을 그대로 따른다.

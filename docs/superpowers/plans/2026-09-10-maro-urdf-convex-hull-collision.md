@@ -20,11 +20,16 @@
 
 ## 전역 제약
 
-- `cmake --build out/build --config Release`는 **C++를 고쳤을 때** 돌린다.
-  이 계획은 `.py`와 테스트만 고치므로 빌드가 필요 없다 --
-  `tests/maya/*.py` 57개가 전부 `sys.path.insert(0, <repo>/python)`으로
-  소스를 직접 import한다(실측 확인). 플러그인 옆 스테이징 사본은 실제 Maya
-  런타임용이다. **앞선 슬라이스 문서들이 반대로 적어 두었으니 따르지 마라.**
+- `cmake --build out/build --config Release`는 C++를 고쳤을 때 **필수**다. `.py`만 고쳤다면 어느
+  테스트를 도느냐에 따라 갈린다(2026-09-10 실측):
+  - `sys.path.insert(0, <repo>/python)`을 하는 17개(`test_urdf_export.py`
+    포함)는 소스를 직접 import한다 -> 빌드 불필요.
+  - `test_dag_menu` / `test_delete_rules` / `test_lidar_menu` /
+    `test_main_menu` / `test_main_window` / `test_skeleton_upload` 6개는 그
+    삽입이 없어 플러그인 옆 **스테이징 사본**
+    (`out/build/src/maro_plugin/Release/`)을 import한다 -> **빌드 필수**.
+  - 나머지는 maro 파이썬 모듈을 아예 import하지 않는다.
+  안전한 기본값: 전체 스위트를 돌리기 전에는 언제나 빌드한다.
 - `ctest --test-dir out/build -C Release --output-on-failure`가 전부
   통과해야 한다.
 - 새 테스트 블록은 `tests/maya/test_urdf_export.py`의
@@ -777,9 +782,11 @@ git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m
    단체라 면 = 2 x 정점 - 4이고, Maya 프리미티브의 삼각형 수가 이미 그
    값이다: 실린더 sub20 76=76, 구 760=760, 큐브 12=12. 처음에 실린더로
    쓴 통합 테스트는 반드시 실패했을 것이다. 토러스(800→436)로 바꿨다.
-2. **`.py`만 고쳤을 때 `cmake --build`가 필요하다는 전제가 틀렸다.**
-   `tests/maya/*.py` 57개가 전부 소스 `python/`을 `sys.path[0]`에 넣고,
-   플러그인은 이 모듈을 import하지 않는다(`urdf.__file__`로 실측 확인).
+2. **빌드 필요 여부는 테스트 파일마다 다르다.** `test_urdf_export.py`는
+   소스를 직접 import하므로 이 계획의 `.py` 변경에는 빌드가 필요 없다
+   (`urdf.__file__`로 실측 확인). 다만 **"모든 테스트가 그렇다"는 처음
+   적은 문장은 틀렸다** -- 6개 파일은 스테이징 사본을 import한다.
+   전역 제약의 정정된 표를 보라.
 
 ## 실행하며 계획과 달랐던 것 2건
 
