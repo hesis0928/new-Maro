@@ -21,6 +21,7 @@ import struct
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om2
+import maya.api.OpenMayaAnim as oma2
 import xml.etree.ElementTree as ET
 
 
@@ -523,6 +524,108 @@ def _shortName(fullPath):
     return fullPath.split("|")[-1]
 
 
+def _linkFrameInverseMatrix(framePath):
+    """링크 프레임의 **강체** 역행렬(om2.MMatrix).
+
+    스케일과 전단을 버리는 이유는 `_linkFrameWorldRigid`의 주석에 있다 --
+    조인트 원점이 이동과 회전만 읽으므로 메쉬도 같아야 하고, 그러지 않으면
+    스케일이 개입하는 순간 둘이 어긋난다(실측: 로케이터 2배에서 50mm,
+    비균일 그룹에서 200mm).
+
+    강체 경로(`_linkMeshTriangles`)와 스킨 분할(`_splitSkinnedMeshes`)이
+    이 함수를 공유한다 -- 조립을 두 군데서 따로 하면 슬라이스 1이 이미 두 번
+    겪은 "두 소비자가 프레임을 다르게 읽는" 실패가 그대로 재현된다.
+    """
+    framePos, frameQuat = _linkFrameWorldRigid(framePath)
+    frameRigid = om2.MTransformationMatrix()
+    frameRigid.setTranslation(framePos, om2.MSpace.kWorld)
+    frameRigid.setRotation(frameQuat)
+    return frameRigid.asMatrix().inverse()
+
+
+def _splitSkinnedMeshes(links, consumedShapes):
+    """스킨된 메쉬를 인플루언스에 따라 조각내어 {링크 targetPath: [삼각형]}로.
+
+    삼각형은 Maya 내부 단위이고 **그 링크의 프레임 로컬**이다 --
+    `_linkMeshTriangles`와 같은 계약이라 호출부가 둘을 구분하지 않아도 된다.
+
+    `consumedShapes`는 강체 경로가 이미 가져간 메쉬 셰이프의 전체 경로
+    set이다. 그 셰이프는 건너뛴다 -- 안 그러면 링크 A의 직속 메쉬가 A와 B로
+    스킨돼 있을 때 그 메쉬의 B 영역이 두 번 나간다(설계 스펙 §3).
+
+    훑는 skinCluster는 **링크에서 도달 가능한 것만**이다. 씬 전체를 훑으면
+    로봇과 무관한 스킨 메쉬(배경 캐릭터, 참조 모델)의 가중치까지 읽는데,
+    결과는 어차피 버려지므로 정점 수만 개짜리 메쉬에서는 순전히 낭비다.
+
+    가중치는 skinCluster마다 **한 번만** 읽는다. 링크 루프 안에서 읽으면
+    O(링크 x 정점)이 된다.
+    """
+    linkByTarget = {}
+    for link in links:
+        targetPath = link.get("targetPath")
+        axisFramePath = link.get("axisFramePath")
+        if targetPath and axisFramePath:
+            linkByTarget[targetPath] = axisFramePath
+    if not linkByTarget:
+        return {}
+
+    linkPaths = set(linkByTarget)
+    clusters = set()
+    for targetPath in linkPaths:
+        for cluster in cmds.listConnections(targetPath, type="skinCluster") or []:
+            clusters.add(cluster)
+
+    frameInverses = {t: _linkFrameInverseMatrix(f) for t, f in linkByTarget.items()}
+    pieces = {}
+
+    for cluster in sorted(clusters):
+        clusterSel = om2.MSelectionList()
+        clusterSel.add(cluster)
+        skinFn = oma2.MFnSkinCluster(clusterSel.getDependNode(0))
+        # 인플루언스 인덱스 -> 링크. getWeights()의 stride 순서가
+        # influenceObjects()의 순서와 같다(실측 확인).
+        indexToLink = [influenceToLink(p.fullPathName(), linkPaths)
+                       for p in skinFn.influenceObjects()]
+
+        for shape in cmds.skinCluster(cluster, query=True, geometry=True) or []:
+            shapePath = cmds.ls(shape, long=True)[0]
+            if shapePath in consumedShapes:
+                continue
+            shapeSel = om2.MSelectionList()
+            shapeSel.add(shapePath)
+            shapeDag = shapeSel.getDagPath(0)
+            meshFn = om2.MFnMesh(shapeDag)
+            vertexCount = meshFn.numVertices
+
+            componentFn = om2.MFnSingleIndexedComponent()
+            component = componentFn.create(om2.MFn.kMeshVertComponent)
+            componentFn.setCompleteData(vertexCount)
+            weights, influenceCount = skinFn.getWeights(shapeDag, component)
+
+            vertexLinks = {}
+            vertexWeights = {}
+            for v in range(vertexCount):
+                index, weight = dominantInfluence(weights, v, influenceCount)
+                vertexLinks[v] = indexToLink[index]
+                vertexWeights[v] = weight
+
+            worldPoints = meshFn.getPoints(om2.MSpace.kWorld)
+            _counts, indices = meshFn.getTriangles()
+            for i in range(0, len(indices), 3):
+                corners = (indices[i], indices[i + 1], indices[i + 2])
+                target = assignTriangleToLink(vertexLinks, vertexWeights, corners)
+                if target is None:
+                    continue
+                frameInverse = frameInverses[target]
+                triangle = []
+                for v in corners:
+                    p = worldPoints[v] * frameInverse
+                    triangle.append((p.x, p.y, p.z))
+                pieces.setdefault(target, []).append(tuple(triangle))
+
+    return pieces
+
+
 def _linkMeshTriangles(linkTransform, axisFramePath):
     """linkTransform의 **직속** mesh 셰이프(중간 셰이프 제외)들에서 삼각형을
     모아 **링크 프레임**(axisFramePath, Maya 내부 단위)으로 돌려준다. 메쉬가
@@ -590,11 +693,7 @@ def _linkMeshTriangles(linkTransform, axisFramePath):
 
     # 조인트 원점과 **같은 함수**로 프레임을 읽는다 -- 둘이 어긋나면
     # 메쉬가 관절에서 떠 버린다(_linkFrameWorldRigid의 주석 참고).
-    framePos, frameQuat = _linkFrameWorldRigid(axisFramePath)
-    frameRigid = om2.MTransformationMatrix()
-    frameRigid.setTranslation(framePos, om2.MSpace.kWorld)
-    frameRigid.setRotation(frameQuat)
-    frameInverse = frameRigid.asMatrix().inverse()
+    frameInverse = _linkFrameInverseMatrix(axisFramePath)
     triangles = []
     for shape in shapes:
         meshFn = om2.MFnMesh(om2.MSelectionList().add(shape).getDagPath(0))

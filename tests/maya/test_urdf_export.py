@@ -873,6 +873,68 @@ assert urdf.influenceToLink(_wj3, set()) is None
 assert urdf.influenceToLink(_wj3, {"|somethingElse"}) is None
 print("influenceToLink OK")
 
+# --- _splitSkinnedMeshes (슬라이스 2) ---
+cmds.file(new=True, force=True)
+_sj1 = cmds.createNode("joint", name="sj1")
+cmds.xform(_sj1, translation=(0, 0, 0))
+_sj2 = cmds.createNode("joint", name="sj2", parent=_sj1)
+cmds.xform(_sj2, translation=(0, 10, 0))
+_sj3 = cmds.createNode("joint", name="sj3", parent=_sj2)
+cmds.xform(_sj3, translation=(0, 5, 0))
+_skinMesh = cmds.polyCylinder(name="limb", height=20, subdivisionsHeight=6, radius=2)[0]
+# 원통이 조인트 체인을 실제로 감싸게 올린다 -- 원점에 두면 y가 -10..10이라
+# sj1이 전 영역을 지배해 분할이 아예 일어나지 않는다(실측으로 발견한 함정:
+# 그런 픽스처는 "모두 첫 인플루언스로 보내는" 잘못된 구현도 통과시킨다).
+cmds.xform(_skinMesh, translation=(0, 10, 0))
+cmds.skinCluster(_sj1, _sj2, _sj3, _skinMesh, toSelectedBones=True)
+
+_sj1 = cmds.ls(_sj1, long=True)[0]
+_sj2 = cmds.ls(_sj2, long=True)[0]
+# sj3는 일부러 링크로 만들지 않는다 -- 조상 walk로 sj2에 접혀야 한다.
+_axS1 = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_axS1, _sj1)
+_axS1 = cmds.ls(_axS1, long=True)[0]
+_axS2 = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_axS2, _sj2)
+_axS2 = cmds.ls(_axS2, long=True)[0]
+
+_splitLinks = [
+    {"name": "sj1", "targetPath": _sj1,
+     "axisFramePath": urdf._axisParentTransformPath(_axS1)},
+    {"name": "sj2", "targetPath": _sj2,
+     "axisFramePath": urdf._axisParentTransformPath(_axS2)},
+]
+_pieces = urdf._splitSkinnedMeshes(_splitLinks, set())
+
+# 두 링크 다 실제로 몫을 받아야 한다 -- 한쪽이 0이면 분할이 안 일어난 것이다.
+assert _pieces.get(_sj1), "sj1 got no geometry"
+assert _pieces.get(_sj2), "sj2 got no geometry (ancestor walk from sj3 may be broken)"
+
+# 분할 불변식: 조각 삼각형 수의 합이 원본 삼각형 수와 같다(버려진 것 없음 --
+# 모든 인플루언스가 링크로 해소되는 리그이므로).
+_skinShape = cmds.listRelatives(_skinMesh, shapes=True, fullPath=True, type="mesh")[0]
+_selTri = om2.MSelectionList()
+_selTri.add(_skinShape)
+_, _triIdx = om2.MFnMesh(_selTri.getDagPath(0)).getTriangles()
+_originalTris = len(_triIdx) // 3
+assert sum(len(v) for v in _pieces.values()) == _originalTris, (
+    sum(len(v) for v in _pieces.values()), _originalTris)
+print("split invariant OK: %d = %d + %d"
+      % (_originalTris, len(_pieces[_sj1]), len(_pieces[_sj2])))
+
+# 소비된 셰이프는 건너뛴다 -- 강체 경로가 이미 가져간 메쉬를 분할이 또
+# 나눠 주면 같은 지오메트리가 두 번 나간다(설계 스펙 §3).
+assert urdf._splitSkinnedMeshes(_splitLinks, {_skinShape}) == {}
+print("consumed shapes are skipped OK")
+
+# 어느 링크와도 연결되지 않은 skinCluster는 결과에 영향이 없다.
+_otherJoint = cmds.createNode("joint", name="otherJ")
+_otherMesh = cmds.polyCube(name="otherMesh")[0]
+cmds.skinCluster(_otherJoint, _otherMesh, toSelectedBones=True)
+_piecesAgain = urdf._splitSkinnedMeshes(_splitLinks, set())
+assert sorted(_piecesAgain) == sorted(_pieces), "an unrelated skinCluster changed the result"
+print("unrelated skinCluster is ignored OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
