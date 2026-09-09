@@ -1031,6 +1031,56 @@ assert _rByName["rj1"].find("visual") is not None
 assert _rByName["rj2"].find("visual") is None
 print("rigid path wins and its mesh is excluded from the split OK")
 
+# --- 법선 방향과 스케일 (RViz 수동 확인의 자동화 가능한 부분) ---
+#
+# 체크리스트의 RViz 항목이 잡으려는 것은 셋이다: (a) 형상이 보이는가,
+# (b) 안팎이 뒤집히지 않았는가, (c) 크기가 Maya 씬과 맞는가. (a)는 렌더러가
+# 있어야 하지만 (b)와 (c)는 숫자로 잴 수 있다 -- 그리고 이 머신의 ROS 2는
+# 브리지용 최소 설치라 rviz2/robot_state_publisher가 아예 없어서 수동
+# 확인 자체가 불가능하다(실측 확인). 그래서 잴 수 있는 둘은 여기서 잰다.
+cmds.file(new=True, force=True)
+_nCube = cmds.polyCube(name="nCube", width=1, height=1, depth=1)[0]
+_nAx = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_nAx, _nCube)
+cmds.setAttr(_nAx + ".jointName", "n_base", type="string")
+_nPath = os.path.join(tempfile.mkdtemp(prefix="maro_urdf_normals_"), "n.urdf")
+assert urdf.export(path=_nPath) == _nPath
+_nStl = os.path.join(os.path.dirname(os.path.abspath(_nPath)), "meshes", "nCube.stl")
+_nRaw = open(_nStl, "rb").read()
+_nTris = _struct.unpack("<I", _nRaw[80:84])[0]
+assert _nTris == 12, _nTris
+
+_verts = []
+for _i in range(_nTris):
+    _v = _struct.unpack("<12fH", _nRaw[84 + 50 * _i:84 + 50 * (_i + 1)])
+    _verts.append((_v[3:6], _v[6:9], _v[9:12]))
+
+# (b) 법선이 바깥을 향하는가 -- 닫힌 메쉬의 부호 있는 부피로 잰다.
+# 발산정리: V = 1/6 * sum(v0 . (v1 x v2)). 와인딩이 바깥이면 양수, 안팎이
+# 뒤집혔으면 음수다. RViz에서 "속이 보이는" 증상이 정확히 이 부호다.
+_signedVolume = 0.0
+for _a, _b, _c in _verts:
+    _cx = _b[1] * _c[2] - _b[2] * _c[1]
+    _cy = _b[2] * _c[0] - _b[0] * _c[2]
+    _cz = _b[0] * _c[1] - _b[1] * _c[0]
+    _signedVolume += (_a[0] * _cx + _a[1] * _cy + _a[2] * _cz) / 6.0
+assert _signedVolume > 0.0, (
+    "exported triangle winding is inverted -- the mesh would render inside-out "
+    "in RViz (signed volume %.9f)" % _signedVolume)
+
+# (c) 크기가 Maya 씬과 맞는가. 폭 1의 폴리큐브는 Maya 내부 단위로 1cm이므로
+# ROS 미터로 0.01이어야 한다. 단위 스케일이 빠지면 100배로 나온다.
+_xs = [v[0] for t in _verts for v in t]
+_ys = [v[1] for t in _verts for v in t]
+_zs = [v[2] for t in _verts for v in t]
+for _axisName, _vals in (("x", _xs), ("y", _ys), ("z", _zs)):
+    _extent = max(_vals) - min(_vals)
+    assert abs(_extent - 0.01) < 1e-6, (
+        "%s extent is %.6f m, expected 0.01 m for a 1-unit cube" % (_axisName, _extent))
+# 부피도 같은 이야기를 해야 한다: 0.01^3 = 1e-6 m^3.
+assert abs(_signedVolume - 1e-6) < 1e-9, _signedVolume
+print("outward normals and metric scale OK (signed volume %.3e m^3)" % _signedVolume)
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
