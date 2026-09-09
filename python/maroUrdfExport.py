@@ -753,8 +753,11 @@ def _linkMeshTriangles(linkTransform, axisFramePath):
 
 def _writeLinkMeshes(links, meshDir, robotName):
     """각 링크의 메쉬를 STL로 쓰고 link["visualMesh"]에 package:// 경로를
-    채운다. 메쉬가 없거나 삼각형이 0개인 링크는 건드리지 않는다 -- 그
-    링크는 <visual> 없이 나가며 이는 정상이고 에러가 아니다.
+    채운다. 이어서 그 삼각형의 볼록 껍질을 <name>_collision.stl로 쓰고
+    link["collisionMesh"]를 채운다 -- 껍질이 퇴화해 만들어지지 않으면
+    대신 link["collisionBox"]에 AABB를 채운다. 메쉬가 없거나 삼각형이
+    0개인 링크는 건드리지 않는다 -- 그 링크는 <visual>도 <collision>도
+    없이 나가며 이는 정상이고 에러가 아니다.
 
     meshDir는 실제로 쓸 것이 생겼을 때만 만든다 -- 지오메트리가 하나도
     없는 씬을 내보내면 빈 meshes/ 디렉터리를 남기지 않는다.
@@ -794,9 +797,23 @@ def _writeLinkMeshes(links, meshDir, robotName):
         fileName = sanitizeMeshFileName(link["name"], usedNames)
         if not os.path.isdir(meshDir):
             os.makedirs(meshDir)
-        writeBinaryStl(mayaTrianglesToRosMeters(triangles),
-                       os.path.join(meshDir, fileName + ".stl"))
+        # 변환을 한 번만 하고 껍질도 이 결과로 계산한다 -- 박스 크기가
+        # URDF에 직접 들어가므로 ROS 미터여야 한다.
+        rosTriangles = mayaTrianglesToRosMeters(triangles)
+        writeBinaryStl(rosTriangles, os.path.join(meshDir, fileName + ".stl"))
         link["visualMesh"] = "package://{}/meshes/{}.stl".format(robotName, fileName)
+
+        hullPoints = [corner for tri in rosTriangles for corner in tri]
+        hull = convexHull(hullPoints)
+        if hull:
+            collisionName = fileName + "_collision"
+            writeBinaryStl(hull, os.path.join(meshDir, collisionName + ".stl"))
+            link["collisionMesh"] = "package://{}/meshes/{}.stl".format(
+                robotName, collisionName)
+        else:
+            # 퇴화 링크(평면 판, 점 몇 개)는 껍질이 없다. 파일을 쓰지 않고
+            # URDF 안에 박스로 낸다(설계 스펙 §4).
+            link["collisionBox"] = axisAlignedBox(hullPoints)
 
 
 def _buildRobotModel():

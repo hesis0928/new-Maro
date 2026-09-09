@@ -1236,6 +1236,83 @@ assert urdf.buildUrdfXml("bot", [{"name": "L"}], []).find("link").get("name") \
 print("axisAlignedBox and <collision> branching OK")
 
 
+print("[test] export -- <visual>과 <collision>이 함께 나온다")
+
+cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
+cmds.currentUnit(linear="cm")
+
+_hullRoot = cmds.polyCube(name="hullBody", width=2.0, height=2.0,
+                          depth=2.0)[0]
+# 팔은 **오목**해야 한다. 볼록 입력에서는 껍질이 단체가 되어 면 = 2 x 정점
+# - 4가 정확히 성립하는데, Maya의 실린더/구/큐브 삼각형 수가 이미 그 값이라
+# "껍질이 더 적다"는 주장이 참이 될 수 없다(실측: 실린더 sub20은 시각 76
+# 대 껍질 76, 구는 760 대 760, 큐브는 12 대 12로 전부 동수). 토러스는
+# 껍질이 가운데 구멍을 메우므로 800 -> 436으로 실제로 줄어든다.
+_hullArm = cmds.polyTorus(name="hullArm")[0]
+cmds.move(0.0, 5.0, 0.0, _hullArm)
+
+_hullRootAxis = cmds.createNode("maroAxis", name="hullRootAxis",
+                                parent=_hullRoot)
+_hullArmAxis = cmds.createNode("maroAxis", name="hullArmAxis", parent=_hullArm)
+cmds.maroBindAxis(_hullRootAxis, _hullRoot)
+cmds.maroBindAxis(_hullArmAxis, _hullArm)
+cmds.connectAttr(_hullRootAxis + ".message", _hullArmAxis + ".parentAxis")
+cmds.setAttr(_hullRootAxis + ".jointName", "hull_root", type="string")
+cmds.setAttr(_hullArmAxis + ".jointName", "hull_arm", type="string")
+
+_hullOutDir = os.path.join(tempfile.mkdtemp(), "hullbot")
+os.makedirs(_hullOutDir)
+_hullUrdfPath = os.path.join(_hullOutDir, "hullbot.urdf")
+urdf.export(_hullUrdfPath)
+
+_hullLinks = {_el.get("name"): _el
+              for _el in ET2.parse(_hullUrdfPath).getroot().findall("link")}
+assert len(_hullLinks) == 2, sorted(_hullLinks)
+
+for _name, _el in _hullLinks.items():
+    _vis = _el.find("visual/geometry/mesh")
+    _col = _el.find("collision/geometry/mesh")
+    assert _vis is not None, "%s has no <visual> mesh" % _name
+    assert _col is not None, "%s has no <collision> mesh" % _name
+    # 충돌 메쉬는 시각 메쉬와 **다른** 파일이어야 한다. 같으면 껍질을
+    # 계산하지 않고 경로만 복사한 것이다.
+    assert _col.get("filename") != _vis.get("filename"), _col.get("filename")
+    assert _col.get("filename").endswith("_collision.stl"), _col.get("filename")
+
+
+def _readStlTris(path):
+    with open(path, "rb") as _fh:
+        _fh.seek(80)
+        _count = _struct.unpack("<I", _fh.read(4))[0]
+        _out = []
+        for _ in range(_count):
+            _vals = _struct.unpack("<12f", _fh.read(50)[:48])
+            _out.append((tuple(_vals[3:6]), tuple(_vals[6:9]),
+                         tuple(_vals[9:12])))
+    return _out
+
+
+_hullMeshDir = os.path.join(_hullOutDir, "meshes")
+_hullArmVis = _readStlTris(os.path.join(_hullMeshDir, "hullArm.stl"))
+_hullArmCol = _readStlTris(os.path.join(_hullMeshDir,
+                                        "hullArm_collision.stl"))
+# 토러스는 오목하므로 껍질이 구멍을 메우며 면이 줄어든다(실측 800 -> 436).
+assert 0 < len(_hullArmCol) < len(_hullArmVis), \
+    (len(_hullArmCol), len(_hullArmVis))
+
+# 충돌 껍질은 시각 메쉬를 **감싸야** 한다 -- 안쪽으로 파고들면 그 부분이
+# 물리적으로 통과된다. float32로 왕복했으므로 허용 오차는 float64 테스트
+# (1e-9)보다 커야 한다.
+_hullArmVerts = [_v for _tri in _hullArmVis for _v in _tri]
+assert _maxOutside(_hullArmCol, _hullArmVerts) < 1e-5, \
+    _maxOutside(_hullArmCol, _hullArmVerts)
+assert _hullVolume(_hullArmCol) > 0.0, _hullVolume(_hullArmCol)
+
+print("export emits <visual> + <collision> OK (arm hull %d tris vs visual %d)"
+      % (len(_hullArmCol), len(_hullArmVis)))
+
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
