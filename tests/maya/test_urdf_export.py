@@ -1313,6 +1313,68 @@ print("export emits <visual> + <collision> OK (arm hull %d tris vs visual %d)"
       % (len(_hullArmCol), len(_hullArmVis)))
 
 
+print("[test] 링크 이름 검증")
+
+# 바인딩 없는 축 -> <link name=""> -- check_urdf가 거부하는 무효 URDF이고,
+# TF 쪽에서는 이름을 만들 수 없어 프레임 자체가 안 나간다.
+cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
+cmds.currentUnit(linear="cm")
+_lnCube = cmds.polyCube(name="lnBody")[0]
+_lnAxis = cmds.createNode("maroAxis", name="lnAxis", parent=_lnCube)
+cmds.setAttr(_lnAxis + ".jointName", "ln_root", type="string")
+# maroBindAxis를 일부러 부르지 않는다 -- 바인딩 없는 축이다.
+# 던지는 것은 _buildRobotModel이다. export()는 메뉴 커맨드 경계라 모든
+# 예외를 잡아 경고로 바꾸고 None을 돌려주므로(원래 설계), 메시지를 보려면
+# 이쪽을 직접 불러야 한다.
+try:
+    urdf._buildRobotModel()
+    raise AssertionError("unbound axis should have been rejected")
+except ValueError as _e:
+    assert "lnAxis" in str(_e), str(_e)
+# 사용자에게 보이는 동작: 파일을 쓰지 않고 None을 돌려준다.
+_lnPath = os.path.join(tempfile.mkdtemp(), "ln.urdf")
+assert urdf.export(_lnPath) is None
+assert not os.path.exists(_lnPath), _lnPath
+
+# 링크 이름 중복 -- 같은 짧은 이름을 가진 두 트랜스폼. 무효 URDF이고,
+# TF에서는 두 발행자가 같은 프레임을 써서 화면이 떨린다.
+cmds.file(new=True, force=True)
+cmds.currentUnit(angle="rad")
+cmds.currentUnit(linear="cm")
+_dupA = cmds.ls(cmds.polyCube(name="dupBody")[0], long=True)[0]
+_dupGrp = cmds.group(empty=True, name="dupGroup")
+_dupB = cmds.parent(cmds.polyCube(name="dupTemp")[0], _dupGrp)[0]
+# Maya는 같은 부모 아래 이름 충돌을 자동으로 피한다. 부모가 다르면 같은
+# 짧은 이름이 허용되므로, 옮긴 **뒤에** 개명해야 진짜 중복이 만들어진다.
+_dupB = cmds.ls(cmds.rename(_dupB, "dupBody"), long=True)[0]
+# 짧은 이름은 같고 전체 경로는 달라야 한다 -- 이게 아니면 이 테스트는
+# 아무것도 검증하지 않는다.
+assert _dupA.split("|")[-1] == _dupB.split("|")[-1], (_dupA, _dupB)
+assert _dupA != _dupB, _dupA
+# 이 시점부터 짧은 이름 조회는 모호하다. 전체 경로만 쓴다 -- 바로 이
+# 모호함이 중복 링크 이름을 거부하는 이유이기도 하다.
+_axA = cmds.ls(cmds.createNode("maroAxis", name="dupAxisA", parent=_dupA),
+               long=True)[0]
+_axB = cmds.ls(cmds.createNode("maroAxis", name="dupAxisB", parent=_dupB),
+               long=True)[0]
+cmds.maroBindAxis(_axA, _dupA)
+cmds.maroBindAxis(_axB, _dupB)
+cmds.setAttr(_axA + ".jointName", "dup_root", type="string")
+cmds.setAttr(_axB + ".jointName", "dup_child", type="string")
+cmds.connectAttr(_axA + ".message", _axB + ".parentAxis")
+try:
+    urdf._buildRobotModel()
+    raise AssertionError("duplicate link names should have been rejected")
+except ValueError as _e:
+    assert "dupBody" in str(_e), str(_e)
+_dupPath = os.path.join(tempfile.mkdtemp(), "dup.urdf")
+assert urdf.export(_dupPath) is None
+assert not os.path.exists(_dupPath), _dupPath
+
+print("link name validation OK (empty and duplicate both rejected)")
+
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)

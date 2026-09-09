@@ -821,6 +821,31 @@ def _buildRobotModel():
     axisRows = sliceAxisRows(cmds.maroListAxisNodes())
     if not axisRows:
         raise ValueError("scene has no maroAxis nodes to export")
+
+    # 링크 이름은 바인딩 타겟의 짧은 이름이다. 비어 있거나 서로 겹치면
+    # <link name="">/중복 <link>가 되어 check_urdf가 거부하고, 런타임
+    # /tf에서는 프레임이 안 나가거나 두 발행자가 한 프레임을 다투게 된다
+    # (설계 스펙 §4).
+    unbound = [row["axisFullPath"] for row in axisRows
+               if not row.get("boundTargetPath")]
+    if unbound:
+        raise ValueError(
+            "every axis must be bound to a transform before URDF export "
+            "(the bound object's short name becomes the <link> name and the "
+            "/tf frame id), missing on: {}".format(", ".join(sorted(unbound))))
+
+    seenLinkNames = {}
+    for row in axisRows:
+        seenLinkNames.setdefault(
+            _shortName(row["boundTargetPath"]), []).append(row["axisFullPath"])
+    collisions = {n: paths for n, paths in seenLinkNames.items() if len(paths) > 1}
+    if collisions:
+        raise ValueError(
+            "two or more axes resolve to the same <link> name; rename the "
+            "bound transforms so their short names differ: {}".format(
+                "; ".join("{} from {}".format(n, ", ".join(sorted(p)))
+                          for n, p in sorted(collisions.items()))))
+
     root, childrenByParent = buildAxisTree(axisRows)
 
     rowsByPath = {row["axisFullPath"]: row for row in axisRows}
