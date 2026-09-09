@@ -9,8 +9,10 @@
 #include <maya/MAngle.h>
 #include <maya/MDagPath.h>
 #include <maya/MDistance.h>
+#include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnPointArrayData.h>
+#include <maya/MFnTransform.h>
 #include <maya/MGlobal.h>
 #include <maya/MItDependencyNodes.h>
 #include <maya/MMatrix.h>
@@ -143,14 +145,14 @@ void MaroPump::collectSamples(MaroRosRuntime& runtime) {
     for (MItDependencyNodes it(MFn::kPluginLocatorNode); !it.isDone(); it.next()) {
         MFnDependencyNode axisFn(it.thisNode());
         if (axisFn.typeId() != MaroAxisNode::id) continue;
-        if (!axisFn.findPlug(MaroAxisNode::aEnabled, false).asBool()) continue;
 
-        const MString joint =
-            axisFn.findPlug(MaroAxisNode::aJointName, false).asString();
-        if (joint.length() == 0) continue;   // 이름 없는 축은 발행하지 않는다
-
+        // enabled와 빈 jointName은 더 이상 축을 통째로 건너뛰지 않는다.
+        // 둘 다 /joint_states만 거르고 TF 프레임은 낸다 -- 프레임 이름이
+        // 이제 jointName이 아니라 링크 이름이라 성립한다(설계 스펙 §2-4).
         AxisSample sample;
-        sample.jointName = joint.asChar();
+        sample.jointName =
+            axisFn.findPlug(MaroAxisNode::aJointName, false).asString().asChar();
+        sample.enabled = axisFn.findPlug(MaroAxisNode::aEnabled, false).asBool();
         // driveIsLinear가 이 틱에 어느 출력이 유효한지 알려준다 -- 스택을
         // 다시 훑지 않고 MaroAxisNode::compute()가 이미 판정해 둔 플래그
         // 하나만 읽는다(Task 3).
@@ -176,14 +178,13 @@ void MaroPump::collectSamples(MaroRosRuntime& runtime) {
 
         if (!std::isfinite(sample.value)) continue;
 
-        // /tf는 이 축이 구동하는 실제 Maya 오브젝트의 월드 변환이 있어야
-        // 의미가 있다. targetObject는 message 연결이라(데이터를 나르지
-        // 않는다) MaroBindAxisCommand::doIt과 같은 방식으로만 오브젝트를
-        // 얻을 수 있다 -- connectedTo(asDst=true)로 이 축에 연결된 소스
-        // 쪽(바인딩된 트랜스폼)을 본다. 바인딩이 없으면 이 축은 씬 안의
-        // 어떤 위치도 대표하지 않으므로, 이름 없는 축과 같은 이유로
-        // 건너뛴다 -- 원점(identity)을 발행하는 것보다는 아예 발행하지
-        // 않는 쪽이 낫다 (이 태스크가 고치는 바로 그 문제).
+        // 바인딩 타겟은 이제 링크 **이름**의 출처다(자세의 출처가 아니다 --
+        // 그건 아래 로케이터 부모다). targetObject는 message 연결이라
+        // 데이터를 나르지 않으므로 MaroBindAxisCommand::doIt과 같은
+        // 방식으로만 얻을 수 있다 -- connectedTo(asDst=true)로 소스 쪽을
+        // 본다. 바인딩이 없으면 링크 이름을 만들 수 없고, URDF 쪽도 그런
+        // 축을 거부하므로(python/maroUrdfExport.py의 검증) 프레임도 내지
+        // 않는다.
         MPlugArray targetSources;
         axisFn.findPlug(MaroAxisNode::aTargetObject, false)
             .connectedTo(targetSources, true, false);
@@ -201,18 +202,42 @@ void MaroPump::collectSamples(MaroRosRuntime& runtime) {
             continue;
         }
 
-        // /tf 프레임은 전부 공통 루트("world") 기준으로 발행되므로(
-        // MaroRosRuntime::drainAndPublish 참고) 로컬이 아니라 월드 행렬을
-        // 쓴다. 스케일/기울임은 이 파이프라인이 다루지 않으므로 kTransform
-        // 공간으로 평행이동을, rotation()으로 회전만 뽑아낸다 -- 둘 다
-        // Maya가 순수 행렬에서 피벗 없이 성분을 복원하는 표준 경로다.
-        const MMatrix worldMatrix = targetPath.inclusiveMatrix();
-        MTransformationMatrix xform(worldMatrix);
+        // 링크 이름 규칙은 파이썬 _shortName(fullPath) =
+        // fullPath.split("|")[-1]과 **같아야 한다**. name()이 그 등가물이다
+        // -- partialPathName()은 이름이 모호할 때 경로 조각을 돌려주므로
+        // 파이썬과 갈린다. 네임스페이스는 양쪽 다 남긴다("ns:cube").
+        sample.linkName = MFnDagNode(targetPath).name().asChar();
 
+        // 프레임 **자세**는 maroAxis 로케이터의 부모 트랜스폼이다 --
+        // 바인딩 타겟이 아니다. URDF의 조인트 원점·관절축·메쉬 정점이 전부
+        // 이 노드 기준으로 계산되므로(python/maroUrdfExport.py의
+        // _axisParentTransformPath), 다른 노드를 쓰면 프레임과 메쉬가
+        // 통째로 어긋난다 -- 슬라이스 1이 실제로 겪은 100mm 버그와 같은
+        // 종류다(설계 스펙 §2-2).
+        MDagPath framePath;
+        if (MDagPath::getAPathTo(it.thisNode(), framePath) != MS::kSuccess) {
+            continue;
+        }
+        // 셰이프 -> 부모 트랜스폼. 길이 0인 경로에서 pop()이 실패하는
+        // 경우가 실제로 있다(MaroDeleteWatcher.cpp의 실측 주석).
+        if (framePath.pop() != MS::kSuccess) continue;
+        if (!framePath.hasFn(MFn::kTransform)) continue;
+
+        MTransformationMatrix xform(framePath.inclusiveMatrix());
         MStatus translationStatus;
         const MVector t =
             xform.getTranslation(MSpace::kTransform, &translationStatus);
-        const MQuaternion q = xform.rotation();
+
+        // 회전만은 MFnTransform으로 읽는다. 부모 비균등 스케일과 자식
+        // 회전이 만나면 전단이 생기고, 행렬 분해는 그 전단을 회전으로
+        // 흘린다 -- 실측 32.692도. MFnTransform::getRotation(kWorld)는 그
+        // 경로를 타지 않아 스케일에 0.000000도 흔들린다. 파이썬
+        // _linkFrameWorldRigid가 같은 이유로 같은 호출을 쓴다.
+        MStatus frameStatus;
+        MFnTransform frameFn(framePath, &frameStatus);
+        if (!frameStatus) continue;
+        MQuaternion q;
+        if (frameFn.getRotation(q, MSpace::kWorld) != MS::kSuccess) continue;
 
         // 이 값들은 백그라운드 스레드를 거쳐 그대로 ROS 2 와이어로 나간다.
         // NaN/inf가 거기까지 새지 않도록 여기서 막는다 (sample.value에 이미

@@ -16,7 +16,16 @@ namespace maro {
 // 노트 참고). 변환에 필요한 컨텍스트를 함께 실어 보낸다. 백그라운드는
 // Maya를 일절 조회하지 않으므로 씬 단위와 보정값이 여기 들어간다.
 struct AxisSample {
+    // jointName은 /joint_states의 이름이고, linkName은 /tf의
+    // child_frame_id다. 둘은 서로 다른 노드에서 오며 일반적으로 다르다
+    // (설계 스펙 §2-1) -- URDF의 <joint name>과 <link name>이 그런 것과
+    // 같은 이유다.
     std::string jointName;
+    std::string linkName;
+    // enabled는 /joint_states만 거른다. 비활성 축도 씬에서 공간을
+    // 차지하므로 TF 프레임은 낸다 -- 안 그러면 URDF엔 있는 링크가 TF엔
+    // 없어 RViz에 프레임 없는 링크가 생긴다(설계 스펙 §2-3).
+    bool enabled = true;
     double value = 0.0;
     Vec3 position;
     Quat rotation;

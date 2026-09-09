@@ -159,8 +159,12 @@ void MaroRosRuntime::drainAndPublish() {
             tf2_msgs::msg::TFMessage tf;
 
             for (const AxisSample& sample : samples) {
-                joints.name.push_back(sample.jointName);
-                joints.position.push_back(sample.value);
+                // enabled와 이름은 /joint_states만 거른다 -- TF 프레임은
+                // 아래에서 무조건 낸다(설계 스펙 §2-3, §2-4).
+                if (sample.enabled && !sample.jointName.empty()) {
+                    joints.name.push_back(sample.jointName);
+                    joints.position.push_back(sample.value);
+                }
 
                 const Vec3 p = mayaToRosPosition(sample.position, sample.unit);
                 const Quat q = mayaToRosRotation(sample.rotation);
@@ -168,7 +172,9 @@ void MaroRosRuntime::drainAndPublish() {
                 geometry_msgs::msg::TransformStamped t;
                 t.header.stamp = joints.header.stamp;
                 t.header.frame_id = "world";
-                t.child_frame_id = sample.jointName;
+                // URDF <link name>과 같은 이름이어야 RViz의 RobotModel이
+                // 이 프레임을 찾는다(설계 스펙 §2-1).
+                t.child_frame_id = sample.linkName;
                 t.transform.translation.x = p.x;
                 t.transform.translation.y = p.y;
                 t.transform.translation.z = p.z;

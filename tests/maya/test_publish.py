@@ -124,10 +124,20 @@ def main():
     MAYA_POSITION_CM = (30.0, 20.0, 10.0)  # (x, y, z), Maya 내부 단위(cm)
     MAYA_ROTATE_Z_DEG = 50.0
 
-    cmds.setAttr(cube + ".translateX", MAYA_POSITION_CM[0])
-    cmds.setAttr(cube + ".translateY", MAYA_POSITION_CM[1])
-    cmds.setAttr(cube + ".translateZ", MAYA_POSITION_CM[2])
-    cmds.setAttr(cube + ".rotateZ", math.radians(MAYA_ROTATE_Z_DEG))  # currentUnit=rad
+    # 프레임 자세는 **로케이터의 부모 트랜스폼**에서 온다(설계 스펙 §2-2).
+    # 바인딩된 큐브에는 일부러 **다른** 자세를 준다 -- 둘이 같으면 자세
+    # 출처가 틀려도 이 테스트가 통과해 버린다.
+    axisFrame = cmds.listRelatives(axis, parent=True, fullPath=True)[0]
+    cmds.setAttr(axisFrame + ".translateX", MAYA_POSITION_CM[0])
+    cmds.setAttr(axisFrame + ".translateY", MAYA_POSITION_CM[1])
+    cmds.setAttr(axisFrame + ".translateZ", MAYA_POSITION_CM[2])
+    cmds.setAttr(axisFrame + ".rotateZ", math.radians(MAYA_ROTATE_Z_DEG))  # currentUnit=rad
+
+    # 미끼(decoy): 바인딩 타겟을 읽으면 이 값이 나온다 -> 실패해야 한다.
+    cmds.setAttr(cube + ".translateX", -5.0)
+    cmds.setAttr(cube + ".translateY", 7.0)
+    cmds.setAttr(cube + ".translateZ", -11.0)
+    cmds.setAttr(cube + ".rotateZ", math.radians(-25.0))
 
     # 순수 변환 라이브러리(maro_transform/Convert.cpp)가 하는 일을 손으로 그대로
     # 재현해 기대값을 구한다: mayaToRos는 (x, y, z) -> (x, -z, y)이고 위치는
@@ -164,9 +174,11 @@ def main():
     # 피어가 받아야 할 정확한 문자열. maro_test_peer의 runEcho()가
     # "joint <name> = <position>"로, runTf()가 "tf <frame> translation/rotation = ..."로
     # std::cout에 찍는다 (tests/peer/maro_test_peer.cpp). /tf의 child_frame_id는
-    # sample.jointName 그대로다(MaroRosRuntime::drainAndPublish), 그래서 같은
-    # 이름을 둘 다에 쓴다.
+    # 이제 **링크 이름**이다(설계 스펙 §2-1) -- jointName이 아니라 바인딩
+    # 타겟의 짧은 이름이다. joint_states는 그대로 jointName을 쓰므로 두
+    # 이름이 갈린다.
     EXPECTED_JOINT = "axisPub"
+    EXPECTED_LINK = "seg"        # cube = cmds.polyCube(name="seg")[0]
     EXPECTED_VALUE = 0.75
     PEER_TIMEOUT_SEC = 20  # 피어 자체 타임아웃
     BACKSTOP_SEC = PEER_TIMEOUT_SEC + 10  # 파이썬 쪽 안전망. 피어 타임아웃보다 넉넉히 크다.
@@ -264,7 +276,7 @@ def main():
         # 넣으면 아무것도 못 받는다). 큐브 자세는 브리지를 켜기 전에 이미
         # 설정해 뒀으므로, 펌프가 수집한 첫 틱부터 실제 변환값이 실려 있다.
         tf_listener = subprocess.Popen(
-            [peer, "tf", EXPECTED_JOINT, str(PEER_TIMEOUT_SEC)],
+            [peer, "tf", EXPECTED_LINK, str(PEER_TIMEOUT_SEC)],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         peers.append(tf_listener)
 
@@ -272,19 +284,19 @@ def main():
         print(tf_out)
 
         assert tf_listener.returncode == 0, \
-            f"peer never received a /tf transform for '{EXPECTED_JOINT}' (timed out); " \
+            f"peer never received a /tf transform for '{EXPECTED_LINK}' (timed out); " \
             f"maroBridgeStats={tf_stats}\npeer output:\n{tf_out}"
 
         translation = rotation = None
-        t_prefix = f"tf {EXPECTED_JOINT} translation = "
-        r_prefix = f"tf {EXPECTED_JOINT} rotation = "
+        t_prefix = f"tf {EXPECTED_LINK} translation = "
+        r_prefix = f"tf {EXPECTED_LINK} rotation = "
         for line in tf_out.splitlines():
             if line.startswith(t_prefix):
                 translation = tuple(float(v) for v in line[len(t_prefix):].split())
             elif line.startswith(r_prefix):
                 rotation = tuple(float(v) for v in line[len(r_prefix):].split())
         assert translation is not None and rotation is not None, \
-            f"could not parse /tf translation/rotation for '{EXPECTED_JOINT}' from peer output:\n" \
+            f"could not parse /tf translation/rotation for '{EXPECTED_LINK}' from peer output:\n" \
             f"{tf_out}\nmaroBridgeStats={tf_stats}"
 
         # 값 자체를 검증한다 -- child_frame_id만 맞고 값이 원점/항등이면(즉
@@ -301,7 +313,7 @@ def main():
                 f"/tf rotation.{comp_label} published as {got}, expected {expected} " \
                 f"(Maya rotateZ={MAYA_ROTATE_Z_DEG} deg -> mayaToRosRotation -> {EXPECTED_TF_ROTATION}):\n" \
                 f"{tf_out}\nmaroBridgeStats={tf_stats}"
-        print(f"tf round trip OK (child_frame_id={EXPECTED_JOINT}, "
+        print(f"tf round trip OK (child_frame_id={EXPECTED_LINK}, "
               f"translation={translation}, rotation={rotation})")
 
         cmds.maroStopBridge()
