@@ -397,6 +397,30 @@ def _linkFrameWorldRigid(framePath):
             om2.MFnTransform(dagPath).rotation(om2.MSpace.kWorld, asQuaternion=True))
 
 
+def influenceToLink(influencePath, linkPaths):
+    """인플루언스 조인트가 속할 링크의 전체 경로. 없으면 None.
+
+    자기 자신이 링크면 자신을, 아니면 DAG 조상을 거슬러 올라가 링크인 첫
+    조상을 준다.
+
+    조상 walk가 필요한 이유(설계 스펙 §4.2): 캐릭터 리그는 URDF 관절보다
+    조인트가 훨씬 많다 -- 손가락 20개를 손목 링크 하나로 묶는 식이 정상이다.
+    walk가 없으면 바인딩 안 된 조인트가 지배하는 영역이 통째로 비어 RViz에
+    구멍으로 보인다.
+
+    `linkPaths`는 전체 DAG 경로의 set이어야 한다 -- 짧은 이름과 섞이면
+    같은 노드인데도 절대 매치되지 않는다(maroSkeletonUpload.extractSkeleton이
+    같은 함정을 실측으로 기록해 두었다).
+    """
+    node = influencePath
+    while node:
+        if node in linkPaths:
+            return node
+        parents = cmds.listRelatives(node, parent=True, fullPath=True)
+        node = parents[0] if parents else None
+    return None
+
+
 def dominantInfluence(weights, vertexIndex, influenceCount):
     """정점 하나를 지배하는 인플루언스의 (인덱스, 가중치).
 

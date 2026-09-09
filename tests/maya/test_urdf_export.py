@@ -852,6 +852,27 @@ assert urdf.assignTriangleToLink({0: None, 1: None, 2: None},
                                  {0: 1.0, 1: 1.0, 2: 1.0}, (0, 1, 2)) is None
 print("assignTriangleToLink OK")
 
+# --- 조상 walk (슬라이스 2) ---
+cmds.file(new=True, force=True)
+_wj1 = cmds.createNode("joint", name="wj1")
+_wj2 = cmds.createNode("joint", name="wj2", parent=_wj1)
+_wj3 = cmds.createNode("joint", name="wj3", parent=_wj2)
+_wj1 = cmds.ls(_wj1, long=True)[0]
+_wj2 = cmds.ls(_wj2, long=True)[0]
+_wj3 = cmds.ls(_wj3, long=True)[0]
+_walkLinks = {_wj1, _wj2}
+
+assert urdf.influenceToLink(_wj1, _walkLinks) == _wj1, "a link maps to itself"
+assert urdf.influenceToLink(_wj2, _walkLinks) == _wj2
+# wj3는 링크가 아니다 -- 가장 가까운 조상 링크인 wj2로 접힌다. 캐릭터 리그의
+# 손가락 조인트들이 손목 링크 하나로 묶이는 것이 이 경로다.
+assert urdf.influenceToLink(_wj3, _walkLinks) == _wj2, "must fold into the nearest bound ancestor"
+# 링크가 하나도 없으면 None -- 그 정점은 어느 조각에도 안 들어간다.
+assert urdf.influenceToLink(_wj3, set()) is None
+# 최상위까지 올라가도 못 찾으면 None(무한루프가 아니라 종료해야 한다).
+assert urdf.influenceToLink(_wj3, {"|somethingElse"}) is None
+print("influenceToLink OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
