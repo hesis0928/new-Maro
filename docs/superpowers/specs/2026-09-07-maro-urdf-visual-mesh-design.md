@@ -143,6 +143,12 @@ cmds.listRelatives(linkTransform, shapes=True, fullPath=True, type="mesh",
 > **규칙**: 로케이터 부모 트랜스폼의 월드 이동과 회전으로 강체 변환을 조립해
 > 그것을 뒤집는다 -- `_gatherAxisWorldTransformRos`가 읽는 것과 **정확히 같은
 > 두 값**이다.
+>
+> **그 "정확히 같은"을 주석이 아니라 구조로 만든다.** 이 불변식이 두 번
+> 깨졌고 두 번 다 원인이 같았다 -- 같은 네 줄을 두 함수가 따로 들고 주석으로만
+> 맞춰 둔 배치. 그래서 프레임 읽기를 `_linkFrameWorldRigid(framePath)` 하나로
+> 모았고, 조인트 원점과 시각 메쉬가 **같은 함수**를 부른다. 이제 한쪽만
+> 바뀌는 일이 성립하지 않는다.
 
 축 재배치는 `maroLimitCalibration.mayaDirectionToRos`가 이미 파이썬으로
 하는 것과 같은 식이다. 그 전례를 따른다 -- 정점 수천 개를 `maroMayaToRos`

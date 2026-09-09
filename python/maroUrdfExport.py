@@ -367,6 +367,36 @@ def _axisParentTransformPath(axis):
     return cmds.listRelatives(axis, parent=True, fullPath=True)[0]
 
 
+def _linkFrameWorldRigid(framePath):
+    """framePath(링크 프레임 트랜스폼)의 월드 **이동과 회전**을 돌려준다.
+    반환은 (MVector 위치, MQuaternion 회전).
+
+    이 함수가 존재하는 이유는 순전히 불변식 하나를 구조로 만들기 위해서다:
+    **URDF의 조인트 원점과 시각 메쉬는 반드시 같은 프레임을 써야 한다.**
+    이 슬라이스는 그 불변식이 깨져서 두 번 물렸다 --
+
+      1. 메쉬가 바인딩 트랜스폼 기준으로 구워지고 조인트 원점은 로케이터
+         기준이라 100mm 어긋났다(최종 리뷰 Finding 1).
+      2. 그걸 고친 뒤에도 메쉬만 `inclusiveMatrixInverse()`를 통째로 써서
+         스케일·전단까지 담는 바람에, 이동·회전만 읽는 조인트 원점과 또
+         어긋났다(재리뷰 Finding A -- 로케이터 2배 스케일에서 50mm,
+         비균일 그룹에서 200mm).
+
+    두 번 다 "같은 네 줄을 두 군데서 따로 쓰되 주석으로 맞춰 둔다"는
+    배치였고, 두 번 다 그 주석이 실제 코드를 따라오지 못했다. 그래서 읽기
+    자체를 여기 한 곳으로 모은다 -- 이제 한쪽만 바뀌는 일이 성립하지 않는다.
+
+    **스케일과 전단은 의도적으로 버린다.** 링크 프레임은 강체다. 메쉬
+    자신의 스케일은 이것과 무관하게 살아남는다(월드 정점이 이미 품고
+    있고, 호출부는 이동과 회전만 되돌린다) -- 그건 진짜 지오메트리이므로
+    보존되어야 한다. 자세한 근거와 실측표는 설계 스펙 §4의 2차 정정 블록.
+    """
+    dagPath = om2.MSelectionList().add(framePath).getDagPath(0)
+    worldMatrix = om2.MTransformationMatrix(dagPath.inclusiveMatrix())
+    return (worldMatrix.translation(om2.MSpace.kWorld),
+            om2.MFnTransform(dagPath).rotation(om2.MSpace.kWorld, asQuaternion=True))
+
+
 def _gatherAxisWorldTransformRos(axis):
     """axis(maroAxis 로케이터 셰이프)의 부모 트랜스폼의 월드 위치/회전을
     ROS 프레임 (pos, quat) 튜플로 돌려준다.
@@ -392,11 +422,7 @@ def _gatherAxisWorldTransformRos(axis):
     그 옆 주석 참고). (`_resolveCapabilityDetails`의 capMin/capMax는 이와는
     별개 문제다 -- 그쪽은 애초에 UI 단위가 전혀 개입하지 않는 평범한
     double이라 감싸면 안 되는 값이었다.)"""
-    transformPath = _axisParentTransformPath(axis)
-    dagPath = om2.MSelectionList().add(transformPath).getDagPath(0)
-    worldMatrix = om2.MTransformationMatrix(dagPath.inclusiveMatrix())
-    pos = worldMatrix.translation(om2.MSpace.kWorld)
-    quat = om2.MFnTransform(dagPath).rotation(om2.MSpace.kWorld, asQuaternion=True)
+    pos, quat = _linkFrameWorldRigid(_axisParentTransformPath(axis))
     converted = cmds.maroMayaToRos(px=pos.x, py=pos.y, pz=pos.z,
                                     qx=quat.x, qy=quat.y, qz=quat.z, qw=quat.w)
     return (converted[0], converted[1], converted[2]), \
@@ -472,10 +498,9 @@ def _linkMeshTriangles(linkTransform, axisFramePath):
     if not shapes:
         return []
 
-    frameDag = om2.MSelectionList().add(axisFramePath).getDagPath(0)
-    frameWorld = om2.MTransformationMatrix(frameDag.inclusiveMatrix())
-    framePos = frameWorld.translation(om2.MSpace.kWorld)
-    frameQuat = om2.MFnTransform(frameDag).rotation(om2.MSpace.kWorld, asQuaternion=True)
+    # 조인트 원점과 **같은 함수**로 프레임을 읽는다 -- 둘이 어긋나면
+    # 메쉬가 관절에서 떠 버린다(_linkFrameWorldRigid의 주석 참고).
+    framePos, frameQuat = _linkFrameWorldRigid(axisFramePath)
     frameRigid = om2.MTransformationMatrix()
     frameRigid.setTranslation(framePos, om2.MSpace.kWorld)
     frameRigid.setRotation(frameQuat)
