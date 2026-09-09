@@ -29,6 +29,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 
@@ -37,6 +38,16 @@ import maya.standalone
 maya.standalone.initialize(name="python")
 
 import maya.cmds as cmds  # noqa: E402
+
+# 계약 테스트(아래)가 같은 씬에서 URDF를 내보내 링크 이름을 읽는다.
+_pythonDir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "python")
+if _pythonDir not in sys.path:
+    sys.path.insert(0, _pythonDir)
+
+import xml.etree.ElementTree as ET  # noqa: E402
+
+import maroUrdfExport as urdf  # noqa: E402
 
 # 편차 2: Qt 이벤트 루프를 직접 돌려 MTimerMessage 펌프를 깨운다.
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -189,6 +200,12 @@ def main():
     axisLinear = cmds.createNode("maroAxis", name="axisPubLinear")
     cmds.maroBindAxis(axisLinear, cubeLinear)
     cmds.setAttr(axisLinear + ".jointName", "axisPubLinear", type="string")
+
+    # URDF 내보내기는 루트가 정확히 하나인 축 트리를 요구한다. 이 씬은
+    # 원래 서로 무관한 축 두 개였다 -- 아래 계약 테스트가 같은 씬에서
+    # export를 부르려면 체인이어야 한다. 부모 연결은 발행 경로에 영향을
+    # 주지 않는다(각 축은 그대로 자기 값을 낸다).
+    cmds.connectAttr(axis + ".message", axisLinear + ".parentAxis")
     transPub = cmds.createNode("maroTranslation")
     cmds.connectAttr(transPub + ".capabilityOut", axisLinear + ".capabilityIn[0]")
     # currentUnit(linear="cm")이 위에서 이미 고정돼 있다 -- 250cm = 2.5m.
@@ -315,6 +332,25 @@ def main():
                 f"{tf_out}\nmaroBridgeStats={tf_stats}"
         print(f"tf round trip OK (child_frame_id={EXPECTED_LINK}, "
               f"translation={translation}, rotation={rotation})")
+
+        # --- 계약: URDF <link name>과 /tf child_frame_id가 통해야 한다.
+        # 기대 이름을 하드코딩하지 않고 URDF에서 읽어 온다 -- 두 파이프라인이
+        # 갈라지면 여기가 먼저 운다(설계 스펙 §6).
+        contractDir = tempfile.mkdtemp(prefix="maro_tf_contract_")
+        contractPath = os.path.join(contractDir, "contract.urdf")
+        assert urdf.export(contractPath) == contractPath
+        contractRoot = ET.parse(contractPath).getroot()
+        urdfLinks = {el.get("name") for el in contractRoot.findall("link")}
+        urdfJoints = {el.get("name") for el in contractRoot.findall("joint")}
+
+        # 피어가 실제로 받은 프레임 이름이 URDF의 링크 이름 중 하나다.
+        assert EXPECTED_LINK in urdfLinks, (EXPECTED_LINK, sorted(urdfLinks))
+        # 두 번째 축의 링크도 같은 규칙으로 나와야 한다.
+        assert "segLinear" in urdfLinks, sorted(urdfLinks)
+        # 링크 이름과 조인트 이름이 겹치면 이 계약이 우연히 통과할 수 있다.
+        # 이 씬에서는 반드시 서로소여야 한다.
+        assert not (urdfLinks & urdfJoints), (sorted(urdfLinks), sorted(urdfJoints))
+        print(f"urdf/tf name contract OK (links={sorted(urdfLinks)})")
 
         cmds.maroStopBridge()
         cmds.file(new=True, force=True)
