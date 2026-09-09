@@ -1180,6 +1180,62 @@ print("convex-input performance OK (%d visibility checks for 2000 points, "
          _hullStats["visibilityChecks"] / 2000.0))
 
 
+print("[test] axisAlignedBox와 <collision> 분기")
+
+_hullBox = urdf.axisAlignedBox(
+    [(-1.0, 2.0, 0.5), (3.0, 6.0, 2.5), (1.0, 4.0, 1.5)])
+assert _hullBox["size"] == (4.0, 4.0, 2.0), _hullBox["size"]
+assert _hullBox["center"] == (1.0, 4.0, 1.5), _hullBox["center"]
+
+# 공면 입력: 두께 0인 축이 1mm로 올라가고, 중심은 그 평면 위에 남는다.
+_hullFlat = urdf.axisAlignedBox(
+    [(0.0, 0.0, 7.0), (2.0, 0.0, 7.0), (2.0, 4.0, 7.0), (0.0, 4.0, 7.0)])
+assert _hullFlat["size"] == (2.0, 4.0, 0.001), _hullFlat["size"]
+assert _hullFlat["center"] == (1.0, 2.0, 7.0), _hullFlat["center"]
+
+# 점 하나: 세 축 전부 1mm.
+_hullSingle = urdf.axisAlignedBox([(5.0, 5.0, 5.0)])
+assert _hullSingle["size"] == (0.001, 0.001, 0.001), _hullSingle["size"]
+assert urdf.axisAlignedBox([]) is None
+
+_hullXml = urdf.buildUrdfXml("bot", [
+    {"name": "meshLink",
+     "collisionMesh": "package://bot/meshes/a_collision.stl"},
+    {"name": "boxLink",
+     "collisionBox": {"size": (0.2, 0.3, 0.4), "center": (0.0, 0.1, -0.2)}},
+    {"name": "bareLink"},
+], [])
+
+_hullByName = {_el.get("name"): _el for _el in _hullXml.findall("link")}
+
+_hullMeshCol = _hullByName["meshLink"].find("collision")
+assert _hullMeshCol is not None
+assert _hullMeshCol.find("geometry/mesh").get("filename") \
+    == "package://bot/meshes/a_collision.stl"
+# 메쉬는 정점을 이미 링크 프레임으로 구웠으므로 원점이 항등이다.
+assert _hullMeshCol.find("origin").get("xyz") == "0 0 0", \
+    _hullMeshCol.find("origin").get("xyz")
+
+_hullBoxCol = _hullByName["boxLink"].find("collision")
+assert _hullBoxCol is not None
+assert _hullBoxCol.find("geometry/box").get("size") \
+    == "0.200000 0.300000 0.400000", _hullBoxCol.find("geometry/box").get("size")
+# 박스는 자기 원점 중심으로 정의되므로 AABB 중심을 <origin>으로 옮겨야
+# 한다 -- 메쉬와 달리 여기는 항등이 아니다.
+assert _hullBoxCol.find("origin").get("xyz") == "0.000000 0.100000 -0.200000", \
+    _hullBoxCol.find("origin").get("xyz")
+
+# 두 필드 다 없으면 <collision> 자체가 없다. 지오메트리가 아예 없는
+# 조인트는 에러가 아니다.
+assert _hullByName["bareLink"].find("collision") is None
+
+# 기존 호출부(두 키가 아예 없는 링크)도 그대로 동작해야 한다.
+assert urdf.buildUrdfXml("bot", [{"name": "L"}], []).find("link").get("name") \
+    == "L"
+
+print("axisAlignedBox and <collision> branching OK")
+
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)

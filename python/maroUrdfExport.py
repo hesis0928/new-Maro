@@ -194,7 +194,9 @@ def computeRelativeOrigin(parentPosRos, parentQuatRos, childPosRos, childQuatRos
 
 
 def buildUrdfXml(robotName, links, joints):
-    """links: [{"name": str, "visualMesh": str|None(선택)}, ...].
+    """links: [{"name": str, "visualMesh": str|None(선택),
+    "collisionMesh": str|None(선택),
+    "collisionBox": {"size": (sx,sy,sz), "center": (cx,cy,cz)}|None(선택)}, ...].
     joints: [{"name": str, "type": str,
     "parent": str, "child": str, "originXyz": (x,y,z), "originRpy": (r,p,y),
     "axis": (x,y,z)|None, "lower": float|None, "upper": float|None,
@@ -218,6 +220,30 @@ def buildUrdfXml(robotName, links, joints):
             ET.SubElement(visualEl, "origin", xyz="0 0 0", rpy="0 0 0")
             geometryEl = ET.SubElement(visualEl, "geometry")
             ET.SubElement(geometryEl, "mesh", filename=visualMesh)
+
+        # 충돌체는 껍질 메쉬이거나 폴백 박스다 -- 둘 다 선택적이고 동시에
+        # 오지 않는다(설계 스펙 §2). 둘 다 없으면 <collision>을 내지
+        # 않는다: 지오메트리가 아예 없는 조인트는 에러가 아니다.
+        collisionMesh = link.get("collisionMesh")
+        collisionBox = link.get("collisionBox")
+        if collisionMesh:
+            collisionEl = ET.SubElement(linkEl, "collision")
+            ET.SubElement(collisionEl, "origin", xyz="0 0 0", rpy="0 0 0")
+            geometryEl = ET.SubElement(collisionEl, "geometry")
+            ET.SubElement(geometryEl, "mesh", filename=collisionMesh)
+        elif collisionBox:
+            collisionEl = ET.SubElement(linkEl, "collision")
+            # 메쉬는 정점을 링크 프레임으로 구워 원점이 항등이지만, <box>는
+            # 자기 원점 중심으로 정의되므로 AABB 중심을 여기로 옮겨야 한다.
+            bx, by, bz = collisionBox["center"]
+            sx, sy, sz = collisionBox["size"]
+            ET.SubElement(collisionEl, "origin",
+                          xyz="{:.6f} {:.6f} {:.6f}".format(bx, by, bz),
+                          rpy="0 0 0")
+            geometryEl = ET.SubElement(collisionEl, "geometry")
+            ET.SubElement(geometryEl, "box",
+                          size="{:.6f} {:.6f} {:.6f}".format(sx, sy, sz))
+
 
     for joint in joints:
         jointEl = ET.SubElement(robot, "joint", name=joint["name"], type=joint["type"])
@@ -1105,6 +1131,30 @@ def convexHull(points, stats=None):
         work.extend(nf for nf in fresh if faces[nf]["pts"])
 
     return [tuple(pts[i] for i in faces[fid]["v"]) for fid in faces]
+
+
+# 물리 엔진은 크기가 0인 <box>를 거부하거나 정의되지 않은 동작을 한다.
+# 1mm는 이 프로젝트의 로봇 스케일에서 무시할 수 있으면서 0이 아니다.
+MIN_COLLISION_BOX_EXTENT = 0.001
+
+
+def axisAlignedBox(points):
+    """ROS 미터 점들의 축 정렬 경계상자를 {"size", "center"}로 돌려준다.
+
+    convexHull이 None을 준 링크(점 4개 미만, 전부 공선, 전부 공면)의
+    폴백이다. 점이 하나도 없으면 None -- 그 링크는 <collision>을 내지
+    않는다.
+
+    두께가 0인 축은 MIN_COLLISION_BOX_EXTENT로 올린다. 중심은 옮기지
+    않으므로 부풀린 박스는 원래 평면을 가운데 두고 대칭이다.
+    """
+    if not points:
+        return None
+    lo = [min(p[k] for p in points) for k in range(3)]
+    hi = [max(p[k] for p in points) for k in range(3)]
+    size = tuple(max(hi[k] - lo[k], MIN_COLLISION_BOX_EXTENT) for k in range(3))
+    center = tuple((hi[k] + lo[k]) / 2.0 for k in range(3))
+    return {"size": size, "center": center}
 
 
 def _triangleNormal(a, b, c):
