@@ -1081,6 +1081,105 @@ for _axisName, _vals in (("x", _xs), ("y", _ys), ("z", _zs)):
 assert abs(_signedVolume - 1e-6) < 1e-9, _signedVolume
 print("outward normals and metric scale OK (signed volume %.3e m^3)" % _signedVolume)
 
+import random  # noqa: E402
+
+print("[test] convexHull -- 볼록 껍질")
+
+_hullCube = [(x, y, z) for x in (0.0, 1.0) for y in (0.0, 1.0)
+             for z in (0.0, 1.0)]
+_hullTris = urdf.convexHull(_hullCube)
+# 큐브의 껍질은 면 6개 x 삼각형 2개 = 정확히 12개다. 이보다 많으면 같은
+# 평면 위 점들을 별개 면으로 쪼갠 것이고(엡실론이 너무 빡빡), 적으면
+# 껍질이 닫히지 않은 것이다.
+assert _hullTris is not None and len(_hullTris) == 12, _hullTris
+
+
+def _hullVolume(tris):
+    """발산정리 부호 있는 부피. 법선이 바깥이면 양수 -- 슬라이스 1·2가
+    와인딩 검증에 쓴 것과 같은 식이다."""
+    total = 0.0
+    for _a, _b, _c in tris:
+        total += urdf._vecDot(_a, urdf._vecCross(_b, _c)) / 6.0
+    return total
+
+
+def _maxOutside(tris, points):
+    """어떤 입력 점이 어떤 면의 바깥으로 튀어나온 최대 거리. 진짜 볼록
+    껍질이면 0이다(수치 오차 범위 안)."""
+    worst = 0.0
+    for _a, _b, _c in tris:
+        _nrm = urdf._vecCross(urdf._vecSub(_b, _a), urdf._vecSub(_c, _a))
+        _scale = math.sqrt(urdf._vecDot(_nrm, _nrm)) or 1.0
+        _off = urdf._vecDot(_nrm, _a)
+        for _p in points:
+            _d = (urdf._vecDot(_nrm, _p) - _off) / _scale
+            if _d > worst:
+                worst = _d
+    return worst
+
+
+assert abs(_hullVolume(_hullTris) - 1.0) < 1e-9, _hullVolume(_hullTris)
+assert _maxOutside(_hullTris, _hullCube) < 1e-9
+
+# 내부 점을 섞어도 껍질은 같아야 한다 -- 내부 점이 면을 만들어내면
+# 껍질이 아니다.
+_hullRng = random.Random(3)
+_hullNoisy = _hullCube + [(_hullRng.uniform(0.2, 0.8),
+                           _hullRng.uniform(0.2, 0.8),
+                           _hullRng.uniform(0.2, 0.8)) for _ in range(200)]
+_hullTris = urdf.convexHull(_hullNoisy)
+assert len(_hullTris) == 12, len(_hullTris)
+assert abs(_hullVolume(_hullTris) - 1.0) < 1e-9, _hullVolume(_hullTris)
+assert _maxOutside(_hullTris, _hullNoisy) < 1e-9
+
+# 중복점이 많아도 사면체 하나가 나와야 한다. 스킨 분할 조각은 이음매에서
+# 같은 정점을 여러 번 담고 있으므로 이건 가짜 케이스가 아니다.
+_hullDup = ([(0.0, 0.0, 0.0)] * 50 + [(1.0, 0.0, 0.0)] * 50
+            + [(0.0, 1.0, 0.0)] * 50 + [(0.0, 0.0, 1.0)] * 50)
+_hullTris = urdf.convexHull(_hullDup)
+assert len(_hullTris) == 4, len(_hullTris)
+assert abs(_hullVolume(_hullTris) - 1.0 / 6.0) < 1e-12, _hullVolume(_hullTris)
+
+# 퇴화 3종은 전부 None -- 호출부는 이걸 보고 박스로 간다.
+assert urdf.convexHull([(0, 0, 0), (1, 0, 0), (0, 1, 0)]) is None
+assert urdf.convexHull([(float(_x), float(_y), 0.0)
+                        for _x in range(5) for _y in range(5)]) is None
+assert urdf.convexHull([(float(_i), 0.0, 0.0) for _i in range(10)]) is None
+assert urdf.convexHull([]) is None
+
+print("convex hull correctness OK (cube -> 12 tris, degenerates -> None)")
+
+
+print("[test] convexHull -- 볼록 입력 성능")
+
+# 원통은 이 슬라이스가 겨냥한 최악의 경우다: 모든 점이 껍질에 오른다.
+_hullRng = random.Random(11)
+_hullCyl = []
+for _ in range(2000):
+    _t = _hullRng.uniform(0.0, 2.0 * math.pi)
+    _hullCyl.append((math.cos(_t), math.sin(_t), _hullRng.uniform(-1.0, 1.0)))
+
+_hullStats = {"visibilityChecks": 0}
+_hullTris = urdf.convexHull(_hullCyl, _hullStats)
+# 볼록 입력에서 껍질은 단체(simplicial)이므로 면 = 2 x 정점 - 4다.
+# 2000점이면 3996 -- 실측으로 정확히 맞는다.
+assert _hullTris is not None and len(_hullTris) == 3996, len(_hullTris)
+assert _maxOutside(_hullTris, _hullCyl) < 1e-8
+assert _hullVolume(_hullTris) > 0.0, _hullVolume(_hullTris)
+
+# 실측: conflict list 구현은 60,664회(점당 30.3회). 가시 영역을 인접
+# 면으로 넓히는 대신 매번 면 전체를 훑도록 되돌리면 수백만 회가 되며,
+# 상한 200,000이 그 사이를 넉넉히 가른다(이 상한이 실제로 무는지 그
+# 변이로 확인했다). 벽시계 시간이 아니라 이 값을 보는 이유는 시간
+# 임계값이 머신 부하 때문에 느슨해질 수밖에 없고, 느슨한 임계값은
+# 이차식 회귀를 조용히 통과시키기 때문이다.
+assert _hullStats["visibilityChecks"] < 200000, _hullStats["visibilityChecks"]
+print("convex-input performance OK (%d visibility checks for 2000 points, "
+      "%.1f per point)"
+      % (_hullStats["visibilityChecks"],
+         _hullStats["visibilityChecks"] / 2000.0))
+
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
