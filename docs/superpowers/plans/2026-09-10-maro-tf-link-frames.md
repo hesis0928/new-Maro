@@ -65,7 +65,7 @@ rclcpp, mayapy 배치 테스트 + 실제 ROS 2 피어(`tests/peer/maro_test_peer
   `/tf`의 `child_frame_id`가 링크 이름이 된다. `/joint_states`는
   `enabled && !jointName.empty()`인 축만 담는다.
 
-- [ ] **Step 1: 테스트 픽스처를 먼저 고쳐 RED를 만든다**
+- [x] **Step 1: 테스트 픽스처를 먼저 고쳐 RED를 만든다**
 
 `tests/maya/test_publish.py`에서 **지금 큐브에 걸려 있는 자세를 로케이터의
 부모 트랜스폼으로 옮기고, 큐브에는 다른 자세를 준다.** 이게 이 태스크의
@@ -107,7 +107,7 @@ TF 절에서 피어에 넘기는 이름과 파싱 접두사를 `EXPECTED_JOINT` 
 `EXPECTED_LINK`로 바꾼다(6곳: `subprocess.Popen`의 인자, timeout assert
 메시지, `t_prefix`, `r_prefix`, parse assert 메시지, 마지막 `print`).
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 ```bash
 cmake --build out/build --config Release
@@ -120,7 +120,7 @@ ctest --test-dir out/build -C Release -R maya_publish --output-on-failure
 Expected: FAIL -- 피어가 `child_frame_id == "seg"`인 변환을 못 받고
 타임아웃한다(`peer never received a /tf transform for 'seg'`).
 
-- [ ] **Step 3: `AxisSample`에 두 필드를 더한다**
+- [x] **Step 3: `AxisSample`에 두 필드를 더한다**
 
 `src/maro_plugin/MaroBridgeQueues.h`의 `struct AxisSample`을 이걸로 바꾼다:
 
@@ -144,7 +144,7 @@ struct AxisSample {
 };
 ```
 
-- [ ] **Step 4: `collectSamples`를 고친다**
+- [x] **Step 4: `collectSamples`를 고친다**
 
 `src/maro_plugin/MaroPump.cpp` 상단 include에 두 줄을 더한다(알파벳 순서
 유지 -- `MFnDependencyNode.h` 앞뒤):
@@ -260,7 +260,7 @@ struct AxisSample {
         sample.rotation = rotation;
 ```
 
-- [ ] **Step 5: `drainAndPublish`를 고친다**
+- [x] **Step 5: `drainAndPublish`를 고친다**
 
 `src/maro_plugin/MaroRosRuntime.cpp`의 축 루프에서, 지금:
 
@@ -290,7 +290,7 @@ struct AxisSample {
                 t.child_frame_id = sample.linkName;
 ```
 
-- [ ] **Step 6: 통과를 확인한다**
+- [x] **Step 6: 통과를 확인한다**
 
 ```bash
 cmake --build out/build --config Release
@@ -303,13 +303,13 @@ ctest --test-dir out/build -C Release -R maya_publish --output-on-failure
 Expected: PASS -- `tf round trip OK (child_frame_id=seg, ...)`이고 값이
 로케이터 부모의 자세와 일치한다.
 
-- [ ] **Step 7: 커밋**
+- [x] **Step 7: 커밋**
 
 ```bash
 git add src/maro_plugin/ tests/maya/test_publish.py && git commit -m "fix(tf): publish URDF link frames from the locator parent transform"
 ```
 
-- [ ] **Step 8: 미끼가 실제로 무는지 확인한다 (커밋 뒤에)**
+- [x] **Step 8: 미끼가 실제로 무는지 확인한다 (커밋 뒤에)**
 
 Step 4의 `framePath` 자리를 잠깐 `targetPath`로 되돌려 빌드·실행한다.
 Expected: FAIL -- 미끼 자세가 나와 값 비교가 깨진다. 확인 후
@@ -331,7 +331,7 @@ Expected: FAIL -- 미끼 자세가 나와 값 비교가 깨진다. 확인 후
 - Produces: `buildAxisTree`가 빈 링크 이름과 중복 링크 이름에 `ValueError`를
   던진다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/maya/test_urdf_export.py`의 `maya.standalone.uninitialize()` 앞에:
 
@@ -381,7 +381,7 @@ except ValueError as _e:
 print("link name validation OK (empty and duplicate both rejected)")
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 `.py`만 고쳤고 `test_urdf_export.py`는 소스를 직접 import하므로 빌드는
 필요 없다.
@@ -393,7 +393,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 Expected: FAIL -- `AssertionError: unbound axis should have been rejected`
 (지금은 조용히 빈 이름 링크를 만든다).
 
-- [ ] **Step 3: 검증을 구현한다**
+- [x] **Step 3: 검증을 구현한다**
 
 `python/maroUrdfExport.py`의 `buildAxisTree`에서, `jointName`을 검증하는
 기존 줄:
@@ -433,7 +433,7 @@ Expected: FAIL -- `AssertionError: unbound axis should have been rejected`
 `_shortName`은 이 함수보다 **아래**에 정의돼 있지만 파이썬은 호출 시점에
 이름을 찾으므로 문제없다(같은 모듈 안이다).
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -441,7 +441,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 Expected: PASS -- `link name validation OK (empty and duplicate both rejected)`
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m "fix(urdf): reject empty and duplicate link names at export"
@@ -462,7 +462,7 @@ git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m
 여기가 먼저 운다. 기대 프레임 이름을 하드코딩하지 않고 **URDF에서 읽어
 온다** -- 그래야 계약 자체를 검사한다.
 
-- [ ] **Step 1: import와 축 체인을 더한다**
+- [x] **Step 1: import와 축 체인을 더한다**
 
 `tests/maya/test_publish.py` 상단, `import maya.cmds as cmds` 아래에:
 
@@ -489,7 +489,7 @@ import xml.etree.ElementTree as ET  # noqa: E402
     cmds.connectAttr(axis + ".message", axisLinear + ".parentAxis")
 ```
 
-- [ ] **Step 2: 계약 테스트를 더한다**
+- [x] **Step 2: 계약 테스트를 더한다**
 
 TF 절의 마지막 `print(f"tf round trip OK ...")` **바로 아래**에:
 
@@ -514,7 +514,7 @@ TF 절의 마지막 `print(f"tf round trip OK ...")` **바로 아래**에:
         print(f"urdf/tf name contract OK (links={sorted(urdfLinks)})")
 ```
 
-- [ ] **Step 3: 돌린다**
+- [x] **Step 3: 돌린다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_publish --output-on-failure
@@ -523,7 +523,7 @@ ctest --test-dir out/build -C Release -R maya_publish --output-on-failure
 Expected: PASS. Task 1·2가 이미 들어가 있으므로 이 테스트는 RED로
 시작하지 않는다.
 
-- [ ] **Step 4: 계약이 실제로 무는지 확인한다**
+- [x] **Step 4: 계약이 실제로 무는지 확인한다**
 
 `MaroRosRuntime.cpp`의 `t.child_frame_id = sample.linkName;`을 잠깐
 `sample.jointName`으로 되돌리고 빌드 후 재실행한다.
@@ -531,7 +531,7 @@ Expected: FAIL -- TF 왕복이 타임아웃한다. 확인 후
 `git checkout -- src/maro_plugin/MaroRosRuntime.cpp`로 되돌린다(이 파일은
 Task 1에서 이미 커밋됐으므로 안전하다).
 
-- [ ] **Step 5: 전체 스위트**
+- [x] **Step 5: 전체 스위트**
 
 ```bash
 cmake --build out/build --config Release
@@ -543,7 +543,7 @@ ctest --test-dir out/build -C Release --output-on-failure
 
 Expected: 전부 PASS.
 
-- [ ] **Step 6: 커밋**
+- [x] **Step 6: 커밋**
 
 ```bash
 git add tests/maya/test_publish.py && git commit -m "test(tf): pin the URDF link name / tf frame id contract"
@@ -588,6 +588,27 @@ Step 4에서 채움, Step 5에서 `t.child_frame_id`(std::string)에 대입.
 **픽스처 함정 점검**: T1 Step 1이 로케이터 부모와 바인딩 타겟에 **다른**
 자세를 준다. 이게 없으면 Step 4를 안 고쳐도 통과한다 -- 슬라이스 2의
 "원점 실린더" 함정과 같은 구조.
+
+## 실행하며 계획과 달랐던 것 3건
+
+1. **링크 이름 검증 위치가 틀렸다.** 계획은 `buildAxisTree`에 넣으라고
+   했지만 그 함수의 단위 테스트는 `axisFullPath`/`parentAxisPath`/
+   `jointName`만 담은 최소 행을 넘긴다 -- `boundTargetPath`는 그 계약에
+   없다. 기존 테스트가 즉시 깨져서 알려줬고, 씬에서 행을 만드는
+   `_buildRobotModel`로 옮겼다.
+2. **`export()`는 예외를 던지지 않는다.** 메뉴 커맨드 경계라 모두 잡아
+   경고로 바꾸고 `None`을 돌려준다(원래 설계). 테스트를 실제로 던지는
+   `_buildRobotModel` 기준으로 바꾸고, 사용자에게 보이는 동작(`None` 반환,
+   파일 미생성)도 함께 검증한다.
+3. **중복 이름 픽스처를 세 번 고쳤다.** Maya가 형제 충돌을 `dupBody1`로
+   자동 회피하므로 부모를 옮긴 **뒤** 개명해야 하고, 그러고 나면 짧은 이름
+   조회가 모호해져 이후 모든 호출이 전체 경로를 써야 한다. 매번
+   "두 짧은 이름이 실제로 같은가" 가드가 먼저 걸려서 알려줬다 -- 그 가드가
+   없었으면 아무것도 검증하지 않는 테스트가 조용히 통과했다.
+
+절차상 실수 1건: 미끼 검증 후 `git checkout`으로 소스만 되돌리고
+**재빌드를 하지 않아** `maro.mll`에 변이 코드가 남았고, 두 태스크 뒤에
+엉뚱한 실패로 나타났다. **C++ 변이 검증은 되돌린 직후 반드시 재빌드한다.**
 
 ## 알려진 부수 효과 (리뷰에서 명시적으로 확인할 것)
 
