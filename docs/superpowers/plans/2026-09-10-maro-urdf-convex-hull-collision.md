@@ -71,7 +71,7 @@
     -- 법선이 바깥을 향하는 삼각형 리스트. 점 4개 미만/전부 공선/전부 공면이면
     `None`. `stats`가 dict면 `stats["visibilityChecks"]`를 증가시킨다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 `tests/maya/test_urdf_export.py`의 `maya.standalone.uninitialize()` 바로 앞에
 삽입:
@@ -146,7 +146,7 @@ assert urdf.convexHull([]) is None
 print("convex hull correctness OK (cube -> 12 tris, degenerates -> None)")
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -157,7 +157,7 @@ Expected: FAIL -- `AttributeError: module 'maroUrdfExport' has no attribute 'con
 **RED를 반드시 눈으로 봐라.** 이 파일은 블록을 잘못된 위치(`sys.exit(0)` 뒤)에
 넣으면 조용히 PASS한다 -- 슬라이스 2가 그렇게 한 번 속았다.
 
-- [ ] **Step 3: 구현한다**
+- [x] **Step 3: 구현한다**
 
 `python/maroUrdfExport.py`의 `def _triangleNormal(a, b, c):` 바로 **앞**에
 삽입:
@@ -340,7 +340,7 @@ def convexHull(points, stats=None):
     return [tuple(pts[i] for i in faces[fid]["v"]) for fid in faces]
 ```
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -348,7 +348,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 Expected: PASS -- `convex hull correctness OK (cube -> 12 tris, degenerates -> None)`
 
-- [ ] **Step 5: 성능 테스트를 쓴다(가시성 검사 횟수)**
+- [x] **Step 5: 성능 테스트를 쓴다(가시성 검사 횟수)**
 
 Step 1의 블록 **뒤**, 여전히 teardown 앞에 삽입:
 
@@ -381,7 +381,7 @@ print("convex-input performance OK (%d visibility checks for 2000 points, "
          _hullStats["visibilityChecks"] / 2000.0))
 ```
 
-- [ ] **Step 6: 성능 테스트가 통과하는지 확인한다**
+- [x] **Step 6: 성능 테스트가 통과하는지 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -393,7 +393,7 @@ Expected: PASS -- 대략 `71638 visibility checks for 2000 points, 35.8 per poin
 무는지 확인하려면**: 첫 배정 루프의 `break`를 잠깐 지워 모든 면을 훑게 하면
 실패해야 한다. 확인했으면 되돌린다.
 
-- [ ] **Step 7: 커밋**
+- [x] **Step 7: 커밋**
 
 ```bash
 git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m "feat(urdf): conflict-list QuickHull for collision geometry"
@@ -418,7 +418,7 @@ git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m
     `collisionBox`(위 dict)를 읽어 `<collision>`을 낸다. 둘 다 없으면
     `<collision>` 자체가 없다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 teardown 앞에 삽입:
 
@@ -479,7 +479,7 @@ assert urdf.buildUrdfXml("bot", [{"name": "L"}], []).find("link").get("name") \
 print("axisAlignedBox and <collision> branching OK")
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -487,7 +487,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 Expected: FAIL -- `AttributeError: module 'maroUrdfExport' has no attribute 'axisAlignedBox'`
 
-- [ ] **Step 3: `axisAlignedBox`를 구현한다**
+- [x] **Step 3: `axisAlignedBox`를 구현한다**
 
 `convexHull` 정의 바로 뒤에 삽입:
 
@@ -516,7 +516,7 @@ def axisAlignedBox(points):
     return {"size": size, "center": center}
 ```
 
-- [ ] **Step 4: `buildUrdfXml`에 분기를 넣는다**
+- [x] **Step 4: `buildUrdfXml`에 분기를 넣는다**
 
 `buildUrdfXml` 안, `ET.SubElement(geometryEl, "mesh", filename=visualMesh)`로
 끝나는 `<visual>` 블록 **바로 뒤**(같은 `for link in links:` 루프 안,
@@ -555,7 +555,7 @@ def axisAlignedBox(points):
     "collisionBox": {"size": (sx,sy,sz), "center": (cx,cy,cz)}|None(선택)}, ...].
 ```
 
-- [ ] **Step 5: 통과를 확인한다**
+- [x] **Step 5: 통과를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -563,7 +563,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 Expected: PASS -- `axisAlignedBox and <collision> branching OK`
 
-- [ ] **Step 6: 커밋**
+- [x] **Step 6: 커밋**
 
 ```bash
 git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m "feat(urdf): emit <collision> from hull mesh or AABB box fallback"
@@ -586,7 +586,7 @@ git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m
   `link["collisionMesh"]`를 채운다. 껍질을 못 만들면 대신
   `link["collisionBox"]`를 채운다.
 
-- [ ] **Step 1: 실패하는 테스트를 쓴다**
+- [x] **Step 1: 실패하는 테스트를 쓴다**
 
 teardown 앞에 삽입:
 
@@ -666,7 +666,7 @@ print("export emits <visual> + <collision> OK (arm hull %d tris vs visual %d)"
       % (len(_hullArmCol), len(_hullArmVis)))
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -674,7 +674,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 Expected: FAIL -- `AssertionError: hullArm has no <collision> mesh`
 
-- [ ] **Step 3: `_writeLinkMeshes`를 배선한다**
+- [x] **Step 3: `_writeLinkMeshes`를 배선한다**
 
 `_writeLinkMeshes`의 링크 루프 끝부분, 지금 이렇게 되어 있는 곳:
 
@@ -723,7 +723,7 @@ Expected: FAIL -- `AssertionError: hullArm has no <collision> mesh`
     없이 나가며 이는 정상이고 에러가 아니다.
 ```
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
@@ -731,7 +731,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 Expected: PASS -- `export emits <visual> + <collision> OK (arm hull 436 tris vs visual 800)`
 
-- [ ] **Step 5: 전체 스위트를 돌린다**
+- [x] **Step 5: 전체 스위트를 돌린다**
 
 ```bash
 ctest --test-dir out/build -C Release --output-on-failure
@@ -740,7 +740,7 @@ ctest --test-dir out/build -C Release --output-on-failure
 Expected: 전부 PASS. 특히 슬라이스 1·2의 URDF 테스트가 그대로 그린이어야
 한다 -- `_writeLinkMeshes`의 시각 경로는 동작이 바뀌지 않았다.
 
-- [ ] **Step 6: 커밋**
+- [x] **Step 6: 커밋**
 
 ```bash
 git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m "feat(urdf): write per-link convex hull collision meshes"
@@ -780,6 +780,25 @@ git add python/maroUrdfExport.py tests/maya/test_urdf_export.py && git commit -m
 2. **`.py`만 고쳤을 때 `cmake --build`가 필요하다는 전제가 틀렸다.**
    `tests/maya/*.py` 57개가 전부 소스 `python/`을 `sys.path[0]`에 넣고,
    플러그인은 이 모듈을 import하지 않는다(`urdf.__file__`로 실측 확인).
+
+## 실행하며 계획과 달랐던 것 2건
+
+1. **Task 1 Step 6의 변이 지시가 틀렸다.** "첫 배정 루프의 `break`를 지워라"는
+   이차식 경로를 흉내내지 못한다 -- 그 시점에 면이 4개뿐이라 비용이 최대
+   4배다(실측: 상한을 넘지 못하고 그대로 통과). 진짜 변이는 **가시 영역
+   flood fill을 매번 전체 면 훑기로 되돌리는 것**이고, 그러면 4,031,507회로
+   상한 200,000의 20배를 넘어 확실히 실패한다. 테스트 주석을 이 변이로
+   고쳤다.
+   실제 검사 횟수도 60,664회(점당 30.3회)로, 계획에 적은 71,638은 프로토타입
+   쪽 수치였다(프로토타입은 apex 탐색의 거리 계산까지 셌다). 주석을 실측에
+   맞췄다.
+2. **Task 3 픽스처의 축 연결 방법이 틀렸다.** `maroAxis`에는 `axisOut`이
+   없다. 부모는 `parentAxis.message`로 잇고(`tests/maya/test_binding.py:72`와
+   같은 방식), 각 축에 `jointName`을 세팅해야 export가 통과한다.
+
+절차상 실수 1건도 기록해 둔다: 변이 검증 후 `git checkout --`로 되돌렸는데
+그 파일에 아직 커밋 안 한 구현이 들어 있어 함께 날아갔다. **변이 검증은
+반드시 커밋 뒤에** 한다.
 
 ## 남는 한계(코드로 해결하지 않음)
 
