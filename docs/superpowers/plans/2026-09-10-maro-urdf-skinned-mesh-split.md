@@ -18,6 +18,13 @@
 - 새 `.py`는 `setStyleSheet()`를 호출하지 않는다.
 - 강체 경로가 소비한 메쉬 셰이프는 분할이 **건너뛴다** — 안 그러면 같은 지오메트리가 두 번 나간다(스펙 §3).
 - 훑는 skinCluster는 **링크에서 도달 가능한 것만** — 씬 전체가 아니다(스펙 §6).
+- **테스트 블록은 `tests/maya/test_urdf_export.py`의 "파일 맨 끝"이 아니라
+  teardown 블록 바로 앞에 넣는다.** 그 파일은 끝에서
+  `maya.standalone.uninitialize()` / `print("teardown OK")` / `sys.exit(0)`로
+  끝난다. 진짜 맨 끝에 붙이면 `sys.exit(0)` 뒤라 **한 줄도 실행되지 않고,
+  테스트는 조용히 통과한다** — Task 1을 실행하다 실측으로 발견했다(RED 단계가
+  PASS로 나와서 드러났다). 앵커는 `maya.standalone.uninitialize()`가 있는
+  줄 바로 위다.
 
 **빌드/테스트 명령(PowerShell):**
 
@@ -36,7 +43,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 **Files:**
 - Modify: `python/maroUrdfExport.py` (`_linkFrameWorldRigid` 정의 바로 뒤에 함수 두 개 추가)
-- Test: `tests/maya/test_urdf_export.py` (파일 끝에 절 추가)
+- Test: `tests/maya/test_urdf_export.py` (teardown 바로 앞에 절 추가 -- Global Constraints 참고)
 
 **Interfaces:**
 - Consumes: 없음(씬도 om2도 안 쓴다 — 리스트와 튜플만 받는다)
@@ -46,7 +53,7 @@ ctest --test-dir out/build -C Release -R maya_urdf_export --output-on-failure
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
-`tests/maya/test_urdf_export.py` 맨 끝(마지막 `print(...)` 다음)에 붙인다:
+`tests/maya/test_urdf_export.py`의 **teardown 바로 앞**(`maya.standalone.uninitialize()` 줄 위)에 붙인다. 파일의 진짜 맨 끝은 `sys.exit(0)` 뒤라 실행되지 않는다:
 
 ```python
 # --- 스킨 분할 귀속 규칙 (슬라이스 2) ---
@@ -186,7 +193,7 @@ git commit -m "feat(urdf): skin split attribution rules"
 
 **Files:**
 - Modify: `python/maroUrdfExport.py` (Task 1이 추가한 `dominantInfluence` 바로 앞)
-- Test: `tests/maya/test_urdf_export.py` (Task 1 절 다음)
+- Test: `tests/maya/test_urdf_export.py` (Task 1 절 다음, teardown 앞)
 
 **Interfaces:**
 - Consumes: 없음
@@ -194,7 +201,7 @@ git commit -m "feat(urdf): skin split attribution rules"
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
-`tests/maya/test_urdf_export.py`의 Task 1 절 다음에 붙인다:
+`tests/maya/test_urdf_export.py`의 Task 1 절 다음(여전히 teardown 앞)에 붙인다:
 
 ```python
 # --- 조상 walk (슬라이스 2) ---
@@ -277,7 +284,7 @@ git commit -m "feat(urdf): map skin influences to links by ancestor walk"
 
 **Files:**
 - Modify: `python/maroUrdfExport.py` (import 블록에 `oma2` 추가; `_linkMeshTriangles` 앞에 헬퍼 두 개 + 분할 함수 추가; `_linkMeshTriangles`가 새 헬퍼를 쓰게 수정)
-- Test: `tests/maya/test_urdf_export.py` (Task 2 절 다음)
+- Test: `tests/maya/test_urdf_export.py` (Task 2 절 다음, teardown 앞)
 
 **Interfaces:**
 - Consumes: Task 1의 `dominantInfluence`, `assignTriangleToLink`; Task 2의 `influenceToLink`; 슬라이스 1의 `_linkFrameWorldRigid(framePath) -> (MVector, MQuaternion)`
@@ -287,7 +294,7 @@ git commit -m "feat(urdf): map skin influences to links by ancestor walk"
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
-`tests/maya/test_urdf_export.py`의 Task 2 절 다음에 붙인다:
+`tests/maya/test_urdf_export.py`의 Task 2 절 다음(여전히 teardown 앞)에 붙인다:
 
 ```python
 # --- _splitSkinnedMeshes (슬라이스 2) ---
@@ -532,7 +539,7 @@ git commit -m "feat(urdf): split skinned meshes into per-link pieces"
 
 **Files:**
 - Modify: `python/maroUrdfExport.py` (`_linkMeshTriangles` 안의 셰이프 조회를 헬퍼로 분리; `_writeLinkMeshes` 루프 수정)
-- Test: `tests/maya/test_urdf_export.py` (Task 3 절 다음)
+- Test: `tests/maya/test_urdf_export.py` (Task 3 절 다음, teardown 앞)
 
 **Interfaces:**
 - Consumes: Task 3의 `_splitSkinnedMeshes(links, consumedShapes)`
@@ -540,7 +547,7 @@ git commit -m "feat(urdf): split skinned meshes into per-link pieces"
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
-`tests/maya/test_urdf_export.py`의 Task 3 절 다음에 붙인다:
+`tests/maya/test_urdf_export.py`의 Task 3 절 다음(여전히 teardown 앞)에 붙인다:
 
 ```python
 # --- 스킨 링크가 실제로 <visual>을 갖는다 (슬라이스 2 통합) ---

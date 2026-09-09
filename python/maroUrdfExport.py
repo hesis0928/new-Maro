@@ -397,6 +397,72 @@ def _linkFrameWorldRigid(framePath):
             om2.MFnTransform(dagPath).rotation(om2.MSpace.kWorld, asQuaternion=True))
 
 
+def dominantInfluence(weights, vertexIndex, influenceCount):
+    """정점 하나를 지배하는 인플루언스의 (인덱스, 가중치).
+
+    `weights`는 `정점수 x influenceCount` 평평한 시퀀스이고 정점 `v`의
+    인플루언스 `k`는 `weights[v * influenceCount + k]`다 -- 실측으로 확인한
+    `MFnSkinCluster.getWeights()`의 모양이며, `k`의 순서는
+    `influenceObjects()`가 주는 순서와 같다.
+
+    동점이면 **가장 작은 인덱스**를 준다. 임의로 고르면 같은 리그를 다시
+    내보낼 때 정점이 다른 링크로 옮겨가는데, 그건 진단하기 어려운 종류의
+    불안정성이다.
+    """
+    base = vertexIndex * influenceCount
+    bestIndex = 0
+    bestWeight = weights[base]
+    for k in range(1, influenceCount):
+        w = weights[base + k]
+        if w > bestWeight:
+            bestIndex = k
+            bestWeight = w
+    return (bestIndex, bestWeight)
+
+
+def assignTriangleToLink(vertexLinks, vertexWeights, corners):
+    """삼각형 하나가 갈 링크 경로. 어디에도 못 가면 None.
+
+    `vertexLinks[v]`는 정점 v가 속한 링크 경로(또는 None), `vertexWeights[v]`는
+    그 정점의 지배 가중치, `corners`는 정점 인덱스 3-튜플이다.
+
+    규칙(설계 스펙 §4.3): 정점 3개 중 **2개 이상**을 가진 링크가 가져간다.
+    세 정점이 전부 다른 링크면(1:1:1 동점) **개별 가중치가 가장 큰 정점**의
+    링크로 보낸다 -- 첫 정점을 고르면 결과가 메쉬의 정점 순서에 의존하게
+    되고, 같은 리그를 다시 내보냈을 때 삼각형이 다른 링크로 옮겨간다.
+
+    None인 정점은 후보에서 빠진다. 셋 다 None이면 그 삼각형은 버린다.
+    """
+    counts = {}
+    for v in corners:
+        link = vertexLinks[v]
+        if link is None:
+            continue
+        counts[link] = counts.get(link, 0) + 1
+    if not counts:
+        return None
+
+    bestLink = None
+    bestCount = 0
+    for link, count in counts.items():
+        if count > bestCount:
+            bestLink, bestCount = link, count
+    if bestCount >= 2:
+        return bestLink
+
+    # 1:1:1 -- 가중치가 가장 큰 정점이 이긴다. None인 정점은 후보가 아니다.
+    bestWeight = -1.0
+    winner = None
+    for v in corners:
+        if vertexLinks[v] is None:
+            continue
+        if vertexWeights[v] > bestWeight:
+            bestWeight = vertexWeights[v]
+            winner = vertexLinks[v]
+    return winner
+
+
+
 def _gatherAxisWorldTransformRos(axis):
     """axis(maroAxis 로케이터 셰이프)의 부모 트랜스폼의 월드 위치/회전을
     ROS 프레임 (pos, quat) 튜플로 돌려준다.

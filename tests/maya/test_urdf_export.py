@@ -815,6 +815,43 @@ assert _f2Count == 12, (
 print("bend-deformed mesh exports the undeformed triangle count, no "
       "intermediate-shape ghost body (final-review Finding 2) OK")
 
+# --- 스킨 분할 귀속 규칙 (슬라이스 2) ---
+# weights는 정점수 x influenceCount 평평한 배열이고, 정점 v의 인플루언스 k는
+# weights[v * influenceCount + k]다(실측: getWeights가 그 모양을 준다).
+_w = [0.9, 0.1,
+      0.2, 0.8,
+      0.5, 0.5]
+assert urdf.dominantInfluence(_w, 0, 2) == (0, 0.9)
+assert urdf.dominantInfluence(_w, 1, 2) == (1, 0.8)
+# 동점이면 가장 작은 인덱스 -- influenceObjects() 순서상 먼저 오는 쪽이다.
+# 임의로 고르면 같은 리그를 다시 내보낼 때 결과가 흔들린다.
+assert urdf.dominantInfluence(_w, 2, 2) == (0, 0.5)
+print("dominantInfluence OK")
+
+# 다수결: 정점 2개를 가진 링크가 가져간다.
+_links = {0: "|A", 1: "|A", 2: "|B"}
+_best = {0: 0.9, 1: 0.7, 2: 0.95}
+assert urdf.assignTriangleToLink(_links, _best, (0, 1, 2)) == "|A"
+
+# 1:1:1 동점 -- 개별 가중치가 가장 큰 정점의 링크.
+_links3 = {0: "|A", 1: "|B", 2: "|C"}
+_best3 = {0: 0.4, 1: 0.9, 2: 0.6}
+assert urdf.assignTriangleToLink(_links3, _best3, (0, 1, 2)) == "|B"
+# 정점 순서를 바꿔도 결과가 같아야 한다 -- 이 성질이 없으면 같은 리그를
+# 다시 내보낼 때 삼각형이 다른 링크로 옮겨간다.
+assert urdf.assignTriangleToLink(_links3, _best3, (2, 0, 1)) == "|B"
+assert urdf.assignTriangleToLink(_links3, _best3, (1, 2, 0)) == "|B"
+
+# 어느 링크에도 안 속하는 정점은 표에서 빠진다(None).
+_linksNone = {0: None, 1: None, 2: "|B"}
+_bestNone = {0: 0.9, 1: 0.9, 2: 0.3}
+# None은 후보가 아니므로 유일한 실제 링크인 |B가 가져간다.
+assert urdf.assignTriangleToLink(_linksNone, _bestNone, (0, 1, 2)) == "|B"
+# 셋 다 None이면 버린다.
+assert urdf.assignTriangleToLink({0: None, 1: None, 2: None},
+                                 {0: 1.0, 1: 1.0, 2: 1.0}, (0, 1, 2)) is None
+print("assignTriangleToLink OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
