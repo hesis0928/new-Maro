@@ -935,6 +935,102 @@ _piecesAgain = urdf._splitSkinnedMeshes(_splitLinks, set())
 assert sorted(_piecesAgain) == sorted(_pieces), "an unrelated skinCluster changed the result"
 print("unrelated skinCluster is ignored OK")
 
+# --- 스킨 링크가 실제로 <visual>을 갖는다 (슬라이스 2 통합) ---
+cmds.file(new=True, force=True)
+_ej1 = cmds.createNode("joint", name="ej1")
+cmds.xform(_ej1, translation=(0, 0, 0))
+_ej2 = cmds.createNode("joint", name="ej2", parent=_ej1)
+cmds.xform(_ej2, translation=(0, 10, 0))
+_eMesh = cmds.polyCylinder(name="eLimb", height=20, subdivisionsHeight=6, radius=2)[0]
+cmds.xform(_eMesh, translation=(0, 10, 0))
+_eSkin = cmds.skinCluster(_ej1, _ej2, _eMesh, toSelectedBones=True)[0]
+# 가중치를 **명시적으로** 준다. Maya 기본 스무스 바인드에 맡기면 조인트가
+# 둘뿐일 때 루트가 전 정점을 지배해(실측: 140/140) ej2가 받을 것이 없어지고,
+# 그러면 이 테스트는 올바른 구현을 고장으로 신고한다. 기본 폴오프 휴리스틱은
+# Maya 버전에 따라 달라질 수 있는 값이라 테스트가 기대서는 안 된다 --
+# 위쪽 절반은 ej2, 아래쪽 절반은 ej1로 못박는다.
+_eVertCount = cmds.polyEvaluate(_eMesh, vertex=True)
+_eUpper = []
+_eLower = []
+for _v in range(_eVertCount):
+    _comp = "{}.vtx[{}]".format(_eMesh, _v)
+    if cmds.pointPosition(_comp, world=True)[1] > 10.0:
+        _eUpper.append(_comp)
+    else:
+        _eLower.append(_comp)
+assert _eUpper and _eLower, (len(_eUpper), len(_eLower))
+cmds.skinPercent(_eSkin, _eUpper, transformValue=[(_ej2, 1.0)])
+cmds.skinPercent(_eSkin, _eLower, transformValue=[(_ej1, 1.0)])
+
+_eAx1 = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_eAx1, _ej1)
+cmds.setAttr(_eAx1 + ".jointName", "e_base", type="string")
+_eAx1 = cmds.ls(_eAx1, long=True)[0]
+_eAx2 = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_eAx2, cmds.ls(_ej2, long=True)[0])
+cmds.setAttr(_eAx2 + ".jointName", "e_arm", type="string")
+_eAx2 = cmds.ls(_eAx2, long=True)[0]
+cmds.maroConnectAxis(_eAx2, _eAx1)
+
+_ePath = os.path.join(tempfile.mkdtemp(prefix="maro_urdf_skin_"), "skinned.urdf")
+assert urdf.export(path=_ePath) == _ePath
+_eRoot = ET2.parse(_ePath).getroot()
+_eLinks = {l.get("name"): l for l in _eRoot.findall("link")}
+assert set(_eLinks) == {"ej1", "ej2"}, sorted(_eLinks)
+for _name, _el in _eLinks.items():
+    assert _el.find("visual") is not None, "skinned link %s got no <visual>" % _name
+
+# 두 STL이 각자 몫만 갖는다: 합이 원본 삼각형 수와 같고 어느 쪽도 비어있지 않다.
+# `_struct`는 이 파일이 앞에서 이미 들여왔다.
+_eMeshDir = os.path.join(os.path.dirname(os.path.abspath(_ePath)), "meshes")
+_eCounts = {}
+for _name in ("ej1", "ej2"):
+    _raw = open(os.path.join(_eMeshDir, _name + ".stl"), "rb").read()
+    _eCounts[_name] = _struct.unpack("<I", _raw[80:84])[0]
+    assert _eCounts[_name] > 0, "%s got an empty STL" % _name
+_eShape = cmds.listRelatives(_eMesh, shapes=True, fullPath=True, type="mesh")[0]
+_eSel = om2.MSelectionList()
+_eSel.add(_eShape)
+_, _eTriIdx = om2.MFnMesh(_eSel.getDagPath(0)).getTriangles()
+assert sum(_eCounts.values()) == len(_eTriIdx) // 3, (_eCounts, len(_eTriIdx) // 3)
+print("skinned links export split geometry OK:", _eCounts)
+
+# --- 강체가 우선이고, 그 메쉬는 분할에서 빠진다 (슬라이스 2) ---
+cmds.file(new=True, force=True)
+_rj1 = cmds.createNode("joint", name="rj1")
+_rj2 = cmds.createNode("joint", name="rj2", parent=_rj1)
+cmds.xform(_rj2, translation=(0, 10, 0))
+# rj1의 직속 자식인 큐브를 rj1/rj2 둘로 스킨한다.
+_rCube = cmds.polyCube(name="rCube")[0]
+cmds.parent(_rCube, _rj1)
+_rCube = cmds.ls(_rCube, long=True)[0]
+cmds.skinCluster(_rj1, _rj2, _rCube, toSelectedBones=True)
+
+_rAx1 = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_rAx1, cmds.ls(_rj1, long=True)[0])
+cmds.setAttr(_rAx1 + ".jointName", "r_base", type="string")
+_rAx1 = cmds.ls(_rAx1, long=True)[0]
+_rAx2 = cmds.createNode("maroAxis")
+cmds.maroBindAxis(_rAx2, cmds.ls(_rj2, long=True)[0])
+cmds.setAttr(_rAx2 + ".jointName", "r_arm", type="string")
+_rAx2 = cmds.ls(_rAx2, long=True)[0]
+cmds.maroConnectAxis(_rAx2, _rAx1)
+
+_rPath = os.path.join(tempfile.mkdtemp(prefix="maro_urdf_rigid_"), "rigid.urdf")
+assert urdf.export(path=_rPath) == _rPath
+_rMeshDir = os.path.join(os.path.dirname(os.path.abspath(_rPath)), "meshes")
+# rj1은 직속 메쉬를 통째로 가져간다(기본 폴리큐브 = 12 삼각형).
+_rRaw = open(os.path.join(_rMeshDir, "rj1.stl"), "rb").read()
+assert _struct.unpack("<I", _rRaw[80:84])[0] == 12, _struct.unpack("<I", _rRaw[80:84])[0]
+# rj2는 그 메쉬의 조각을 받으면 안 된다 -- 받았다면 같은 지오메트리가 두 번
+# 나간 것이다(설계 스펙 §3의 이중 출력).
+assert not os.path.isfile(os.path.join(_rMeshDir, "rj2.stl")),     "rj2 got a piece of a mesh the rigid path already exported whole"
+_rRoot = ET2.parse(_rPath).getroot()
+_rByName = {l.get("name"): l for l in _rRoot.findall("link")}
+assert _rByName["rj1"].find("visual") is not None
+assert _rByName["rj2"].find("visual") is None
+print("rigid path wins and its mesh is excluded from the split OK")
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)

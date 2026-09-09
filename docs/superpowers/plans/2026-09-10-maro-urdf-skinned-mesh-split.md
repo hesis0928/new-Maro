@@ -18,6 +18,12 @@
 - 새 `.py`는 `setStyleSheet()`를 호출하지 않는다.
 - 강체 경로가 소비한 메쉬 셰이프는 분할이 **건너뛴다** — 안 그러면 같은 지오메트리가 두 번 나간다(스펙 §3).
 - 훑는 skinCluster는 **링크에서 도달 가능한 것만** — 씬 전체가 아니다(스펙 §6).
+- **스킨 픽스처는 가중치를 명시적으로 준다.** Maya 기본 스무스 바인드의
+  폴오프에 기대면 안 된다 -- 조인트 2개짜리 리그에서 루트가 전 정점을
+  지배하는 것을 실측으로 확인했고(140/140), 그런 픽스처는 올바른 구현을
+  고장으로 신고한다. 반대 방향의 함정도 같이 기억한다: 원통을 원점에 두면
+  분할이 아예 안 일어나 **잘못된 구현도 통과**한다. 두 실패는 방향만 다를 뿐
+  원인이 같다 -- 테스트가 Maya의 바인드 휴리스틱에 의존한 것.
 - **테스트 블록은 `tests/maya/test_urdf_export.py`의 "파일 맨 끝"이 아니라
   teardown 블록 바로 앞에 넣는다.** 그 파일은 끝에서
   `maya.standalone.uninitialize()` / `print("teardown OK")` / `sys.exit(0)`로
@@ -558,7 +564,24 @@ _ej2 = cmds.createNode("joint", name="ej2", parent=_ej1)
 cmds.xform(_ej2, translation=(0, 10, 0))
 _eMesh = cmds.polyCylinder(name="eLimb", height=20, subdivisionsHeight=6, radius=2)[0]
 cmds.xform(_eMesh, translation=(0, 10, 0))
-cmds.skinCluster(_ej1, _ej2, _eMesh, toSelectedBones=True)
+_eSkin = cmds.skinCluster(_ej1, _ej2, _eMesh, toSelectedBones=True)[0]
+# 가중치를 **명시적으로** 준다. Maya 기본 스무스 바인드에 맡기면 조인트가
+# 둘뿐일 때 루트가 전 정점을 지배해(실측: 140/140) ej2가 받을 것이 없어지고,
+# 그러면 이 테스트는 올바른 구현을 고장으로 신고한다. 기본 폴오프 휴리스틱은
+# Maya 버전에 따라 달라질 수 있는 값이라 테스트가 기대서는 안 된다 --
+# 위쪽 절반은 ej2, 아래쪽 절반은 ej1로 못박는다.
+_eVertCount = cmds.polyEvaluate(_eMesh, vertex=True)
+_eUpper = []
+_eLower = []
+for _v in range(_eVertCount):
+    _comp = "{}.vtx[{}]".format(_eMesh, _v)
+    if cmds.pointPosition(_comp, world=True)[1] > 10.0:
+        _eUpper.append(_comp)
+    else:
+        _eLower.append(_comp)
+assert _eUpper and _eLower, (len(_eUpper), len(_eLower))
+cmds.skinPercent(_eSkin, _eUpper, transformValue=[(_ej2, 1.0)])
+cmds.skinPercent(_eSkin, _eLower, transformValue=[(_ej1, 1.0)])
 
 _eAx1 = cmds.createNode("maroAxis")
 cmds.maroBindAxis(_eAx1, _ej1)

@@ -524,6 +524,21 @@ def _shortName(fullPath):
     return fullPath.split("|")[-1]
 
 
+def _linkDirectMeshShapes(linkTransform):
+    """링크의 **직속** mesh 셰이프 전체 경로 목록. 없으면 빈 리스트.
+
+    "이 링크의 셰이프가 무엇인가"의 단일 출처다 -- `_linkMeshTriangles`가
+    삼각형을 뽑을 때와, `_writeLinkMeshes`가 "강체 경로가 소비한 셰이프"
+    집합을 만들 때 같은 답을 써야 한다. 두 곳에서 따로 조회하면 조건이
+    어긋나 같은 메쉬가 강체로도 조각으로도 나갈 수 있다.
+
+    `allDescendents`를 쓰지 않고 `noIntermediate=True`를 주는 이유는
+    `_linkMeshTriangles`의 주석에 있다.
+    """
+    return cmds.listRelatives(linkTransform, shapes=True, fullPath=True,
+                              type="mesh", noIntermediate=True) or []
+
+
 def _linkFrameInverseMatrix(framePath):
     """링크 프레임의 **강체** 역행렬(om2.MMatrix).
 
@@ -686,8 +701,7 @@ def _linkMeshTriangles(linkTransform, axisFramePath):
     프레임의 평행이동/회전만 되돌리므로 메쉬 지오메트리 자체는 그대로
     보존된다.
     """
-    shapes = cmds.listRelatives(linkTransform, shapes=True, fullPath=True,
-                                type="mesh", noIntermediate=True) or []
+    shapes = _linkDirectMeshShapes(linkTransform)
     if not shapes:
         return []
 
@@ -724,6 +738,20 @@ def _writeLinkMeshes(links, meshDir, robotName):
     다른 노드다(최종 리뷰 Finding 1). 링크 딕셔너리가 둘 다 갖고 있어야
     한다 -- `_buildRobotModel`이 채운다.
     """
+    # 강체 경로가 가져갈 셰이프를 **먼저** 모은다. 스킨 분할은 그 셰이프를
+    # 건너뛰어야 한다 -- 안 그러면 링크 A의 직속 메쉬가 A와 B로 스킨돼
+    # 있을 때 그 메쉬의 B 영역이 두 번 나간다(A의 통째 사본 안에 한 번,
+    # B의 조각으로 한 번; 설계 스펙 §3).
+    consumedShapes = set()
+    for link in links:
+        targetPath = link.get("targetPath")
+        if targetPath:
+            consumedShapes.update(_linkDirectMeshShapes(targetPath))
+
+    # 가중치는 씬당 한 번만 읽는다 -- 링크 루프 안에서 읽으면
+    # O(링크 x 정점)이 된다(설계 스펙 §3).
+    skinnedByLink = _splitSkinnedMeshes(links, consumedShapes)
+
     usedNames = set()
     for link in links:
         targetPath = link.get("targetPath")
@@ -731,6 +759,10 @@ def _writeLinkMeshes(links, meshDir, robotName):
         if not targetPath or not axisFramePath:
             continue
         triangles = _linkMeshTriangles(targetPath, axisFramePath)
+        if not triangles:
+            # 직속 메쉬가 없는 링크(스킨된 캐릭터의 조인트)는 분할 조각을
+            # 받는다. 강체가 우선이므로 이 순서를 뒤집으면 안 된다.
+            triangles = skinnedByLink.get(targetPath) or []
         if not triangles:
             continue
         fileName = sanitizeMeshFileName(link["name"], usedNames)
