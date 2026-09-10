@@ -827,6 +827,13 @@ MStatus MaroBridgeStatsCommand::doIt(const MArgList&) {
         // 자리도 뜻도 그대로여야 기존 진단/테스트가 안 깨진다.
         stats.append(static_cast<int>(
             g_runtime ? g_runtime->drainedLidarScanCount() : 0));
+        // 일곱 번째. 델타 체크가 건너뛴 명령 수다 -- 값이 안 바뀐 ROS
+        // 명령에는 setDouble/dirty 전파를 하지 않고 이 숫자만 올린다.
+        // 이걸 내보내지 않으면 **가만히 있는 로봇과 죽은 브리지가
+        // 구별되지 않는다**: 둘 다 applied(3번째)가 안 오른다. 지금까지
+        // skippedUnchangedCount()를 아무도 읽지 않아 死코드였다.
+        stats.append(static_cast<int>(
+            MaroCommandDeviceNode::skippedUnchangedCount()));
         setResult(stats);
         return MS::kSuccess;
     } catch (const std::exception& e) {

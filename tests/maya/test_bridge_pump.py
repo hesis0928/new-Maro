@@ -157,6 +157,21 @@ try:
     # 지우는 경로(명시적 maroStopBridge를 거치지 않는 경로)로도 스레드가
     # 안전하게 멈추는지까지 함께 검증한다.
     cmds.maroStartBridge("maro")
+    print("[test] maroBridgeStats -- 델타 체크 계수기")
+
+    # 델타 체크(MaroCommandDeviceNode)는 값이 안 바뀐 ROS 명령에 대해
+    # setDouble/dirty 전파를 건너뛰고 s_skippedUnchanged를 올린다. 그런데
+    # skippedUnchangedCount()를 아무도 읽지 않아 그 숫자가 진단에 도달하지
+    # 못했다 -- 가만히 있는 로봇과 죽은 브리지가 maroBridgeStats에서
+    # 구별되지 않았다는 뜻이다.
+    _stats = cmds.maroBridgeStats()
+    assert len(_stats) == 7, (len(_stats), list(_stats))
+    # 일곱 번째다 -- 항상 뒤에 붙인다. 앞의 여섯은 자리도 뜻도 그대로여야
+    # 기존 진단/테스트가 안 깨진다(이 파일의 다른 블록이 [:5]로 슬라이스한다).
+    assert _stats[6] >= 0, _stats[6]
+
+    print("bridge stats exposes skippedUnchanged OK (%d fields)" % len(_stats))
+
     # 노드 인스턴스가 남아 있으면 Maya가 언로드를 거부한다. 브리지는 켠 채로 둔다.
     cmds.file(new=True, force=True)
     cmds.unloadPlugin(name)

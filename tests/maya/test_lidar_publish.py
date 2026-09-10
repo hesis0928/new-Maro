@@ -128,7 +128,7 @@ try:
     )
     print("lidar scan reached the publish queue OK")
 
-    collected, drained, applied, ticks, pub_errors, lidar_scans = cmds.maroBridgeStats()
+    collected, drained, applied, ticks, pub_errors, lidar_scans = cmds.maroBridgeStats()[:6]
     # 이 씬에는 maroAxis가 없다. collectedSampleCount는 축 전용 계수기이므로
     # 0이어야 하고, drainedSampleCount(축 드레인 전용)도 0이어야 한다 --
     # 그것이 위 상승이 LiDAR에서만 왔다는 근거다.
