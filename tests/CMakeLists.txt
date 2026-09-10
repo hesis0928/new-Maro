@@ -307,6 +307,19 @@ if(MARO_BUILD_PLUGIN)
             TIMEOUT 240)
     endforeach()
 
+    # module_file은 위 foreach 밖에 둔다. 저 루프가 넣어 주는
+    # MARO_PLUGIN_PATH(전체 경로)와 PATH 선행이 바로 이 테스트가 없어도
+    # 되는지 확인하려는 대상이기 때문이다 -- 둘을 받으면 .mod가 아무 일도
+    # 안 해도 통과한다. MAYA_MODULE_PATH만 준다.
+    add_test(NAME maya_module_file
+             COMMAND "${MAYAPY}"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/maya/test_module_file.py")
+    set_tests_properties(maya_module_file PROPERTIES
+        ENVIRONMENT_MODIFICATION
+            "MAYA_MODULE_PATH=path_list_prepend:$<TARGET_FILE_DIR:maro>/../maya-modules/$<CONFIG>;MARO_DIAG_BOOK_DIR=set:${MARO_TEST_BOOK_ROOT}/maya_module_file"
+        FIXTURES_REQUIRED MaroDiagBookRoot
+        TIMEOUT 240)
+
     # bridge_pump는 피어를 쓰지 않지만 maroStartBridge()로 실제 rclcpp
     # 컨텍스트(DDS 도메인)를 띄운다. publish/contract와 같은 도메인을
     # 공유하므로 그것들과 동시에 돌면 서로 간섭한다 -- RUN_SERIAL이 필요하다.

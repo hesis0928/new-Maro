@@ -246,3 +246,30 @@ add_custom_command(
     COMMENT "Copying maro_sentinel.exe next to the plug-in")
 add_custom_target(maro_sentinel_exe ALL DEPENDS "${MARO_SENTINEL_EXE_OUT}")
 add_dependencies(${PROJECT_NAME} maro_sentinel_exe)
+
+# --- Maya 모듈 파일(.mod) -----------------------------------------------
+#
+# `workspaceControl -requiredPlugin "maro"`는 Maya에게 플러그인을 **이름으로**
+# 로드하게 하고, 이름은 MAYA_PLUG_IN_PATH로만 해석된다. 이 빌드 트리는 거기
+# 없으므로(Maya가 스스로 채우는 그 경로는 Documents/maya/<ver>/plug-ins와
+# Maya 자체 디렉터리뿐이다) 도킹한 Maro 창이 재시작 후 복원되지 않았다 --
+# 2026-09-10에 실측으로 원인을 규명했다(docs/maro-main-ui-manual-checklist.md
+# 의 "재시작 복원" 항목). 이 .mod가 그 경로를 만들어 준다.
+#
+# 세 줄이 각각 필요하고, 하나라도 빠지면 이름 로드가 실패한다:
+#   plug-ins:  maro.mll 자체
+#   scripts:   같은 디렉터리에 스테이징된 파이썬 UI 모듈들
+#   PATH +:=   ROS 2 DLL 154개. **이게 없으면 Maya가 maro.mll을 찾고도
+#              의존 DLL을 못 찾아 로드에 실패한다**(실측 -- PATH를 안 걸고
+#              전체 경로로 로드했을 때 "지정된 모듈을 찾을 수 없습니다").
+#
+# 스테이징된 파일이 전부 한 디렉터리에 평평하게 있으므로 세 경로가 전부
+# "." 이다(Maya의 기본 <base>/plug-ins 규약을 따르지 않는다).
+#
+# 컨피그마다 별도 디렉터리에 낸다 -- 한 디렉터리에 Release/Debug .mod가
+# 같이 있으면 Maya가 둘 다 읽는다. $<CONFIG>만 쓰고 $<TARGET_FILE_DIR:...>을
+# 안 쓰는 이유는 위 파이썬 모듈 루프의 주석과 같다(같은 경로임은 확인됨).
+set(MARO_MODULE_DIR "${CMAKE_CURRENT_BINARY_DIR}/maya-modules/$<CONFIG>")
+file(GENERATE
+     OUTPUT "${MARO_MODULE_DIR}/maro.mod"
+     CONTENT "+ maro 1.0 ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>\nplug-ins: .\nscripts: .\nPATH +:= .\n")

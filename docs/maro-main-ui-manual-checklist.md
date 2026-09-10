@@ -1146,11 +1146,20 @@ PASS로 확인됐다.** 이번 세션 전체의 go/no-go 판정은 이걸로 확
   이름 해석이므로, 재시작 한 번을 더 써도 새로 알게 될 것이 없다.
   이 브랜치의 회귀가 아니라는 당시 판단은 **맞았다**.
 
-  **고치려면** 플러그인을 Maya가 이름으로 찾을 수 있는 곳에 두면 된다 --
-  `.mod` 모듈 파일로 빌드/설치 디렉터리를 `MAYA_PLUG_IN_PATH`에 얹거나,
-  `Documents/maya/2026/plug-ins`에 설치한다. 그러면 `-requiredPlugin`이
-  설계대로 동작한다. 코드 변경이 아니라 **배포 방식의 결정**이므로 별도
-  논의 대상으로 남긴다.
+  **고쳤다(2026-09-11).** 빌드가 이제 `maro.mod`를 생성한다
+  (`out/build/src/maro_plugin/maya-modules/<CONFIG>/`). 그 파일이
+  `plug-ins:` / `scripts:` / `PATH +:=` 세 경로를 한꺼번에 잡아 준다 --
+  `PATH` 줄이 특히 필요하다. 그게 없으면 Maya가 `maro.mll`을 찾고도 옆에
+  스테이징된 ROS 2 DLL 154개를 못 찾아 로드에 실패한다(실측).
+
+  `maya_module_file` 테스트가 회귀를 지킨다: `MARO_PLUGIN_PATH`도 `PATH`
+  선행도 주지 않고 `MAYA_MODULE_PATH`만으로 `cmds.loadPlugin("maro")`가
+  성공하는지 확인한다(다른 maya 테스트들과 환경이 다른 이유가 이것이다).
+
+  **설치와 재확인은 사용자 몫이다.** README의 "권장: Maya 모듈 파일" 절대로
+  `.mod`를 `Documents/maya/2026/modules/`에 복사한 뒤, 이 표의 "재시작 복원"
+  항목을 다시 돌려야 한다 -- 자동 테스트는 이름 로드까지만 증명하고,
+  워크스페이스 저장 → 재시작 → 창 복원은 여전히 대화형 Maya에서만 확인된다.
 
 ### Phase 2 종합 판정 (2026-08-25)
 

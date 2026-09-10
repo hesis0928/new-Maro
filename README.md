@@ -129,6 +129,38 @@ cmake --build out/build
 빌드 출력 디렉터리(예: `out/build/src/maro_plugin/Debug`)를 Maya를 실행하는
 환경의 `PATH`에 추가한 뒤 Maya를 시작한다.
 
+### 권장: Maya 모듈 파일(`.mod`)로 한 번에 해결
+
+빌드가 `out/build/src/maro_plugin/maya-modules/<CONFIG>/maro.mod`를 생성한다.
+이 파일 하나가 위의 `PATH` 요구를 없애고, 덤으로 **도킹한 Maro 창의 재시작
+복원**까지 고친다.
+
+설치는 복사 한 번이다(경로는 실측 기준 -- 이 머신은 `Documents`가 OneDrive로
+리다이렉트돼 있다):
+
+```powershell
+copy outuild\src\maro_plugin\maya-modules\Release\maro.mod "$env:USERPROFILE\OneDrive\Documents\maya6\modules\"
+```
+
+Maya가 시작할 때 이 모듈을 읽어 플러그인 경로 / `PATH` / 스크립트 경로를
+한꺼번에 잡아 준다. 확인:
+
+```python
+import maya.cmds as cmds
+cmds.loadPlugin("maro")   # 전체 경로 없이 이름만으로
+```
+
+**왜 재시작 복원까지 고쳐지나.** `workspaceControl -requiredPlugin "maro"`는
+Maya에게 플러그인을 **이름으로** 로드하게 하는데, 그 이름은
+`MAYA_PLUG_IN_PATH`로만 해석된다. 빌드 트리는 거기 없어서, 저장된 레이아웃이
+Maro 창을 기억해도 플러그인 자동 로드가 일어나지 않았다(2026-09-10 실측 --
+`docs/maro-main-ui-manual-checklist.md`의 "재시작 복원" 항목).
+
+`.mod` 안의 경로는 **생성 당시 빌드 디렉터리의 절대 경로**다. 빌드 트리를
+옮기거나 지웠다면 다시 복사해야 한다. 회귀는 `maya_module_file` 테스트가
+지킨다 -- 그 테스트는 `MARO_PLUGIN_PATH`도 `PATH` 선행도 없이 오직 이 `.mod`
+만으로 이름 로드가 되는지 확인한다.
+
 ## 테스트 실행
 
 테스트는 CTest에 등록되어 있다 — C++ transform 단위 테스트(GoogleTest)와
