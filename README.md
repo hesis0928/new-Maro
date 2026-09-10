@@ -135,11 +135,18 @@ cmake --build out/build
 이 파일 하나가 위의 `PATH` 요구를 없애고, 덤으로 **도킹한 Maro 창의 재시작
 복원**까지 고친다.
 
-설치는 복사 한 번이다(경로는 실측 기준 -- 이 머신은 `Documents`가 OneDrive로
-리다이렉트돼 있다):
+설치는 디렉터리 하나를 만들고 복사하는 것이다. **`modules` 디렉터리는 기본으로
+존재하지 않는다** -- Maya는 없어도 `MAYA_MODULE_PATH`에 넣어 두지만 만들어
+주지는 않는다. 아래는 **리포지터리 루트에서** 실행한다(PowerShell은 슬래시
+경로를 그대로 받으므로 백슬래시 이스케이프를 신경 쓸 필요가 없다.
+`Documents` 경로는 이 머신 실측 기준 -- OneDrive로 리다이렉트돼 있다):
 
 ```powershell
-copy outuild\src\maro_plugin\maya-modules\Release\maro.mod "$env:USERPROFILE\OneDrive\Documents\maya6\modules\"
+New-Item -ItemType Directory -Force "$env:USERPROFILE/OneDrive/Documents/maya/2026/modules" | Out-Null
+```
+
+```powershell
+copy ./out/build/src/maro_plugin/maya-modules/Release/maro.mod "$env:USERPROFILE/OneDrive/Documents/maya/2026/modules/"
 ```
 
 Maya가 시작할 때 이 모듈을 읽어 플러그인 경로 / `PATH` / 스크립트 경로를
