@@ -147,9 +147,18 @@ def refresh(listControl, detailControl, severityControl, noteControl, applyButto
     cmds.text(noteControl, edit=True, label=note)
 
 
-def buildUI():
-    """workspaceControl이 -uiScript로 부른다."""
-    form = cmds.formLayout()
+def buildUI(parent=None):
+    """이 패널을 그리고 루트 formLayout 이름을 돌려준다.
+
+    parent가 None이면 현재 부모 레이아웃에 그린다 -- workspaceControl이
+    -uiScript로 부를 때가 이 경우다(`show()` 참고). MaroUI는 자기 레이아웃
+    이름을 넘겨 **같은 패널을 자기 안에** 그린다.
+
+    두 인스턴스가 동시에 떠 있어도 안전하다: 아래 컨트롤은 전부 이름 없이
+    만들어지고(고정 이름 충돌 없음) 선택/행 상태는 모듈 전역이 아니라
+    클로저에 있다(rowsHolder/selectionHolder의 주석 참고).
+    """
+    form = cmds.formLayout() if parent is None else cmds.formLayout(parent=parent)
     severityControl = cmds.optionMenu(label="심각도")
     cmds.menuItem(label="all")
     cmds.menuItem(label="warn")

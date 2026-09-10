@@ -297,6 +297,23 @@ assert maroDiagPanel.formatLocalTime(0) != "", "formatLocalTime must produce som
 assert ":" in maroDiagPanel.formatLocalTime(1700000000000)
 print("formatLocalTime OK")
 
+import inspect  # noqa: E402
+
+print("[test] maroDiagPanel.buildUI parent 인자")
+
+# 임베드 호출부(maroMainWindow)가 부모를 넘길 수 있어야 한다.
+_sig = inspect.signature(maroDiagPanel.buildUI)
+assert "parent" in _sig.parameters, list(_sig.parameters)
+assert _sig.parameters["parent"].default is None, _sig.parameters["parent"].default
+
+# 그리고 단독 창은 여전히 **인자 없이** 부를 수 있어야 한다. workspaceControl은
+# uiScript 문자열로 부르므로 시그니처가 깨져도 배치 테스트가 잡아주지 않는다
+# -- 대화형 Maya에서 패널을 열 때서야 터진다. 그래서 그 문자열을 직접 본다.
+_showSource = inspect.getsource(maroDiagPanel.show)
+assert "maroDiagPanel.buildUI()" in _showSource, _showSource
+
+print("buildUI(parent=...) contract OK")
+
 cmds.file(new=True, force=True)
 cmds.unloadPlugin(os.path.splitext(os.path.basename(plugin))[0])
 maya.standalone.uninitialize()
