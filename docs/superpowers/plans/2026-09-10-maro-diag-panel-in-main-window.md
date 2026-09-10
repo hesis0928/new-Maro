@@ -58,7 +58,7 @@
   현재 부모 레이아웃에 그린다(기존 동작 그대로). 문자열이면 그 레이아웃의
   자식으로 그린다. 반환값은 예전과 같이 이 패널의 루트 `formLayout` 이름.
 
-- [ ] **Step 1: 붙일 테스트 파일을 정한다**
+- [x] **Step 1: 붙일 테스트 파일을 정한다**
 
 ```bash
 ls tests/maya/ | grep -i "diag_panel\|panel_commands"
@@ -70,7 +70,7 @@ ls tests/maya/ | grep -i "diag_panel\|panel_commands"
 `maya_test` 목록에 이름을 추가한다**(추가하지 않으면 파일만 있고 ctest가
 영영 돌리지 않는다).
 
-- [ ] **Step 2: 실패하는 테스트를 쓴다**
+- [x] **Step 2: 실패하는 테스트를 쓴다**
 
 정한 파일의 teardown 바로 앞에:
 
@@ -97,7 +97,7 @@ print("buildUI(parent=...) contract OK")
 추가한다. 그 파일이 소스 `python/`을 `sys.path`에 넣는지 확인하고, 안 넣으면
 `test_urdf_export.py:19-21`과 같은 4줄을 복사해 넣는다.
 
-- [ ] **Step 3: 실패를 확인한다**
+- [x] **Step 3: 실패를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R <그 테스트 이름> --output-on-failure
@@ -105,7 +105,7 @@ ctest --test-dir out/build -C Release -R <그 테스트 이름> --output-on-fail
 
 Expected: FAIL -- `AssertionError: ['']` 또는 `parent`가 없다는 목록.
 
-- [ ] **Step 4: 구현한다**
+- [x] **Step 4: 구현한다**
 
 `python/maroDiagPanel.py`의 이 두 줄:
 
@@ -132,7 +132,7 @@ def buildUI(parent=None):
     form = cmds.formLayout() if parent is None else cmds.formLayout(parent=parent)
 ```
 
-- [ ] **Step 5: 통과를 확인한다**
+- [x] **Step 5: 통과를 확인한다**
 
 ```bash
 ctest --test-dir out/build -C Release -R <그 테스트 이름> --output-on-failure
@@ -140,7 +140,7 @@ ctest --test-dir out/build -C Release -R <그 테스트 이름> --output-on-fail
 
 Expected: PASS -- `buildUI(parent=...) contract OK`
 
-- [ ] **Step 6: 커밋**
+- [x] **Step 6: 커밋**
 
 ```bash
 git add python/maroDiagPanel.py tests/ && git commit -m "feat(diag): let buildUI draw into a caller-supplied layout"
@@ -163,7 +163,7 @@ git add python/maroDiagPanel.py tests/ && git commit -m "feat(diag): let buildUI
 그래서 **RED/GREEN 사이클이 없다** -- 대신 기존 테스트가 계속 통과하는 것을
 확인하고, 실제 검증은 Step 4가 쓰는 수동 체크리스트가 맡는다.
 
-- [ ] **Step 1: 오른쪽 칸을 감싼다**
+- [x] **Step 1: 오른쪽 칸을 감싼다**
 
 `python/maroMainWindow.py`에서 지금 이렇게 되어 있는 곳:
 
@@ -192,7 +192,7 @@ git add python/maroDiagPanel.py tests/ && git commit -m "feat(diag): let buildUI
 바로 위에 있던 기존 주석 블록("Phase 4: 축/capability 에디터 패널 ... 필요
 없다.")은 위 새 주석이 흡수했으므로 **지운다**(같은 말이 두 번 나오지 않게).
 
-- [ ] **Step 2: 진단 패널을 아래 칸에 그린다**
+- [x] **Step 2: 진단 패널을 아래 칸에 그린다**
 
 ONE 위젯을 `editorHost`에 임베드하는 블록(=`_EMBEDDED[EDITOR_HOST_NAME] = ...`
 과 그 뒤 `cmds.formLayout(editorHost, edit=True, attachForm=[...])`) **바로
@@ -217,7 +217,7 @@ ONE 위젯을 `editorHost`에 임베드하는 블록(=`_EMBEDDED[EDITOR_HOST_NAM
     maroDiagPanel.buildUI(parent=rightPane)
 ```
 
-- [ ] **Step 3: 기존 테스트가 그대로 통과하는지 확인한다**
+- [x] **Step 3: 기존 테스트가 그대로 통과하는지 확인한다**
 
 ```bash
 cmake --build out/build --config Release
@@ -231,7 +231,7 @@ Expected: PASS. 이 테스트는 이름 상수와 스테이징/재진입만 보�
 변경에 영향받지 않아야 한다. **여기서 깨지면 레이아웃이 아니라 이름
 계약을 건드린 것이다** -- 되돌아가서 확인하라.
 
-- [ ] **Step 4: 수동 체크리스트 절을 쓴다**
+- [x] **Step 4: 수동 체크리스트 절을 쓴다**
 
 `docs/maro-main-ui-manual-checklist.md`의 `## Maro 환경설정 창` 줄 **바로
 앞**에 삽입:
@@ -247,23 +247,23 @@ Expected: PASS. 이 테스트는 이름 상수와 스테이징/재진입만 보�
 offscreen QApplication을 세워도(이 세션이 QWidget·Viewport 2.0·ASan에서 통했던
 그 수법) 결과는 같다. 실측으로 확인했다. 그래서 이 절은 사람이 봐야 한다.
 
-- [ ] 창을 열면 **오른쪽이 위/아래로 나뉘어** 있다. 위는 기존 ONE/GSON 노드
+- [x] 창을 열면 **오른쪽이 위/아래로 나뉘어** 있다. 위는 기존 ONE/GSON 노드
       에디터, 아래는 진단 패널(심각도 드롭다운 + 목록 + 상세 + "새로 고침"/
       "적용" 버튼)이다.
-- [ ] 아래 패널의 "새로 고침"을 누르면 목록이 채워진다(진단 기록이 하나도
+- [x] 아래 패널의 "새로 고침"을 누르면 목록이 채워진다(진단 기록이 하나도
       없으면 비어 있는 것이 정상이다 -- 그때는 아래 항목으로 기록을 만든다).
-- [ ] 진단 기록을 하나 만든다: 이름 없는 `maroAxis`를 만들고
+- [x] 진단 기록을 하나 만든다: 이름 없는 `maroAxis`를 만들고
       `cmds.maroStartBridge()`를 시도하는 등 **알려진 실패를 일으킨 뒤**
       "새로 고침"을 누른다. 행이 나타나고, 선택하면 상세가 뜬다.
-- [ ] 심각도 드롭다운을 `warn`/`error`로 바꾸면 목록이 필터링된다.
-- [ ] **[필수] 단독 창과 동시에 띄워도 서로를 밟지 않는다**: 스크립트
+- [x] 심각도 드롭다운을 `warn`/`error`로 바꾸면 목록이 필터링된다.
+- [x] **[필수] 단독 창과 동시에 띄워도 서로를 밟지 않는다**: 스크립트
       에디터에서 `cmds.maroDiagPanel()`로 단독 창을 띄운다. 두 패널에서
       **서로 다른 행**을 선택하고, 한쪽에서 "새로 고침"을 눌러도 다른 쪽의
       선택과 상세가 그대로인지 본다.
-- [ ] **[필수 · go/no-go] 언로드 무크래시**: 진단 패널이 보이는 상태로
+- [x] **[필수 · go/no-go] 언로드 무크래시**: 진단 패널이 보이는 상태로
       MaroUI를 닫고, 이어서 `cmds.unloadPlugin("maro")`. 크래시가 없고
       Script Editor에 오류가 없다.
-- [ ] **Phase 2/4 회귀 재확인**(레이아웃이 바뀌었으므로 필요하다): 뷰포트
+- [x] **Phase 2/4 회귀 재확인**(레이아웃이 바뀌었으므로 필요하다): 뷰포트
       두 개가 여전히 좌우로 나란하고 각각 궤도/팬/줌이 되며, ONE/GSON 그리드가
       여전히 보이고 씬↔GSON 선택 동기화가 동작한다.
 
@@ -278,7 +278,7 @@ offscreen QApplication을 세워도(이 세션이 QWidget·Viewport 2.0·ASan에
 | Phase 2/4 회귀 없음 | | | |
 ```
 
-- [ ] **Step 5: 전체 스위트**
+- [x] **Step 5: 전체 스위트**
 
 ```bash
 ctest --test-dir out/build -C Release --output-on-failure
@@ -286,7 +286,7 @@ ctest --test-dir out/build -C Release --output-on-failure
 
 Expected: 전부 PASS.
 
-- [ ] **Step 6: 커밋**
+- [x] **Step 6: 커밋**
 
 ```bash
 git add python/maroMainWindow.py docs/maro-main-ui-manual-checklist.md && git commit -m "feat(ui): draw the diag panel in MaroUI's bottom-right pane"
@@ -322,6 +322,17 @@ C++ 계약이 아니라는 스펙의 판단은 그대로 유효하다.
 Task 2는 배치에서 검증 불가능하므로 **가짜 GREEN을 만들지 않는 것**이
 중요하다 -- `buildUI()`를 배치에서 불러 "에러 안 났으니 통과"로 적는 테스트를
 쓰지 마라. 그건 통과하면서 아무것도 증명하지 않는다(전역 제약 마지막 항목).
+
+## 실행하며 계획과 달랐던 것
+
+**Task 1의 테스트 파일 선택이 빗나갔다.** 계획은 "`sys.path`에 소스를 넣는
+파일을 고르라"고 했고 `test_panel_commands.py`가 `sys.path.insert`를 갖고
+있어 골랐는데, 그 인자가 `<repo>/python`이 아니라 `pluginDir`이었다 --
+스테이징 사본을 import하는 파일이다. 그래서 구현을 넣고도 RED가 그대로였다.
+빌드 한 번으로 풀렸지만, 이 계획의 전역 제약(그리고 앞선 두 계획과 프로젝트
+메모리)에 적혀 있던 "insert가 있으면 소스"라는 판별 기준 자체가 틀렸다.
+정정된 기준: **insert 유무가 아니라 인자를 본다.** 정확한 집계는 소스 10개 /
+스테이징 14개다.
 
 ## 알려진 부수 효과 (리뷰에서 확인할 것)
 
