@@ -138,6 +138,56 @@ except (RuntimeError, AttributeError):
     pass
 print("deregistered after unload OK")
 
+print("[test] build()의 멱등성 가드 (cmds 스텁)")
+
+# 배치 모드에서는 cmds.menu(exists=True)가 항상 False라 위 두 번째 호출이
+# 멱등 분기를 **타지 않는다**(이 파일 상단 도크스트링 참고). 하지만 가드
+# 자체는 Maya 메뉴 시스템이 아니라 분기 로직이므로, cmds를 스텁해 직접
+# 검증할 수 있다. 대화형 Maya를 기다릴 이유가 없다.
+
+
+class _MenuSpy(object):
+    """maroMenu가 쓰는 cmds 표면만 흉내낸다."""
+
+    def __init__(self, menuExists):
+        self._menuExists = menuExists
+        self.created = []
+        self.items = []
+
+    def menu(self, *args, **kwargs):
+        if kwargs.get("exists"):
+            return self._menuExists
+        self.created.append(args[0] if args else None)
+        return args[0] if args else None
+
+    def menuItem(self, *args, **kwargs):
+        self.items.append(kwargs.get("label", "(divider)"))
+        return kwargs.get("label")
+
+
+_realCmds = maroMenu.cmds
+try:
+    # 메뉴가 이미 있다 -> 아무것도 만들지 않고 즉시 리턴해야 한다.
+    _spyExisting = _MenuSpy(menuExists=True)
+    maroMenu.cmds = _spyExisting
+    maroMenu.build()
+    assert _spyExisting.created == [], _spyExisting.created
+    assert _spyExisting.items == [], _spyExisting.items
+
+    # 메뉴가 없다 -> 실제로 만든다. 이 대조가 없으면 위 단언이 "스텁이
+    # 애초에 아무것도 안 불렸다"는 이유로 공허하게 통과할 수 있다.
+    _spyFresh = _MenuSpy(menuExists=False)
+    maroMenu.cmds = _spyFresh
+    maroMenu.build()
+    assert _spyFresh.created == [maroMenu.MENU_NAME], _spyFresh.created
+    assert len(_spyFresh.items) > 0, _spyFresh.items
+finally:
+    maroMenu.cmds = _realCmds
+
+print("build() idempotency guard OK (existing -> %d items, fresh -> %d items)"
+      % (len(_spyExisting.items), len(_spyFresh.items)))
+
+
 maya.standalone.uninitialize()
 print("teardown OK")
 sys.exit(0)
