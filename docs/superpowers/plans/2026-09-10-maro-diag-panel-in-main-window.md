@@ -18,11 +18,12 @@
 
 ## 전역 제약
 
-- 빌드는 `--config Release`. **`python/maroMainWindow.py`를 고치면
-  `cmake --build out/build --config Release`가 필요하다** --
-  `tests/maya/test_main_window.py`는 소스가 아니라 **플러그인 옆 스테이징
-  사본**을 import한다(2026-09-10 실측, 그 테스트 자신이 38행에서 확인한다).
-  `python/maroDiagPanel.py`만 고쳤을 때도 같은 이유로 빌드가 안전하다.
+- 빌드는 `--config Release`. **이 계획이 고치는 두 `.py` 모두 빌드가
+  필요하다** -- `test_main_window.py`와 `test_panel_commands.py` 둘 다
+  플러그인 옆 **스테이징 사본**을 import한다(2026-09-10 실측).
+  `test_panel_commands.py`는 `sys.path.insert`를 하지만 인자가 `pluginDir`
+  이라 소스가 아니다 -- **insert 유무가 아니라 인자를 봐야 한다.**
+  안전한 기본값: `.py`를 고쳤으면 그냥 빌드한다.
 - VS 환경은 빌드와 **같은 셸 호출** 안에서 잡는다.
 - `ctest --test-dir out/build -C Release --output-on-failure` 전부 통과.
 - 새 파이썬 모듈을 만들지 않는다.

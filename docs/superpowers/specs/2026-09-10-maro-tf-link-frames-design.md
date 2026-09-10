@@ -168,16 +168,19 @@ C++/Python UI 이름 계약에 쓴 방식대로, **양쪽을 한 테스트에 �
 - 빌드는 항상 `--config Release`. C++를 고치므로 `cmake --build`가
   **필요하다**(파이썬만 고칠 때와 다르다).
 - `ctest --test-dir out/build -C Release --output-on-failure` 전부 통과.
-- `cmake --build`는 C++를 고쳤을 때 **필수**다. `.py`만 고쳤다면 어느
-  테스트를 도느냐에 따라 갈린다(2026-09-10 실측):
-  - `sys.path.insert(0, <repo>/python)`을 하는 17개(`test_urdf_export.py`
-    포함)는 소스를 직접 import한다 -> 빌드 불필요.
-  - `test_dag_menu` / `test_delete_rules` / `test_lidar_menu` /
-    `test_main_menu` / `test_main_window` / `test_skeleton_upload` 6개는 그
-    삽입이 없어 플러그인 옆 **스테이징 사본**
-    (`out/build/src/maro_plugin/Release/`)을 import한다 -> **빌드 필수**.
-  - 나머지는 maro 파이썬 모듈을 아예 import하지 않는다.
-  안전한 기본값: 전체 스위트를 돌리기 전에는 언제나 빌드한다.
+- `.py`만 고쳤을 때 `cmake --build`가 필요한지는 **그 테스트가 `sys.path`에
+  무엇을 넣는지**로 갈린다(2026-09-10 실측, 세 번째 정정):
+  - `<repo>/python`을 넣는 파일(10개 -- `test_urdf_export`, `test_publish`,
+    `test_tech_diag`, `test_settings_panel` 등)만 소스를 직접 import한다
+    -> 빌드 불필요.
+  - 나머지 14개는 플러그인 옆 **스테이징 사본**
+    (`out/build/src/maro_plugin/$<CONFIG>/`)을 import한다 -> **빌드 필수**.
+  - **`sys.path.insert`가 있다고 소스가 아니다.** 인자가 `pluginDir`이면
+    스테이징이다(`test_panel_commands`가 정확히 그렇다). 판단하려면
+    insert의 **인자**를 봐야 한다.
+  **안전한 기본값: `.py`를 고쳤으면 그냥 빌드한다.** 이 규칙은 이 리포에서
+  두 번 잘못 적혔다(처음 "항상 필요", 다음 "전혀 불필요"). 파일 목록을
+  외우지 말고 대상 파일의 `sys.path.insert` 인자를 직접 확인하라.
 - 새 테스트 블록은 해당 파일의 teardown **바로 앞**에 넣는다.
 - 커맨드/노드 경계의 예외 처리는 기존 `ScopedCommandContext` +
   `try/catch(std::exception)/catch(...)` 패턴을 그대로 따른다.
