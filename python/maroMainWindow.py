@@ -213,12 +213,19 @@ def buildUI():
             (viewportPane, "right", 0, rosSidePanelName),
         ])
 
-    # Phase 4: 축/capability 에디터 패널. modelPanel이 아닌 평범한
-    # formLayout이라(_buildLabeledViewport의 modelPanel과 달리) 전역 패널
-    # 레지스트리에 등록되지 않는다 -- 부모(outerPane/form)가 사라지면 이
-    # 레이아웃도 함께 완전히 사라진다. 그래서 _deleteStalePanel 같은 잔여물
-    # 정리가 필요 없다.
-    editorHost = cmds.formLayout(EDITOR_HOST_NAME, parent=outerPane)
+    # 오른쪽 절반을 위/아래로 나눈다. paneLayout의 vertical2는 **좌우**이고
+    # (Phase 2 수동 체크리스트에서 사람이 확인한 사실 -- "뷰포트가 두 개
+    # 좌우로 나란히 보인다"), 그래서 outerPane의 두 번째 칸은 지금까지
+    # 노드 에디터가 오른쪽 절반을 통째로 쓰고 있었다. horizontal2로 한 겹
+    # 감싸면 로드맵이 말한 "우하단"이 처음으로 실제로 생긴다.
+    rightPane = cmds.paneLayout(configuration="horizontal2", parent=outerPane)
+
+    # Phase 4: 축/capability 에디터 패널. 부모가 outerPane -> rightPane으로
+    # 바뀔 뿐 내부 조립은 그대로다. modelPanel이 아닌 평범한 formLayout이라
+    # (_buildLabeledViewport의 modelPanel과 달리) 전역 패널 레지스트리에
+    # 등록되지 않는다 -- 부모가 사라지면 이 레이아웃도 함께 완전히 사라진다.
+    # 그래서 _deleteStalePanel 같은 잔여물 정리가 필요 없다.
+    editorHost = cmds.formLayout(EDITOR_HOST_NAME, parent=rightPane)
 
     # --- 여기부터가 이 스파이크의 핵심 두 줄 -----------------------------
     # MQtUtil의 파이썬 바인딩은 QWidget*를 **정수 포인터**로 주고받는다.
@@ -280,6 +287,23 @@ def buildUI():
             (objectNodeEditorName, "top", 0), (objectNodeEditorName, "left", 0),
             (objectNodeEditorName, "right", 0), (objectNodeEditorName, "bottom", 0),
         ])
+
+    # 우하단: 기존 진단 패널을 **그대로** 그린다(설계 스펙 §3). 네이티브
+    # Maya UI라 PySide6 위젯이 타는 두 단계(MQtUtil.findLayout ->
+    # addWidgetToMayaLayout)를 타지 않는다 -- rightPane을 부모로 직접 넘기면
+    # paneLayout의 두 번째 칸을 그대로 채우므로 formLayout attach도 필요
+    # 없다.
+    #
+    # 단독 창(maroDiagPanel.show())은 그대로 남는다. 둘이 동시에 떠 있어도
+    # 안전하다 -- buildUI가 만드는 컨트롤은 전부 무명이고 선택 상태는
+    # 클로저에 있다(그 모듈의 주석이 이유를 적어 두었다).
+    #
+    # teardown()에 아무것도 추가하지 않는다. maroDiagPanel에는 scriptJob도
+    # 타이머도 모듈 전역 가변 상태도 없고, 새로 고침은 사용자가 누를 때만
+    # 일어난다 -- 멈출 것이 없어서 stop()이 없는 것이지, 빠뜨린 것이
+    # 아니다(설계 스펙 §5).
+    import maroDiagPanel
+    maroDiagPanel.buildUI(parent=rightPane)
 
     # 버튼은 위쪽 좁은 띠, 뷰포트가 나머지 전부. 정확한 비율은 스파이크
     # 목적상 중요하지 않다 -- 중요한 것은 네이티브 attachForm/attachControl이
