@@ -1,0 +1,48 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 2022 x64 - vcpkg manifest (out/build)",
+      "description": "The one configure path for out/build. Resolves gtest/nlohmann-json/embree through vcpkg.json (manifest mode) so the feature set declared there - embree without tasking-tbb - is what actually gets linked. Override machine paths in CMakeUserPresets.json, not here.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/out/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "C:/src/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "DEVKIT_LOCATION": "C:/Users/ckd30/Projects/devkitBase",
+        "ROS2_INSTALL": "C:/dev/ros2_jazzy/install",
+        "MARO_BUILD_PLUGIN": "ON",
+        "MARO_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "vs2022-asan",
+      "displayName": "Visual Studio 2022 x64 - AddressSanitizer (out/build-asan)",
+      "description": "Diagnostic tree used by tools/crashtriage/run-asan-tests.ps1. Same dependency resolution as vs2022, plus MARO_ASAN.",
+      "inherits": "vs2022",
+      "binaryDir": "${sourceDir}/out/build-asan",
+      "cacheVariables": { "MARO_ASAN": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "vs2022", "configuration": "Release" },
+    { "name": "asan-release", "configurePreset": "vs2022-asan", "configuration": "Release" }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "configurePreset": "vs2022",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "asan-release",
+      "configurePreset": "vs2022-asan",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

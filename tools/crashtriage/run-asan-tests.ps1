@@ -11,6 +11,7 @@
 #   2) ROS 2/Embree 런타임 DLL -- 이건 ctest가 테스트별로 알아서 넣는다.
 #
 # 사용법:  .\tools\crashtriage\run-asan-tests.ps1 [-Filter point_cloud]
+# 트리 구성/빌드(프리셋):  cmake --preset vs2022-asan ; cmake --build --preset asan-release
 
 param([string]$Filter = "")
 

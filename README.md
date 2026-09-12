@@ -75,20 +75,18 @@ ROS 쪽은 `/joint_states` 발행 문제(빈 이름/중복된 조인트 이름, 
     단계가 해석된 DLL의 임포트 테이블을 확인해 조용히 넘어가지 않고 크게
     실패하도록 되어 있다(`src/maro_lidar/CMakeLists.txt`).
 
-> **vcpkg 해석 함정:** 이 저장소의 `vcpkg.json`은 기능 집합을 고정할 뿐
-> 일반적인 `out/build` 트리의 해석에는 관여하지 **않는다** — 그 트리는
-> `CMAKE_TOOLCHAIN_FILE` 없이 구성되므로, `find_package(embree)`는 **전역
-> classic-mode** 설치 트리(`C:/src/vcpkg/installed/x64-windows`)를 대상으로
-> 해석된다. 패키지는 그곳에 직접 설치해야 한다. 예:
+> **의존성 해석은 `vcpkg.json`(manifest) 하나가 결정한다.** `CMakePresets.json`의
+> `vs2022` 프리셋이 vcpkg 툴체인을 붙여 구성하므로, `find_package(embree)`는
+> `out/build/vcpkg_installed/x64-windows/`에 manifest대로 설치된 패키지를 본다 —
+> `vcpkg.json`의 `embree` 기능 목록(`default-features: false`, `tasking-tbb`
+> 없음)이 곧 링크되는 내용이다. 같은 기능 집합으로 이미 빌드한 적이 있으면
+> vcpkg 바이너리 캐시(`%LOCALAPPDATA%cpkgrchives`)에서 수 초 안에
+> 복원된다.
 >
-> ```powershell
-> vcpkg install "embree[core,filter-function,geometry-curve,geometry-grid,geometry-instance,geometry-point,geometry-quad,geometry-subdivision,geometry-triangle,geometry-user,ray-packets]:x64-windows"
-> ```
->
-> (이것이 `vcpkg.json`의 `embree` 기능 목록에서 `tasking-tbb`만 뺀 것이다 —
-> 둘을 서로 맞춰 둔다)
->
-> `vcpkg.json`만 고쳐서는 실제로 빌드가 링크하는 내용이 바뀌지 않는다.
+> 프리셋 없이 `cmake -S . -B out/build`로 구성하면 툴체인이 빠져 **전역
+> classic-mode** 트리(`C:/src/vcpkg/installed/x64-windows`)를 대상으로 해석되고,
+> 그 경우 `vcpkg.json`을 고쳐도 링크가 바뀌지 않는다(2026-09-12까지 실제로
+> 그렇게 구성돼 있었다). 프리셋을 쓰면 이 간극이 없다.
 
 ## 빌드 설정
 
@@ -107,12 +105,30 @@ override**해야 한다:
 - `MARO_BUILD_TESTS`(기본 `ON`) — 테스트 스위트를 빌드하고 등록.
 
 Visual Studio "x64 Native Tools"(또는 `VsDevCmd.bat`으로 초기화한) 셸에서
-구성 + 빌드하는 예:
+구성 + 빌드한다. **`CMakePresets.json`의 프리셋이 유일한 구성 경로다** —
+제너레이터(Visual Studio 17 2022, 멀티 컨피그), 빌드 디렉터리(`out/build`),
+vcpkg 툴체인, 위 두 경로의 기본값을 한 곳에 고정한다:
 
 ```powershell
-cmake -S . -B out/build -DDEVKIT_LOCATION=C:/path/to/devkit -DROS2_INSTALL=C:/path/to/ros2_jazzy/install
-cmake --build out/build
+cmake --preset vs2022
 ```
+
+```powershell
+cmake --build --preset release
+```
+
+`--config Release`는 빌드 프리셋 안에 있다(멀티 컨피그 트리라 컨피그를 빼면
+Debug로 링크하다 `LNK2038`이 난다). 다른 머신에서는 `DEVKIT_LOCATION`/`ROS2_INSTALL`/
+vcpkg 경로를 `CMakeUserPresets.json`(git 무시)에서 상속 프리셋으로 덮어쓴다:
+
+```json
+{ "version": 3, "configurePresets": [ { "name": "mine", "inherits": "vs2022",
+  "cacheVariables": { "DEVKIT_LOCATION": "D:/devkit", "ROS2_INSTALL": "D:/ros2/install",
+                      "CMAKE_TOOLCHAIN_FILE": "D:/vcpkg/scripts/buildsystems/vcpkg.cmake" } } ] }
+```
+
+ASan 진단 트리는 `cmake --preset vs2022-asan` + `cmake --build --preset asan-release`
+(`out/build-asan`, `tools/crashtriage/run-asan-tests.ps1`가 쓰는 위치).
 
 ## PATH 요구 사항 (첫 `loadPlugin` 전에 꼭 읽을 것)
 
@@ -176,8 +192,11 @@ Maro 창을 기억해도 플러그인 자동 로드가 일어나지 않았다(20
 설정하므로, `ctest` 실행을 위해 수동으로 그럴 필요가 없다.
 
 ```powershell
-ctest --test-dir out/build --output-on-failure
+ctest --preset release
 ```
+
+(`--test-dir out/build -C Release --output-on-failure`와 같다. 멀티 컨피그 트리라
+`-C Release`를 빼면 아무 테스트도 돌지 않는다.)
 
 일부 테스트는 실제 ROS 2 브리지를 띄우고 별도 프로세스(`maro_test_peer`)와
 통신한다 — 이런 테스트는 같은 DDS 도메인을 공유해 서로 간섭할 수 있으므로
