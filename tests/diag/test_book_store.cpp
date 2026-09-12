@@ -165,3 +165,30 @@ TEST(BookStore, LatestAppendWinsForRepeatedHash) {
     EXPECT_EQ(out.analysis, "second");
     EXPECT_EQ(out.remedy, "apply the fix");
 }
+
+// analysis/message 원문은 ROS 페이로드나 Windows API에서 오므로 유효한 UTF-8이
+// 보장되지 않는다. nlohmann dump()의 strict 기본값은 그런 바이트에서 던지고,
+// appendToSpill은 그 예외를 삼켜 false를 돌려줬다 -- 즉 "처음 본 실패"의
+// 분석이 book에 영영 남지 않았다. 잘못된 바이트는 U+FFFD로 치환하고 항목은
+// 반드시 남긴다. 바이트는 리터럴이 아니라 코드로 만든다(소스 인코딩이
+// 리터럴을 조용히 "고칠" 수 있으므로).
+TEST(BookStore, InvalidUtf8InEntryIsAppendedWithReplacementChar) {
+    const auto dir = tempDirForTest();
+    const auto spill = dir / "spill.jsonl";
+
+    maro::BookEntry entry;
+    entry.analysis = "before-";
+    entry.analysis.push_back(static_cast<char>(0x80));  // lone continuation byte
+    entry.analysis += "-after";
+    entry.remedy = "clean remedy";
+
+    ASSERT_TRUE(maro::BookStore::appendToSpill(spill, "h10", entry))
+        << "an entry with invalid UTF-8 must still be written (bytes replaced)";
+
+    const auto store = maro::BookStore::loadMerged(dir / "no_canonical.jsonl", spill);
+    maro::BookEntry out;
+    ASSERT_TRUE(store.query("h10", out));
+    EXPECT_EQ(out.analysis, "before-\xEF\xBF\xBD-after")
+        << "the lone 0x80 must become U+FFFD, not be passed through or truncate the text";
+    EXPECT_EQ(out.remedy, "clean remedy");
+}

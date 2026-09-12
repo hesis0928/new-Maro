@@ -12,6 +12,16 @@ namespace maro {
 
 namespace {
 
+// 잘못된 UTF-8(Windows API·ROS 페이로드 출처 문자열)이 섞여도 줄을 잃지
+// 않는다: dump()의 strict 기본값은 던지는데, 그 예외를 삼키면 바로 그 레코드
+// -- 크래시 인접 집계가 필요로 하는 -- 가 통째로 사라진다. error_handler_t::
+// replace는 잘못된 바이트를 U+FFFD로 바꿔 나머지를 온전히 남긴다(nlohmann
+// 공식 옵션). 인자 (indent=-1, ' ', ensure_ascii=false)는 dump()의 기본값과
+// 같다.
+std::string dumpLenient(const nlohmann::json& j) {
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
 // Finding C1: "<stem>.<pid>.jsonl" 모양인지 확인한다. 판정 자체는
 // processIdFromPath()가 한다 -- 가운데 조각이 전부 숫자여야 한다는 그 규칙이
 // 곧 "저널 파일인가"의 정의이므로, 두 질문이 서로 다른 규칙을 갖지 않도록
@@ -89,16 +99,17 @@ void JournalWriter::writeLine(const std::string& json) {
 
 void JournalWriter::writeSessionOpen(std::uint64_t timestampMs) {
     // BookStore.cpp의 appendToSpill과 같은 모양: 직렬화까지 포함해 함수
-    // 전체를 하나의 try로 감싼다. dump()는 기본적으로 잘못된 UTF-8에서
-    // 던지는데, 그 예외가 여기서 새 나가면 (나중 과제에서) Maya 콜백까지
-    // 뚫고 올라가 세션을 죽인다. 줄 하나를 잃는 것은 괜찮다.
+    // 전체를 하나의 try로 감싼다. 잘못된 UTF-8은 dumpLenient()가 U+FFFD로
+    // 치환하므로 더 이상 dump()가 던질 이유는 없지만, 스트림/할당 실패 등
+    // 어떤 예외도 여기서 새 나가면 (나중 과제에서) Maya 콜백까지 뚫고
+    // 올라가 세션을 죽이므로 try는 그대로 둔다.
     lastTimestampMs_ = timestampMs;
     try {
         nlohmann::json j;
         j["kind"] = "session";
         j["event"] = "open";
         j["t"] = timestampMs;
-        writeLine(j.dump());
+        writeLine(dumpLenient(j));
     } catch (...) {
     }
 }
@@ -118,7 +129,7 @@ void JournalWriter::writeSessionClose(std::uint64_t timestampMs) {
         j["kind"] = "session";
         j["event"] = "close";
         j["t"] = timestampMs;
-        writeLine(j.dump());
+        writeLine(dumpLenient(j));
     } catch (...) {
     }
 }
@@ -143,7 +154,7 @@ void JournalWriter::flushSuppressed(const std::string& budgetKey, TagBudget& bud
     j["t"] = timestampMs;
     j["key"] = budgetKey;
     j["count"] = budget.suppressed;
-    writeLine(j.dump());
+    writeLine(dumpLenient(j));
     budget.suppressed = 0;
 }
 
@@ -223,7 +234,7 @@ void JournalWriter::writeRecord(std::uint64_t sequence, std::uint64_t timestampM
         j["tag"] = siteTag;
         j["msg"] = message;
         // dump()가 개행과 따옴표를 이스케이프하므로 한 줄 = 한 항목이 유지된다.
-        writeLine(j.dump());
+        writeLine(dumpLenient(j));
     } catch (...) {
     }
 }

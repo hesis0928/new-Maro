@@ -20,7 +20,10 @@ std::string encodeMessage(const Message& message) {
     nlohmann::json j;
     j["type"] = typeName(message.type);
     j["payload"] = message.payload;
-    return j.dump();
+    // payload는 바깥에서 오는 문자열이라 유효한 UTF-8이 보장되지 않는다.
+    // strict dump()는 그런 바이트에서 던져 HELLO 자체를 잃게 하므로 U+FFFD
+    // 치환으로 직렬화한다(maro_diag의 dumpLenient과 같은 근거).
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 bool decodeMessage(const std::string& encoded, Message& out) {

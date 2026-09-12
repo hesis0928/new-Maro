@@ -168,11 +168,15 @@ TEST(JournalWriter, KeepsOneLinePerEntryWhenTheMessageHasNewlines) {
 // nlohmann::json::dump() defaults to strict error handling and throws on
 // invalid UTF-8. That throw must never reach the caller: JournalWriter's
 // callers are eventually Maya callbacks, and an exception escaping one of
-// those ends the user's session. The invalid byte is constructed explicitly
-// (a lone 0x80 continuation byte with no lead byte) rather than written as a
-// literal, since an editor or the build's source encoding could silently
-// "fix" a literal invalid byte sequence.
-TEST(JournalWriter, InvalidUtf8InRecordDoesNotThrowAndLeavesJournalParseable) {
+// those ends the user's session. But "not throwing" is not enough either:
+// the record that carries the bad byte is exactly the one a crash-adjacency
+// count needs, so it must be *kept*, with the offending byte replaced by
+// U+FFFD (nlohmann error_handler_t::replace), rather than dropped whole.
+// The invalid byte is constructed explicitly (a lone 0x80 continuation byte
+// with no lead byte) rather than written as a literal, since an editor or
+// the build's source encoding could silently "fix" a literal invalid byte
+// sequence.
+TEST(JournalWriter, InvalidUtf8InRecordIsKeptWithReplacementCharAndStaysParseable) {
     const std::filesystem::path dir = freshDir("invalid_utf8");
     const std::filesystem::path file = dir / "journal.jsonl";
 
@@ -184,9 +188,6 @@ TEST(JournalWriter, InvalidUtf8InRecordDoesNotThrowAndLeavesJournalParseable) {
         maro::JournalWriter writer(file);
         ASSERT_TRUE(writer.isOpen());
         writer.writeRecord(1, 1000, maro::DiagSeverity::Info, "Site.Before", "before");
-        // Must return normally even though dump() rejects the invalid UTF-8
-        // inside siteTag -- losing this one line is fine, an escaping
-        // exception is not.
         EXPECT_NO_THROW(writer.writeRecord(2, 1001, maro::DiagSeverity::Error,
                                             invalidUtf8Tag, "poisoned"));
         writer.writeRecord(3, 1002, maro::DiagSeverity::Info, "Site.After", "after");
@@ -195,18 +196,24 @@ TEST(JournalWriter, InvalidUtf8InRecordDoesNotThrowAndLeavesJournalParseable) {
     const std::string text = readAll(file);
     const std::vector<std::string> lines = splitLines(text);
 
-    // The poisoned record must simply be absent, not present as a broken or
-    // partially-written line that would corrupt parsing of what follows.
-    ASSERT_EQ(lines.size(), 2u)
-        << "the record whose serialization failed must be dropped whole, "
-           "not partially written";
+    // All three records survive; the poisoned one is a complete, parseable
+    // line whose bad byte became U+FFFD (EF BF BD in UTF-8).
+    ASSERT_EQ(lines.size(), 3u)
+        << "a record with invalid UTF-8 must be written with the byte replaced, "
+           "not dropped";
 
     const nlohmann::json before = nlohmann::json::parse(lines[0]);
     EXPECT_EQ(before.at("seq"), 1u);
     EXPECT_EQ(before.at("tag"), "Site.Before");
     EXPECT_EQ(before.at("msg"), "before");
 
-    const nlohmann::json after = nlohmann::json::parse(lines[1]);
+    const nlohmann::json poisoned = nlohmann::json::parse(lines[1]);
+    EXPECT_EQ(poisoned.at("seq"), 2u);
+    EXPECT_EQ(poisoned.at("tag").get<std::string>(), std::string("bad-\xEF\xBF\xBD-tag"))
+        << "the lone 0x80 must be replaced by U+FFFD, not passed through or truncated";
+    EXPECT_EQ(poisoned.at("msg"), "poisoned");
+
+    const nlohmann::json after = nlohmann::json::parse(lines[2]);
     EXPECT_EQ(after.at("seq"), 3u);
     EXPECT_EQ(after.at("tag"), "Site.After");
     EXPECT_EQ(after.at("msg"), "after");

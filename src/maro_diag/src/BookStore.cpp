@@ -9,6 +9,16 @@ namespace maro {
 
 namespace {
 
+// 잘못된 UTF-8(Windows API·ROS 페이로드 출처 문자열)이 섞여도 줄을 잃지
+// 않는다: dump()의 strict 기본값은 던지는데, 그 예외를 삼키면 바로 그 레코드
+// -- 크래시 인접 집계가 필요로 하는 -- 가 통째로 사라진다. error_handler_t::
+// replace는 잘못된 바이트를 U+FFFD로 바꿔 나머지를 온전히 남긴다(nlohmann
+// 공식 옵션). 인자 (indent=-1, ' ', ensure_ascii=false)는 dump()의 기본값과
+// 같다.
+std::string dumpLenient(const nlohmann::json& j) {
+    return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
 BookEntry entryFromJson(const nlohmann::json& j) {
     BookEntry e;
     e.analysis = j.value("analysis", std::string());
@@ -110,7 +120,7 @@ bool BookStore::appendToSpill(const std::filesystem::path& spillPath,
         std::ofstream ofs(spillPath, std::ios::app);
         if (!ofs) return false;
 
-        ofs << entryToJson(errorHash, entry).dump() << '\n';
+        ofs << dumpLenient(entryToJson(errorHash, entry)) << '\n';
         // 스트림 버퍼에만 앉아 있는 바이트는 디스크에 나간 게 아니다 --
         // 명시적으로 flush하고, flush 이후의 스트림 상태를 돌려줘야 늦은
         // 쓰기 실패가 이미 반환된 true를 뒤집지 못하는 일이 없다.
