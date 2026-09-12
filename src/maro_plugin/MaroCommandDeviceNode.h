@@ -26,6 +26,15 @@ public:
     void postConstructor() override;
     MStatus compute(const MPlug& plug, MDataBlock& data) override;
 
+    // kUntrusted: 평가 관리자(PEM)가 이 노드를 평가하는 동안 다른 어떤
+    // 노드도 동시에 평가하지 않는다. compute()의 applyToMatchingAxis()는
+    // 자기 출력이 아니라 **다른 노드**(maroAxis.rosCommand)의 플러그에
+    // 쓰는, 이 플러그인에서 유일한 지점이다 -- Serial(기본)은 같은 평가
+    // 체인 안에서만 순차를 보장하므로 축 노드가 다른 워커에서 같은 플러그를
+    // 읽는 사이에 쓸 수 있다. 이 노드는 commandOut 외에 DG 소비자가 없어
+    // 병렬성 손실은 없다.
+    SchedulingType schedulingType() const override;
+
     void threadHandler() override;
     void threadShutdownHandler() override;
 

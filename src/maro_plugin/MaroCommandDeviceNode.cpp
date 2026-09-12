@@ -189,6 +189,14 @@ MStatus MaroCommandDeviceNode::initialize() {
     return MS::kSuccess;
 }
 
+MPxNode::SchedulingType MaroCommandDeviceNode::schedulingType() const {
+    // 근거는 헤더 주석과 applyToMatchingAxis() 위의 경고 참고. Using Parallel
+    // Maya 문서: Untrusted = "no other nodes should be evaluated while an
+    // instance of this node is evaluated". 노드 타입 한 종에만 걸리는
+    // 지역적 결정이라 씬 전체의 병렬 평가는 그대로다.
+    return kUntrusted;
+}
+
 void MaroCommandDeviceNode::postConstructor() {
     // Maya 콜백이다. 예외가 새면 Maya가 죽는다.
     try {
@@ -254,12 +262,12 @@ bool MaroCommandDeviceNode::isThreadAlive() { return s_threadAliveCount.load() >
 void MaroCommandDeviceNode::applyToMatchingAxis(const std::string& jointName, double value) {
     // compute()에서만 불린다. 이게 "메인 스레드에서만 불린다"는 보장은
     // 아니다 -- Maya 2026 기본값인 Parallel Evaluation Manager 아래에서는
-    // compute()가 워커 스레드에서 돌 수 있다. 이 노드는 지금까지 Serial
-    // 평가를 가정하고 짜여 있고(코드는 여기서 안 바꾼다), 그 가정이 깨지는
-    // 시나리오는 아직 별도로 다루지 않았다는 뜻이다 -- 나중에 평가 관리자
-    // 관련 크래시를 디버깅할 사람이 "여기는 메인 스레드니까 안전하다"고
-    // 잘못 믿지 않게 남겨 둔다. DG를 만지는 유일한 지점이라는 점은 여전히
-    // 맞다.
+    // compute()가 워커 스레드에서 돌 수 있다. 그래서 schedulingType()이
+    // kUntrusted를 돌려준다: 이 노드가 평가되는 동안은 다른 노드(여기서
+    // 플러그를 쓰는 maroAxis 포함)가 동시에 평가되지 않는다. 그래도 "여기는
+    // 메인 스레드니까 안전하다"는 믿음은 여전히 틀리다 -- 스레드가 워커일
+    // 수 있다는 사실은 그대로이고, 보장되는 것은 "동시 평가 없음"뿐이다.
+    // DG를 만지는 유일한 지점이라는 점은 여전히 맞다.
     //
     // Task 7 갱신: 이 노드의 compute()가 내던 진단은 이제 전부 boad를 거치고,
     // boad는 메인 스레드가 아닐 때 Maya의 display* 에코 호출을 건너뛴다
